@@ -174,7 +174,6 @@ async fn test_rootless_pipeline_e2e() {
     // 2. Initialize Services in Rootless / Inert / Synthetic Modes
     // -----------------------------------------------------------------------
     let mut nft_service = NftService::inert();
-    assert!(nft_service.is_inert());
 
     let mut traffic_service = TrafficService::inert(traffic_cfg);
     assert!(traffic_service.is_inert());

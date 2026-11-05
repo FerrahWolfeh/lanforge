@@ -5,7 +5,7 @@ use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
-use lanforge_nft::NftService;
+use lanforge_nft::{NftService, RecordingNft};
 use lanforge_types::events::TimedEvent;
 use lanforge_types::events::firewall::{FirewallAppliedSummary, FirewallEvent};
 use lanforge_types::events::pppoe::{PppoeEvent, PppoeSessionUp};
@@ -56,7 +56,6 @@ async fn test_nft_service_inert_full_lifecycle() {
 
     // 1. Instantiate in inert mode (rootless dry-run)
     let mut service = NftService::inert();
-    assert!(service.is_inert(), "Service must report inert mode");
 
     // 2. Initialize service
     service
@@ -800,7 +799,11 @@ async fn test_firewall_resyncs_after_a_lagged_bus() {
 /// A firewall service up with ppp0 as WAN, `[firewall] flow_offload = true` and SQM as given.
 async fn serve_with_offload(
     sqm: bool,
-) -> (LanforgeContext, NftService, broadcast::Receiver<TimedEvent>) {
+) -> (
+    LanforgeContext,
+    NftService<RecordingNft>,
+    broadcast::Receiver<TimedEvent>,
+) {
     let (ctx, bus) = create_test_context();
     ctx.set_wan_snapshot(WanSnapshot {
         state: WanState::Up,
@@ -833,7 +836,7 @@ fn set_sqm(ctx: &LanforgeContext, enabled: bool) {
     ctx.update_traffic_config(traffic);
 }
 
-fn has_flowtable(service: &NftService) -> bool {
+fn has_flowtable(service: &NftService<RecordingNft>) -> bool {
     service
         .last_applied_payload()
         .unwrap()
@@ -1037,4 +1040,42 @@ async fn test_dev_port_forward_follows_the_device_and_the_lan_prefix() {
 
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = timeout(Duration::from_millis(500), serve).await;
+}
+
+fn kernel_has_table(table: &str) -> bool {
+    std::process::Command::new("nft")
+        .args(["list", "table", "inet", table])
+        .output()
+        .is_ok_and(|out| out.status.success())
+}
+
+/// The production applier end to end: `init` puts the table into the kernel and a stop with
+/// `on_stop = "remove"` takes it out again.
+#[tokio::test]
+#[ignore = "needs CAP_NET_ADMIN and nft (run inside `unshare -rn`)"]
+async fn kernel_applier_installs_and_removes_the_table() {
+    let (ctx, bus) = create_test_context();
+    ctx.update_firewall_config(FirewallConfig {
+        enabled: true,
+        mode: FirewallMode::Full,
+        flow_offload: false, // a flowtable needs real devices
+        on_stop: FirewallStopAction::Remove,
+        ..Default::default()
+    });
+    let mut fw_sub = bus.subscribe_firewall();
+    assert!(!kernel_has_table("lanforge"));
+
+    let mut service = NftService::new();
+    service.init(&ctx).await.expect("init applies the ruleset");
+    wait_for_ruleset_applied(&mut fw_sub).await;
+    assert!(
+        kernel_has_table("lanforge"),
+        "the ruleset must be in the kernel"
+    );
+
+    service.cleanup(&ctx).await.expect("cleanup");
+    assert!(
+        !kernel_has_table("lanforge"),
+        "on_stop = remove deletes the table"
+    );
 }

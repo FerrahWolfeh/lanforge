@@ -6,6 +6,10 @@
 use std::future::Future;
 use std::io::ErrorKind;
 
+#[cfg(any(test, feature = "inert"))]
+use crate::applier::RecordingNft;
+use crate::applier::{KernelNft, NftApplier};
+
 use tokio::sync::broadcast::error::RecvError;
 
 use lanforge_core::context::LanforgeContext;
@@ -42,10 +46,12 @@ const FIREWALL_DEPS: &[Edge] = &[
 ];
 
 #[derive(Clone)]
-pub struct NftService {
+pub struct NftService<A: NftApplier = KernelNft> {
     active_wan: Option<String>,
-    inert: bool,
-    last_ruleset: std::sync::Arc<parking_lot::RwLock<Option<String>>>,
+    /// Where compiled rulesets go: the kernel, or a recorder in rootless tests.
+    applier: A,
+    /// Our table is in the kernel (a ruleset or the lockdown was applied, not deleted since).
+    applied: bool,
     /// The running firewall ([`LanforgeContext::running_firewall_config`]) the last ruleset was
     /// compiled from.
     compiled: Option<FirewallConfig>,
@@ -53,110 +59,61 @@ pub struct NftService {
     compiled_addrs: HashMap<DeviceIdentifier, ForwardAddrs>,
 }
 
-impl NftService {
-    /// Static identifier for the service.
-    pub const SERVICE_ID: ServiceId = ServiceId::Nft;
+impl NftService<KernelNft> {
+    /// The production service: rulesets go to the kernel.
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            active_wan: None,
-            inert: false,
-            last_ruleset: std::sync::Arc::new(parking_lot::RwLock::new(None)),
-            compiled: None,
-            compiled_addrs: HashMap::new(),
-        }
-    }
-
-    /// Creates an inert instance of the firewall service that compiles and validates
-    /// rulesets in-memory without applying them to the Linux kernel via netlink.
-    #[must_use]
-    pub fn inert() -> Self {
-        Self {
-            active_wan: None,
-            inert: true,
-            last_ruleset: std::sync::Arc::new(parking_lot::RwLock::new(None)),
-            compiled: None,
-            compiled_addrs: HashMap::new(),
-        }
-    }
-
-    /// Sets whether the service runs in inert mode.
-    #[must_use]
-    pub const fn with_inert(mut self, inert: bool) -> Self {
-        self.inert = inert;
-        self
-    }
-
-    /// Returns whether the service is running in inert mode.
-    #[must_use]
-    pub const fn is_inert(&self) -> bool {
-        self.inert
-    }
-
-    /// Returns the last compiled ruleset JSON payload, if available.
-    #[must_use]
-    pub fn last_applied_payload(&self) -> Option<String> {
-        self.last_ruleset.read().clone()
+        Self::with_applier(KernelNft)
     }
 
     /// Flushes and removes the configured table cleanly.
     pub async fn cleanup_table(table_name: &str) {
-        Self::cleanup_table_internal(table_name, false).await;
+        delete_table(KernelNft, table_name).await;
+    }
+}
+
+#[cfg(any(test, feature = "inert"))]
+impl NftService<RecordingNft> {
+    /// A service whose rulesets are compiled and recorded in memory, never applied (rootless).
+    #[must_use]
+    pub fn inert() -> Self {
+        Self::with_applier(RecordingNft::default())
     }
 
-    async fn cleanup_table_internal(table_name: &str, inert: bool) {
-        let table = {
-            let t = table_name.trim();
-            if t.is_empty() { "lanforge" } else { t }
-        };
+    /// The last ruleset applied, as pretty JSON; `None` once the table was deleted.
+    #[must_use]
+    pub fn last_applied_payload(&self) -> Option<String> {
+        self.applier.payload()
+    }
+}
 
-        if inert {
-            info!(table, "Inert mode: skipping kernel firewall table deletion");
-            return;
-        }
+impl<A: NftApplier> NftService<A> {
+    /// Static identifier for the service.
+    pub const SERVICE_ID: ServiceId = ServiceId::Nft;
 
-        let mut batch = nftables::batch::Batch::new();
-        batch.delete(nftables::schema::NfListObject::Table(
-            nftables::schema::Table {
-                family: nftables::types::NfFamily::INet,
-                name: table.to_string().into(),
-                handle: None,
-            },
-        ));
-        let ruleset = batch.to_nftables();
-
-        let table_owned = table.to_string();
-        let result =
-            tokio::task::spawn_blocking(move || nftables::helper::apply_ruleset(&ruleset)).await;
-        match result {
-            Ok(Ok(())) => {
-                info!(table = table_owned, "Flushed and removed firewall table");
-            }
-            Ok(Err(nftables::helper::NftablesError::NftFailed { .. })) => {
-                // Table may not exist or was already removed; ignore silently.
-            }
-            Ok(Err(nftables::helper::NftablesError::NftExecution { inner, .. }))
-                if inner.kind() == ErrorKind::NotFound => {}
-            Ok(Err(e)) => {
-                warn!(table = table_owned, error = %e, "Failed to delete firewall table");
-            }
-            Err(e) => {
-                warn!(table = table_owned, error = %e, "Firewall cleanup task panicked");
-            }
+    /// A service applying its rulesets through `applier`.
+    #[must_use]
+    pub fn with_applier(applier: A) -> Self {
+        Self {
+            active_wan: None,
+            applier,
+            applied: false,
+            compiled: None,
+            compiled_addrs: HashMap::new(),
         }
     }
 
-    /// Deletes the table and forgets the recorded payload: nothing of ours is left in the kernel.
-    async fn remove_table(&self, table_name: &str) {
-        Self::cleanup_table_internal(table_name, self.inert).await;
-        *self.last_ruleset.write() = None;
+    /// Deletes the table: nothing of ours is left in the kernel.
+    async fn remove_table(&mut self, table_name: &str) {
+        delete_table(self.applier.clone(), table_name).await;
+        self.applied = false;
     }
 
     /// Leaves the kernel in the state `cfg.on_stop` asks for once the service stops.
     ///
     /// Only a full firewall locks down: `Minimal` is a policy-accept helper next to another
     /// firewall, and a disabled config is the admin explicitly handing the host over.
-    async fn stop_firewall(&self, ctx: &LanforgeContext) {
+    async fn stop_firewall(&mut self, ctx: &LanforgeContext) {
         let cfg = ctx.running_firewall_config();
         let lockdown = cfg.enabled
             && cfg.mode == FirewallMode::Full
@@ -172,7 +129,7 @@ impl NftService {
 
     /// Replaces the live ruleset with the closed-WAN lockdown in one atomic batch. On failure the
     /// previous ruleset stays in place: never fall back to deleting the table.
-    async fn apply_lockdown(&self, ctx: &LanforgeContext, cfg: &FirewallConfig) {
+    async fn apply_lockdown(&mut self, ctx: &LanforgeContext, cfg: &FirewallConfig) {
         let primary_lan = ctx.target_interface_name();
         let dynamic_ports = ctx.registered_service_ports();
         let ruleset = RulesetBuilder::new(cfg)
@@ -181,33 +138,27 @@ impl NftService {
             .with_dynamic_ports(&dynamic_ports)
             .build_lockdown();
 
-        let payload = if self.inert || tracing::enabled!(tracing::Level::TRACE) {
-            serde_json::to_string_pretty(&ruleset).unwrap_or_default()
-        } else {
-            "lockdown".to_string()
-        };
-        if !self.inert {
-            let res =
-                tokio::task::spawn_blocking(move || nftables::helper::apply_ruleset(&ruleset))
-                    .await;
-            match res {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    error!(table = %cfg.table_name, error = %e, "Failed to apply firewall lockdown; keeping the previous ruleset");
-                    return;
-                }
-                Err(e) => {
-                    error!(table = %cfg.table_name, error = %e, "Firewall lockdown task panicked; keeping the previous ruleset");
-                    return;
-                }
+        if tracing::enabled!(tracing::Level::TRACE) {
+            trace!(payload = %serde_json::to_string_pretty(&ruleset).unwrap_or_default(), "Applying lockdown ruleset payload");
+        }
+        let applier = self.applier.clone();
+        let res = tokio::task::spawn_blocking(move || applier.apply(&ruleset)).await;
+        match res {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                error!(table = %cfg.table_name, error = %e, "Failed to apply firewall lockdown; keeping the previous ruleset");
+                return;
+            }
+            Err(e) => {
+                error!(table = %cfg.table_name, error = %e, "Firewall lockdown task panicked; keeping the previous ruleset");
+                return;
             }
         }
-        *self.last_ruleset.write() = Some(payload);
+        self.applied = true;
         ctx.set_firewall_left(Some(FirewallStopAction::Lockdown));
         info!(
             table = %cfg.table_name,
             wan = ?self.active_wan,
-            inert = self.inert,
             "Firewall stopped; WAN locked down (on_stop = \"remove\" deletes the table instead)"
         );
     }
@@ -289,7 +240,6 @@ impl NftService {
         ctx: &LanforgeContext,
         reason: &'static str,
         zones: usize,
-        inert: bool,
         summary: FirewallAppliedSummary,
     ) {
         info!(
@@ -299,7 +249,6 @@ impl NftService {
             port_rules = summary.rules_count,
             wan = ?summary.wan_iface,
             flow_offload = summary.flow_offload,
-            inert,
             "Firewall ruleset applied"
         );
         let _ = ctx
@@ -311,7 +260,7 @@ impl NftService {
 
     #[allow(clippy::too_many_lines)]
     async fn apply_ruleset_internal(
-        &self,
+        &mut self,
         ctx: &LanforgeContext,
         cfg: &FirewallConfig,
         dynamic_ports: &[DynamicPortRequest],
@@ -337,13 +286,12 @@ impl NftService {
             .with_device_addrs(device_addrs)
             .build();
 
-        let should_serialize = self.inert || tracing::enabled!(tracing::Level::TRACE);
-        let json_payload = if should_serialize {
+        let json_payload = if tracing::enabled!(tracing::Level::TRACE) {
             serde_json::to_string_pretty(&ruleset).unwrap_or_default()
         } else {
             String::new()
         };
-        if !json_payload.is_empty() && tracing::enabled!(tracing::Level::TRACE) {
+        if !json_payload.is_empty() {
             trace!(payload = %json_payload, "Applying nftables ruleset payload");
         }
 
@@ -353,53 +301,35 @@ impl NftService {
         #[allow(clippy::cast_possible_truncation)]
         let rules_count = (cfg.port_forwards.len() + dynamic_ports.len()) as u32;
 
-        let inert = self.inert;
-        let last_ruleset = self.last_ruleset.clone();
-
-        let result =
-            if inert {
-                *last_ruleset.write() = Some(json_payload.clone());
-                Ok(())
-            } else {
-                let res = tokio::task::spawn_blocking(move || {
-                    let res = nftables::helper::apply_ruleset(&ruleset);
-                    if let Err(e) = res {
-                        let payload = if json_payload.is_empty() {
-                            serde_json::to_string_pretty(&ruleset).unwrap_or_default()
-                        } else {
-                            json_payload
-                        };
-                        Err((e, payload))
-                    } else {
-                        Ok(json_payload)
-                    }
-                })
-                .await;
-
-                match res {
-                    Ok(Ok(payload)) => {
-                        let recorded = if payload.is_empty() {
-                            "applied".to_string()
-                        } else {
-                            payload
-                        };
-                        *last_ruleset.write() = Some(recorded);
-                        Ok(())
-                    }
-                    Ok(Err((e, payload))) => Err((e, payload)),
-                    Err(e) => {
-                        let err_msg = format!("Firewall task panicked: {e}");
-                        error!(reason, error = %err_msg, "Firewall worker panicked");
-                        let _ = ctx.bus().publish(LanforgeEvent::Firewall(
-                            FirewallEvent::ApplyFailed { error: err_msg },
-                        ));
-                        return;
-                    }
-                }
-            };
+        let applier = self.applier.clone();
+        let res = tokio::task::spawn_blocking(move || {
+            applier.apply(&ruleset).map_err(|e| {
+                let payload = if json_payload.is_empty() {
+                    serde_json::to_string_pretty(&ruleset).unwrap_or_default()
+                } else {
+                    json_payload
+                };
+                (e, payload)
+            })
+        })
+        .await;
+        let result = match res {
+            Ok(result) => result,
+            Err(e) => {
+                let err_msg = format!("Firewall task panicked: {e}");
+                error!(reason, error = %err_msg, "Firewall worker panicked");
+                let _ = ctx
+                    .bus()
+                    .publish(LanforgeEvent::Firewall(FirewallEvent::ApplyFailed {
+                        error: err_msg,
+                    }));
+                return;
+            }
+        };
 
         match result {
             Ok(()) => {
+                self.applied = true;
                 ctx.set_firewall_left(None);
                 ctx.set_service_state(
                     Self::SERVICE_ID,
@@ -409,7 +339,6 @@ impl NftService {
                     ctx,
                     reason,
                     cfg.zones.len(),
-                    inert,
                     FirewallAppliedSummary {
                         table,
                         wan_iface: active_wan,
@@ -437,13 +366,51 @@ impl NftService {
     }
 }
 
-impl Default for NftService {
+/// Deletes the `inet` table `table_name` (default `lanforge`) through `applier`. A table that
+/// does not exist is not an error.
+async fn delete_table<A: NftApplier>(applier: A, table_name: &str) {
+    let table = {
+        let t = table_name.trim();
+        if t.is_empty() { "lanforge" } else { t }
+    };
+
+    let mut batch = nftables::batch::Batch::new();
+    batch.delete(nftables::schema::NfListObject::Table(
+        nftables::schema::Table {
+            family: nftables::types::NfFamily::INet,
+            name: table.to_string().into(),
+            handle: None,
+        },
+    ));
+    let ruleset = batch.to_nftables();
+
+    let table_owned = table.to_string();
+    let result = tokio::task::spawn_blocking(move || applier.apply(&ruleset)).await;
+    match result {
+        Ok(Ok(())) => {
+            info!(table = table_owned, "Flushed and removed firewall table");
+        }
+        Ok(Err(nftables::helper::NftablesError::NftFailed { .. })) => {
+            // Table may not exist or was already removed; ignore silently.
+        }
+        Ok(Err(nftables::helper::NftablesError::NftExecution { inner, .. }))
+            if inner.kind() == ErrorKind::NotFound => {}
+        Ok(Err(e)) => {
+            warn!(table = table_owned, error = %e, "Failed to delete firewall table");
+        }
+        Err(e) => {
+            warn!(table = table_owned, error = %e, "Firewall cleanup task panicked");
+        }
+    }
+}
+
+impl Default for NftService<KernelNft> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl LanforgeService for NftService {
+impl<A: NftApplier> LanforgeService for NftService<A> {
     fn spec(&self) -> ServiceSpec {
         ServiceSpec {
             id: Self::SERVICE_ID,
@@ -475,7 +442,7 @@ impl LanforgeService for NftService {
     }
 }
 
-impl AsyncService for NftService {
+impl<A: NftApplier> AsyncService for NftService<A> {
     fn init(
         &mut self,
         ctx: &LanforgeContext,
@@ -523,7 +490,7 @@ impl AsyncService for NftService {
             if live_wan != self.active_wan {
                 self.active_wan = live_wan;
                 self.reapply(&ctx, "wan_generation").await;
-            } else if self.last_applied_payload().is_none() {
+            } else if !self.applied {
                 self.reapply(&ctx, "startup").await;
             } else {
                 // SQM or the PPPoE dataplane may have changed since `init` compiled.
