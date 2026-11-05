@@ -34,15 +34,14 @@ pub fn handoff_to_kernel(session_fd: OwnedFd, mru: u16) -> Result<KernelSession,
 
     debug!("Handoff step 2: PPPIOCNEWUNIT");
     let mut unit_id: libc::c_int = -1;
-    unsafe {
-        pppiocnewunit(ppp_unit_fd.as_raw_fd(), &raw mut unit_id)?;
-    }
+    // SAFETY: PPPIOCNEWUNIT reads and writes one `c_int` (`unit_id`, owned here) on an open /dev/ppp fd.
+    unsafe { pppiocnewunit(ppp_unit_fd.as_raw_fd(), &raw mut unit_id) }?;
 
     debug!(unit_id, "Handoff step 3: PPPIOCGCHAN on session_fd");
     let mut chan_num: libc::c_int = 0;
-    unsafe {
-        pppiocgchan(session_fd.as_raw_fd(), &raw mut chan_num)?;
-    }
+    // SAFETY: PPPIOCGCHAN writes one `c_int` (`chan_num`, owned here); `session_fd` is a connected
+    // AF_PPPOX socket owned by the caller.
+    unsafe { pppiocgchan(session_fd.as_raw_fd(), &raw mut chan_num) }?;
 
     debug!(
         chan_num,
@@ -55,26 +54,22 @@ pub fn handoff_to_kernel(session_fd: OwnedFd, mru: u16) -> Result<KernelSession,
     )?;
 
     debug!("Handoff step 5: PPPIOCATTCHAN");
-    unsafe {
-        pppiocattchan(ppp_chan_fd.as_raw_fd(), &raw const chan_num)?;
-    }
+    // SAFETY: PPPIOCATTCHAN reads one `c_int` (`chan_num`) on an open /dev/ppp fd.
+    unsafe { pppiocattchan(ppp_chan_fd.as_raw_fd(), &raw const chan_num) }?;
 
     debug!("Handoff step 6: PPPIOCCONNECT");
-    unsafe {
-        pppiocconnect(ppp_chan_fd.as_raw_fd(), &raw const unit_id)?;
-    }
+    // SAFETY: PPPIOCCONNECT reads one `c_int` (`unit_id`) on an open /dev/ppp fd.
+    unsafe { pppiocconnect(ppp_chan_fd.as_raw_fd(), &raw const unit_id) }?;
 
     debug!("Handoff step 7: PPPIOCSMRU");
     let mru_val = libc::c_int::from(mru);
-    unsafe {
-        pppiocsmru(ppp_unit_fd.as_raw_fd(), &raw const mru_val)?;
-    }
+    // SAFETY: PPPIOCSMRU reads one `c_int` (`mru_val`) on an open /dev/ppp fd.
+    unsafe { pppiocsmru(ppp_unit_fd.as_raw_fd(), &raw const mru_val) }?;
 
     debug!("Handoff step 8: PPPIOCSFLAGS");
     let flags: libc::c_int = 0;
-    unsafe {
-        pppiocsflags(ppp_unit_fd.as_raw_fd(), &raw const flags)?;
-    }
+    // SAFETY: PPPIOCSFLAGS reads one `c_int` (`flags`) on an open /dev/ppp fd.
+    unsafe { pppiocsflags(ppp_unit_fd.as_raw_fd(), &raw const flags) }?;
 
     let interface_name = format!("ppp{unit_id}");
     info!(

@@ -1,11 +1,10 @@
 use crate::inert::{InertHandle, InertPort};
 use crate::metrics::TransportMetrics;
+use crate::sys;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::io;
-use std::mem::size_of;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
-use std::os::fd::AsRawFd;
-use std::ptr::from_ref;
+use std::os::fd::AsFd;
 use std::sync::Arc;
 use tokio::io::unix::AsyncFd;
 use tracing::info;
@@ -45,7 +44,12 @@ impl Icmp6Transport {
 
         // RFC 4861 §6.1.2: Hop limit must be 255
         sock.set_multicast_hops_v6(255)?;
-        set_sockopt_int(&sock, libc::IPPROTO_IPV6, libc::IPV6_UNICAST_HOPS, 255)?;
+        sys::set_sockopt_int(
+            sock.as_fd(),
+            libc::IPPROTO_IPV6,
+            libc::IPV6_UNICAST_HOPS,
+            255,
+        )?;
 
         // Join ff02::2 (all-routers)
         sock.join_multicast_v6(&ALL_ROUTERS_MULTICAST, iface_index)?;
@@ -54,7 +58,7 @@ impl Icmp6Transport {
         set_icmp6_filter_only(&sock, ICMPV6_TYPE_RS)?;
 
         sock.set_nonblocking(true)?;
-        let async_fd = unsafe { AsyncFd::register(sock)? };
+        let async_fd = sys::register_socket(sock)?;
 
         info!("Raw socket bound on {iface} (index {iface_index}), listening for RS");
         Ok(Self {
@@ -74,7 +78,7 @@ impl Icmp6Transport {
         sock.bind_device(Some(iface.as_bytes()))?;
         set_icmp6_filter_only(&sock, ICMPV6_TYPE_RA)?;
         sock.set_nonblocking(true)?;
-        let async_fd = unsafe { AsyncFd::register(sock)? };
+        let async_fd = sys::register_socket(sock)?;
         info!("Raw socket bound on {iface}, listening for RA");
         Ok(Self {
             inner: Arc::new(Icmp6Inner {
@@ -123,52 +127,20 @@ impl Icmp6Transport {
     /// Receives an ICMPv6 datagram into the provided buffer.
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddrV6)> {
         match &self.inner.backend {
-            Icmp6Backend::Kernel(async_fd) => {
-                loop {
-                    let mut guard = async_fd.readable().await?;
-                    let sock = guard.get_inner();
-
-                    // Read from raw socket
-                    let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
-                    let mut socklen =
-                        std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
-
-                    let ret = unsafe {
-                        libc::recvfrom(
-                            sock.as_raw_fd(),
-                            buf.as_mut_ptr().cast::<libc::c_void>(),
-                            buf.len(),
-                            0,
-                            std::ptr::from_mut(&mut storage).cast::<libc::sockaddr>(),
-                            &mut socklen,
-                        )
-                    };
-
-                    if ret >= 0 {
+            Icmp6Backend::Kernel(async_fd) => loop {
+                let mut guard = async_fd.readable().await?;
+                match sys::recv_from_v6(guard.get_inner().as_fd(), buf) {
+                    Ok((n, src)) => {
                         guard.clear_ready();
-                        let n = ret as usize;
-                        let src = unsafe {
-                            let sa = &*std::ptr::from_ref(&storage).cast::<libc::sockaddr_in6>();
-                            let ip = Ipv6Addr::from(sa.sin6_addr.s6_addr);
-                            SocketAddrV6::new(
-                                ip,
-                                u16::from_be(sa.sin6_port),
-                                sa.sin6_flowinfo,
-                                sa.sin6_scope_id,
-                            )
-                        };
                         self.inner.metrics.record_rx(n);
                         return Ok((n, src));
                     }
-
-                    let err = io::Error::last_os_error();
-                    if err.kind() == io::ErrorKind::WouldBlock {
+                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
                         guard.clear_ready();
-                        continue;
                     }
-                    return Err(err);
+                    Err(err) => return Err(err),
                 }
-            }
+            },
             #[cfg(any(test, feature = "inert"))]
             Icmp6Backend::Inert(port) => {
                 let mut rx = port.in_rx.lock().await;
@@ -223,52 +195,7 @@ fn set_icmp6_filter_only(sock: &Socket, icmp_type: u8) -> io::Result<()> {
     let t = icmp_type as usize;
     filter[t / 8] &= !(1u8 << (t % 8));
 
-    set_sockopt_raw(sock, libc::IPPROTO_ICMPV6, ICMP6_FILTER, &filter)
-}
-
-fn set_sockopt_int(
-    sock: &Socket,
-    level: libc::c_int,
-    opt: libc::c_int,
-    val: i32,
-) -> io::Result<()> {
-    let v = val as libc::c_int;
-    let ret = unsafe {
-        libc::setsockopt(
-            sock.as_raw_fd(),
-            level,
-            opt,
-            from_ref(&v).cast::<libc::c_void>(),
-            libc::socklen_t::try_from(size_of::<libc::c_int>()).unwrap_or_default(),
-        )
-    };
-    if ret < 0 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
-}
-
-fn set_sockopt_raw(
-    sock: &Socket,
-    level: libc::c_int,
-    opt: libc::c_int,
-    val: &[u8],
-) -> io::Result<()> {
-    let ret = unsafe {
-        libc::setsockopt(
-            sock.as_raw_fd(),
-            level,
-            opt,
-            val.as_ptr().cast::<libc::c_void>(),
-            libc::socklen_t::try_from(val.len()).unwrap_or_default(),
-        )
-    };
-    if ret < 0 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
+    sys::set_sockopt_bytes(sock.as_fd(), libc::IPPROTO_ICMPV6, ICMP6_FILTER, &filter)
 }
 
 #[cfg(test)]

@@ -144,6 +144,9 @@ pub struct DiskFilterMap {
 impl DiskFilterMap {
     pub fn open(path: &Path) -> Result<Self, DnsError> {
         let file = File::open(path)?;
+        // SAFETY: a mapped file must not change underneath us. Compiled lists are only ever written
+        // to a tempfile and renamed into place (`build_fst_map`) or unlinked; neither touches the
+        // inode this map holds.
         let mmap = unsafe { Mmap::map(&file)? };
         let map =
             Map::new(mmap).map_err(|e| DnsError::Generic(format!("FST map load failed: {e}")))?;

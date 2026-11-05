@@ -1,3 +1,4 @@
+use super::ifreq_named;
 use crate::error::PppoeError;
 use nix::sys::socket::{AddressFamily, SockFlag, SockType, socket};
 use std::ffi::CString;
@@ -26,20 +27,16 @@ fn set_ethtool_flag(ifname: &str, cmd: u32, val: u32) -> Result<(), PppoeError> 
         None,
     )?;
 
-    let mut ifr: libc::ifreq = unsafe { std::mem::zeroed() };
     let c_ifname = CString::new(ifname)
         .map_err(|_| PppoeError::NegotiationFailed("Invalid interface name".into()))?;
-    let bytes = c_ifname.as_bytes();
-    for (i, &b) in bytes[..bytes.len().min(15)].iter().enumerate() {
-        ifr.ifr_name[i] = b as libc::c_char;
-    }
+    let mut ifr = ifreq_named(c_ifname.as_bytes());
 
     let mut ev = EthtoolValue { cmd, data: val };
     ifr.ifr_ifru.ifru_data = std::ptr::addr_of_mut!(ev).cast::<libc::c_char>();
 
-    unsafe {
-        let _ = libc::ioctl(sock.as_raw_fd(), SIOCETHTOOL, &raw mut ifr);
-    }
+    // SAFETY: SIOCETHTOOL reads the name and the `EthtoolValue` that `ifru_data` points to; both live
+    // on this stack frame until the call returns.
+    let _ = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCETHTOOL, &raw mut ifr) };
 
     Ok(())
 }

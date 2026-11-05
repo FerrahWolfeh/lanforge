@@ -112,8 +112,8 @@ fn warn_if_runtime_filesystem_is_persistent(directory: &Path) {
     // Linux TMPFS_MAGIC and RAMFS_MAGIC values from linux/magic.h.
     const TMPFS_MAGIC: libc::c_long = 0x0102_1994;
     const RAMFS_MAGIC: libc::c_long = 0x8584_58f6u32 as libc::c_long;
-    // SAFETY: `path` is a NUL-terminated pathname and `stats` points to writable storage.
     let mut stats = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    // SAFETY: `path` is a NUL-terminated pathname and `stats` points to writable storage.
     let result = unsafe { libc::statfs(path.as_ptr(), stats.as_mut_ptr()) };
     if result != 0 {
         tracing::warn!(path = %directory.display(), error = %std::io::Error::last_os_error(), "Could not inspect runtime database filesystem; flash wear is possible");

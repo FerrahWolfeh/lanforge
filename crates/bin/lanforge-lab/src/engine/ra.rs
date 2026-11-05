@@ -45,6 +45,7 @@ impl RaEngine {
         let _ = sock.set_multicast_hops_v6(255);
         let _ = sock.set_nonblocking(true);
 
+        // SAFETY: `Socket` owns its descriptor and `as_raw_fd()` always returns it.
         let async_fd = unsafe { tokio::io::unix::AsyncFd::register(sock) }
             .map_err(|e| LabError::Socket(format!("AsyncFd error: {e}")))?;
 
@@ -65,6 +66,8 @@ impl RaEngine {
         let res = tokio::time::timeout(self.timeout_duration, async {
             loop {
                 let mut guard = async_fd.readable().await.map_err(LabError::Io)?;
+                // SAFETY: `[u8; N]` and `[MaybeUninit<u8>; N]` have the same layout, and recvfrom
+                // only writes initialized bytes, so `buf` stays initialized.
                 let res = guard.get_inner().recv_from(unsafe {
                     &mut *(&raw mut buf).cast::<[std::mem::MaybeUninit<u8>; 1500]>()
                 });

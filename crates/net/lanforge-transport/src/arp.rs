@@ -1,8 +1,9 @@
 use crate::inert::{InertHandle, InertPort};
 use crate::metrics::TransportMetrics;
+use crate::sys;
 use std::io;
 use std::net::Ipv4Addr;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsFd, OwnedFd};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::unix::AsyncFd;
@@ -43,41 +44,13 @@ pub struct ArpProber {
 impl ArpProber {
     /// Binds an `AF_PACKET` raw socket to the interface specified by `ifindex`.
     pub fn bind(ifindex: u32, local_mac: [u8; 6]) -> io::Result<Self> {
-        let raw_fd = unsafe {
-            libc::socket(
-                libc::AF_PACKET,
-                libc::SOCK_RAW | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
-                (ETH_P_ARP).to_be() as libc::c_int,
-            )
-        };
-
-        if raw_fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
-
-        let owned_fd = unsafe { OwnedFd::from_raw_fd(raw_fd) };
-
-        let mut saddr: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
-        saddr.sll_family = libc::AF_PACKET as libc::c_ushort;
-        saddr.sll_protocol = (ETH_P_ARP).to_be();
-        #[allow(clippy::cast_possible_wrap)]
-        {
-            saddr.sll_ifindex = ifindex as libc::c_int;
-        }
-
-        let res = unsafe {
-            libc::bind(
-                owned_fd.as_raw_fd(),
-                std::ptr::from_ref(&saddr).cast::<libc::sockaddr>(),
-                std::mem::size_of::<libc::sockaddr_ll>() as libc::socklen_t,
-            )
-        };
-
-        if res < 0 {
-            return Err(io::Error::last_os_error());
-        }
-
-        let async_fd = unsafe { AsyncFd::register(owned_fd)? };
+        let owned_fd = sys::socket(
+            libc::AF_PACKET,
+            libc::SOCK_RAW | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
+            libc::c_int::from(ETH_P_ARP.to_be()),
+        )?;
+        sys::bind_packet(owned_fd.as_fd(), ifindex, ETH_P_ARP)?;
+        let async_fd = sys::register_fd(owned_fd)?;
 
         Ok(Self {
             local_mac,
@@ -129,31 +102,8 @@ impl ArpProber {
 
         match self.backend.as_ref() {
             ArpBackend::Kernel { fd, ifindex } => {
-                let mut saddr: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
-                saddr.sll_family = libc::AF_PACKET as libc::c_ushort;
-                saddr.sll_protocol = (ETH_P_ARP).to_be();
-                #[allow(clippy::cast_possible_wrap)]
-                {
-                    saddr.sll_ifindex = *ifindex as libc::c_int;
-                }
-                saddr.sll_halen = 6;
-                saddr.sll_addr[..6].copy_from_slice(&[0xff; 6]);
-
-                // Send probe frame
-                let sent = unsafe {
-                    libc::sendto(
-                        fd.as_raw_fd(),
-                        frame.as_ptr().cast::<libc::c_void>(),
-                        frame.len(),
-                        0,
-                        std::ptr::from_ref(&saddr).cast::<libc::sockaddr>(),
-                        std::mem::size_of::<libc::sockaddr_ll>() as libc::socklen_t,
-                    )
-                };
-
-                if sent < 0 {
-                    return Err(io::Error::last_os_error());
-                }
+                // Send probe frame (broadcast)
+                sys::send_packet(fd.get_ref().as_fd(), &frame, *ifindex, ETH_P_ARP, [0xff; 6])?;
 
                 // Await reply with timeout
                 let mut buf = [0u8; 256];
@@ -171,33 +121,20 @@ impl ArpProber {
                         _ => return Ok(None),
                     };
 
-                    let n = unsafe {
-                        libc::recv(
-                            fd.as_raw_fd(),
-                            buf.as_mut_ptr().cast::<libc::c_void>(),
-                            buf.len(),
-                            0,
-                        )
-                    };
-
-                    if n > 0 {
-                        guard.clear_ready();
-                        #[allow(clippy::cast_sign_loss)]
-                        let len = n as usize;
-                        if let Some(mac) = parse_arp_reply(&buf[..len], target) {
-                            self.metrics.record_rx(len);
-                            return Ok(Some(ArpReply {
-                                mac,
-                                rtt: start.elapsed(),
-                            }));
-                        }
-                    } else if n < 0 {
-                        let err = io::Error::last_os_error();
-                        if err.kind() == io::ErrorKind::WouldBlock {
+                    match sys::read(fd.get_ref().as_fd(), &mut buf) {
+                        Ok(0) => {}
+                        Ok(len) => {
                             guard.clear_ready();
-                        } else {
-                            return Err(err);
+                            if let Some(mac) = parse_arp_reply(&buf[..len], target) {
+                                self.metrics.record_rx(len);
+                                return Ok(Some(ArpReply {
+                                    mac,
+                                    rtt: start.elapsed(),
+                                }));
+                            }
                         }
+                        Err(err) if err.kind() == io::ErrorKind::WouldBlock => guard.clear_ready(),
+                        Err(err) => return Err(err),
                     }
                 }
             }
