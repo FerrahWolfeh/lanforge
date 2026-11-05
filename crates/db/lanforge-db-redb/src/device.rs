@@ -3,9 +3,13 @@
 use crate::tables::{TABLE_DEVICES, TABLE_META, TABLE_STATIC_HOSTS};
 use crate::{RedbDatabase, decode, encode, encode_into};
 use lanforge_db_core::{ConfigStore, DbError, DeviceStore, StaticHostEntry};
-use lanforge_types::device::{Device, DeviceStatus, IPv4State, IPv6State, Origin};
+use lanforge_types::device::{Device, DeviceClass, DeviceStatus, IPv4State, IPv6State, Origin};
 use lanforge_types::identifiers::MacAddr;
 use redb::{ReadableTable, ReadableTableMetadata};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use std::sync::Arc;
+use std::time::SystemTime;
 
 impl DeviceStore for RedbDatabase {
     fn is_in_memory(&self) -> bool {
@@ -191,7 +195,7 @@ impl DeviceStore for RedbDatabase {
                 let (k, val) = item?;
                 let device: Device = decode(val.value())?;
                 if device.hostname.name.is_empty()
-                    && matches!(device.v4, lanforge_types::device::IPv4State::None)
+                    && matches!(device.v4, IPv4State::None)
                     && device.v6.is_empty()
                     && device.v6_prefixes.is_empty()
                 {
@@ -220,8 +224,8 @@ impl DeviceStore for RedbDatabase {
 
     fn batch_sync_devices(
         &self,
-        full_upserts: &[std::sync::Arc<Device>],
-        base_upserts: &[std::sync::Arc<Device>],
+        full_upserts: &[Arc<Device>],
+        base_upserts: &[Arc<Device>],
         deletes: &[MacAddr],
     ) -> Result<(), DbError> {
         if full_upserts.is_empty() && base_upserts.is_empty() && deletes.is_empty() {
@@ -296,14 +300,14 @@ impl DeviceStore for RedbDatabase {
 }
 
 impl ConfigStore for RedbDatabase {
-    fn get<T: serde::de::DeserializeOwned>(
+    fn get<T: DeserializeOwned>(
         &self,
         key: lanforge_db_core::ConfigKey<T>,
     ) -> Result<Option<T>, DbError> {
         self.get(key)
     }
 
-    fn put<T: serde::Serialize>(
+    fn put<T: Serialize>(
         &self,
         key: lanforge_db_core::ConfigKey<T>,
         val: &T,
@@ -311,7 +315,7 @@ impl ConfigStore for RedbDatabase {
         self.put(key, val)
     }
 
-    fn put_if_absent<T: serde::Serialize + serde::de::DeserializeOwned>(
+    fn put_if_absent<T: Serialize + DeserializeOwned>(
         &self,
         key: lanforge_db_core::ConfigKey<T>,
         val: &T,
@@ -401,14 +405,14 @@ fn static_host_to_device(host: StaticHostEntry) -> Device {
     if let Some(suffix) = host.v6_suffix {
         device
             .v6
-            .push(IPv6State::Static(suffix, std::time::SystemTime::UNIX_EPOCH));
+            .push(IPv6State::Static(suffix, SystemTime::UNIX_EPOCH));
     }
     device
 }
 
 fn persistent_device(device: &Device) -> Option<Device> {
     let mut persistent = device.clone();
-    persistent.last_seen = std::time::SystemTime::UNIX_EPOCH;
+    persistent.last_seen = SystemTime::UNIX_EPOCH;
     persistent.status = DeviceStatus::Offline;
     persistent.v4 = match &persistent.v4 {
         IPv4State::Dynamic(lease) => IPv4State::Dynamic(lease.clone()),
@@ -428,7 +432,7 @@ fn persistent_device(device: &Device) -> Option<Device> {
     let has_identity = !persistent.hostname.name.is_empty()
         || persistent.duid.is_some()
         || persistent.boot_file.is_some()
-        || persistent.class != lanforge_types::device::DeviceClass::None
+        || persistent.class != DeviceClass::None
         || persistent.ignore_dns_log
         || !persistent.ignored_log_domains.is_empty();
     (has_lease || has_identity).then_some(persistent)
