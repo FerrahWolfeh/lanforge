@@ -52,6 +52,8 @@ pub mod error;
 pub mod log_engine;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+use smallvec as _;
 pub mod worker;
 
 pub use engine::LanforgeDb;

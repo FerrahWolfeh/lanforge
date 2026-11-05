@@ -2523,22 +2523,16 @@ dependencies = [
 name = "lanforge-db"
 version = "0.43.0"
 dependencies = [
- "chrono",
- "futures",
  "hotpath",
- "lanforge-api",
  "lanforge-core",
  "lanforge-db-core",
  "lanforge-db-redb",
  "lanforge-macros",
  "lanforge-types",
  "libc",
- "parking_lot",
  "serde",
- "serde_json",
  "smallvec",
  "tempfile",
- "thiserror 2.0.21",
  "tokio",
  "tracing",
 ]
@@ -2547,13 +2541,11 @@ dependencies = [
 name = "lanforge-db-core"
 version = "0.43.0"
 dependencies = [
- "chrono",
  "lanforge-types",
  "postcard",
  "redb",
  "serde",
  "thiserror 2.0.21",
- "tokio",
  "uuid",
 ]
 
@@ -2561,22 +2553,16 @@ dependencies = [
 name = "lanforge-db-redb"
 version = "0.43.0"
 dependencies = [
- "chrono",
- "futures",
  "lanforge-core",
  "lanforge-db-core",
  "lanforge-types",
- "libc",
- "parking_lot",
  "postcard",
  "redb",
  "serde",
  "serde_json",
  "tempfile",
- "thiserror 2.0.21",
  "tokio",
  "tracing",
- "uuid",
 ]
 
 [[package]]
