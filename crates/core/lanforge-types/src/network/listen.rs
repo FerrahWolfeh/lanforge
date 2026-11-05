@@ -1,6 +1,7 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{self, Display};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::slice;
 use std::str::FromStr;
 
 /// Configuration for network service listen addresses.
@@ -36,7 +37,7 @@ impl ListenConfig {
     #[must_use]
     pub const fn as_slice(&self) -> &[SocketAddr] {
         match self {
-            Self::Single(addr) => std::slice::from_ref(addr),
+            Self::Single(addr) => slice::from_ref(addr),
             Self::Multiple(addrs) => addrs.as_slice(),
         }
     }

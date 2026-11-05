@@ -4,8 +4,9 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    fmt::Display,
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    fmt::{self, Display, Formatter},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    str::{self, FromStr},
     sync::Arc,
 };
 
@@ -84,7 +85,7 @@ impl From<DnsRecordType> for u16 {
     }
 }
 
-impl std::str::FromStr for DnsRecordType {
+impl FromStr for DnsRecordType {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -164,7 +165,7 @@ impl DnsRecordType {
 }
 
 impl Display for DnsRecordType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         if let Some(s) = self.as_static_str() {
             f.write_str(s)
         } else if let Self::Unknown(v) = self {
@@ -211,8 +212,8 @@ impl UpstreamStatus {
     }
 }
 
-impl std::fmt::Display for UpstreamStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for UpstreamStatus {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
@@ -264,8 +265,8 @@ pub enum QueryResult {
     Coalesced = 8,
 }
 
-impl std::fmt::Display for QueryResult {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for QueryResult {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Local => write!(f, "Local"),
             Self::Forwarded => write!(f, "Forwarded"),
@@ -292,7 +293,7 @@ pub enum TransportProtocol {
 }
 
 impl Display for TransportProtocol {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Udp => write!(f, "UDP"),
             Self::Tcp => write!(f, "TCP"),
@@ -309,7 +310,7 @@ pub struct QueryLogEntry {
     /// Unix epoch seconds.
     pub timestamp: u64,
     /// Client IP address.
-    pub src_ip: std::net::IpAddr,
+    pub src_ip: IpAddr,
     /// Domain name queried.
     pub domain: Arc<str>,
     /// Time spent in microseconds (0 for local/cached).
@@ -543,7 +544,7 @@ pub enum DnsRData {
 }
 
 impl Display for DnsRData {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::A(addr) => write!(f, "{addr}"),
             Self::AAAA(addr) => write!(f, "{addr}"),
@@ -569,7 +570,7 @@ impl Display for DnsRData {
                                 if p + 1 + l > val.len() {
                                     break;
                                 }
-                                if let Ok(s) = std::str::from_utf8(&val[p + 1..p + 1 + l]) {
+                                if let Ok(s) = str::from_utf8(&val[p + 1..p + 1 + l]) {
                                     alpns.push(s.to_string());
                                 }
                                 p += 1 + l;
@@ -649,7 +650,7 @@ impl DnsMessage {
 }
 
 impl Display for DnsRecordEntry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{:<5} {:<20} -> {}", self.kind, self.name, self.data)
     }
 }

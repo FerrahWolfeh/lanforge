@@ -1,6 +1,9 @@
 use crate::identifiers::MacAddr;
+use serde::de::Error as DeError;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::borrow::Cow;
 use std::fmt::{self, Display};
-use std::{borrow::Cow, str::FromStr};
+use std::str::FromStr;
 
 /// Represents a device target identifier, which can be either a hardware MAC address
 /// or a lowercase alphanumeric/hyphenated device name.
@@ -10,15 +13,15 @@ pub enum DeviceIdentifier {
     Name(String),
 }
 
-impl serde::Serialize for DeviceIdentifier {
+impl Serialize for DeviceIdentifier {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: serde::Serializer,
+        S: Serializer,
     {
         if serializer.is_human_readable() {
             serializer.serialize_str(&self.to_string())
         } else {
-            #[derive(serde::Serialize)]
+            #[derive(Serialize)]
             enum RawDeviceIdentifier {
                 Mac(MacAddr),
                 Name(String),
@@ -32,16 +35,16 @@ impl serde::Serialize for DeviceIdentifier {
     }
 }
 
-impl<'de> serde::Deserialize<'de> for DeviceIdentifier {
+impl<'de> Deserialize<'de> for DeviceIdentifier {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
-        D: serde::Deserializer<'de>,
+        D: Deserializer<'de>,
     {
         if deserializer.is_human_readable() {
             let s = String::deserialize(deserializer)?;
-            Self::from_str(&s).map_err(serde::de::Error::custom)
+            Self::from_str(&s).map_err(DeError::custom)
         } else {
-            #[derive(serde::Deserialize)]
+            #[derive(Deserialize)]
             enum RawDeviceIdentifier {
                 Mac(MacAddr),
                 Name(String),

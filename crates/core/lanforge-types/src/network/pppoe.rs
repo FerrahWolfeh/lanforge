@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
+use std::fmt::{self, Display, Formatter};
 use std::net::Ipv4Addr;
+use std::str::FromStr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -11,8 +13,8 @@ pub enum AuthMethod {
     ChapMd5,
 }
 
-impl std::fmt::Display for AuthMethod {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for AuthMethod {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::None => write!(f, "none"),
             Self::Pap => write!(f, "pap"),
@@ -21,7 +23,7 @@ impl std::fmt::Display for AuthMethod {
     }
 }
 
-impl std::str::FromStr for AuthMethod {
+impl FromStr for AuthMethod {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {

@@ -1,6 +1,8 @@
+use crate::network::Ipv6Prefix;
 use crate::network::subnet::IpSubnet;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
+use std::fmt::{self, Display, Formatter};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -45,14 +47,14 @@ impl Ipv6Net {
     }
 }
 
-impl std::fmt::Display for Ipv6Net {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for Ipv6Net {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}/{}", self.addr, self.prefix_len)
     }
 }
 
-impl From<crate::network::Ipv6Prefix> for Ipv6Net {
-    fn from(prefix: crate::network::Ipv6Prefix) -> Self {
+impl From<Ipv6Prefix> for Ipv6Net {
+    fn from(prefix: Ipv6Prefix) -> Self {
         Self {
             addr: prefix.to_addr(),
             prefix_len: 64,

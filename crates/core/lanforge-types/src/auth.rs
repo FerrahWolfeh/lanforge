@@ -1,3 +1,6 @@
+use std::fmt;
+use std::str::FromStr;
+
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
@@ -13,8 +16,8 @@ pub enum ApiScope {
     ConfigWrite,
 }
 
-impl std::fmt::Display for ApiScope {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for ApiScope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
             Self::Admin => "admin",
             Self::Monitoring => "monitoring",
@@ -27,7 +30,7 @@ impl std::fmt::Display for ApiScope {
     }
 }
 
-impl std::str::FromStr for ApiScope {
+impl FromStr for ApiScope {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -66,13 +69,13 @@ impl UserRole {
     }
 }
 
-impl std::fmt::Display for UserRole {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for UserRole {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
-impl std::str::FromStr for UserRole {
+impl FromStr for UserRole {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {

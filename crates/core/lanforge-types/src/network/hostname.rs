@@ -1,5 +1,6 @@
 use lanforge_macros::EnumRepr;
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, EnumRepr)]
@@ -20,13 +21,13 @@ impl HostnameOrigin {
 }
 
 impl PartialOrd for HostnameOrigin {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for HostnameOrigin {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> Ordering {
         self.priority().cmp(&other.priority())
     }
 }

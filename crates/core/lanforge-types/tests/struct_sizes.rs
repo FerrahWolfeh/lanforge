@@ -28,6 +28,7 @@ use lanforge_types::network::dns::*;
 use lanforge_types::network::pppoe::*;
 use lanforge_types::network::ra::*;
 use lanforge_types::network::subnet::*;
+use lanforge_types::network::traffic::*;
 use lanforge_types::network::*;
 use lanforge_types::system::*;
 use lanforge_types::update::*;
@@ -168,24 +169,20 @@ fn test_print_all_struct_sizes() {
     print_size::<FirewallStatus>("FirewallStatus");
 
     println!("\n=== TRAFFIC & SQM TYPES ===");
-    print_size::<lanforge_types::network::TrafficConfig>("TrafficConfig");
-    print_size::<lanforge_types::network::traffic::NicTuningConfig>("NicTuningConfig");
-    print_size::<lanforge_types::network::traffic::SqmConfig>("SqmConfig");
-    print_size::<lanforge_types::network::traffic::SqmOverhead>("SqmOverhead");
-    print_size::<lanforge_types::network::traffic::SqmDiffserv>("SqmDiffserv");
-    print_size::<lanforge_types::network::traffic::InterfaceTrafficStats>("InterfaceTrafficStats");
-    print_size::<lanforge_types::network::traffic::CakeTinStats>("CakeTinStats");
-    print_size::<lanforge_types::network::traffic::CakeQdiscStats>("CakeQdiscStats");
-    print_size::<lanforge_types::network::traffic::SqmTelemetryStats>("SqmTelemetryStats");
-    print_size::<lanforge_types::network::traffic::ConntrackStats>("ConntrackStats");
-    print_size::<lanforge_types::network::traffic::InterfaceThroughputPoint>(
-        "InterfaceThroughputPoint",
-    );
-    print_size::<lanforge_types::network::traffic::TrafficHistorySample>("TrafficHistorySample");
-    print_size::<lanforge_types::network::traffic::TrafficTelemetryResponse>(
-        "TrafficTelemetryResponse",
-    );
-    print_size::<lanforge_types::system::TrafficStatusResponse>("TrafficStatusResponse");
+    print_size::<TrafficConfig>("TrafficConfig");
+    print_size::<NicTuningConfig>("NicTuningConfig");
+    print_size::<SqmConfig>("SqmConfig");
+    print_size::<SqmOverhead>("SqmOverhead");
+    print_size::<SqmDiffserv>("SqmDiffserv");
+    print_size::<InterfaceTrafficStats>("InterfaceTrafficStats");
+    print_size::<CakeTinStats>("CakeTinStats");
+    print_size::<CakeQdiscStats>("CakeQdiscStats");
+    print_size::<SqmTelemetryStats>("SqmTelemetryStats");
+    print_size::<ConntrackStats>("ConntrackStats");
+    print_size::<InterfaceThroughputPoint>("InterfaceThroughputPoint");
+    print_size::<TrafficHistorySample>("TrafficHistorySample");
+    print_size::<TrafficTelemetryResponse>("TrafficTelemetryResponse");
+    print_size::<TrafficStatusResponse>("TrafficStatusResponse");
 
     println!("\n=== SYSTEM & AUTH ===");
     print_size::<SystemStatus>("SystemStatus");

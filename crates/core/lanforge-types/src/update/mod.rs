@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
+use std::fmt::{self, Display, Formatter};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::SystemTime;
 
@@ -60,8 +61,8 @@ pub enum LeaseTarget {
     V6Prefix { iaid: u32 },
 }
 
-impl std::fmt::Display for LeaseTarget {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for LeaseTarget {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::V4 => write!(f, "V4"),
             Self::V6 { iaid } => write!(f, "V6 (IAID: {iaid})"),
