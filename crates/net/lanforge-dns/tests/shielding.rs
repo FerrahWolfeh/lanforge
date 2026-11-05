@@ -17,7 +17,10 @@ use lanforge_types::network::dns::{
     DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecord, DnsRecordType, DnsResponseCode,
 };
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::UdpSocket;
+use tokio::sync::mpsc;
+use tokio::time::sleep;
 
 #[tokio::test]
 async fn test_dns_local_shielding_anti_poisoning() {
@@ -27,7 +30,7 @@ async fn test_dns_local_shielding_anti_poisoning() {
 
     // Start mock upstream in the background
     // If it receives any query, it will reply with a spoofed A record for nonexistent.lan
-    let (tx_queries, mut rx_queries) = tokio::sync::mpsc::channel::<Vec<u8>>(10);
+    let (tx_queries, mut rx_queries) = mpsc::channel::<Vec<u8>>(10);
     let mock_upstream_task = tokio::spawn({
         let socket = mock_upstream_socket;
         async move {
@@ -63,7 +66,7 @@ async fn test_dns_local_shielding_anti_poisoning() {
                         let resp_bytes = WireEncoder::new().encode_message(&resp);
                         socket.send_to(&resp_bytes, client_addr).await.unwrap();
                     }
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+                    _ = sleep(Duration::from_secs(5)) => {
                         // safety break
                         break;
                     }
@@ -122,7 +125,7 @@ async fn test_dns_local_shielding_anti_poisoning() {
 
     // Check if the mock upstream received any query for nonexistent.lan
     // Since it's local search domain, shielding should prevent forwarding!
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
     let query_received = rx_queries.try_recv().is_ok();
     assert!(
         !query_received,

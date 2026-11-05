@@ -19,13 +19,15 @@ use lanforge_dns::config::DnsConfig;
 use lanforge_dns::resolver::filter::DiskBlocklist;
 use lanforge_dns::server::worker::spawn_adblock_manager;
 use lanforge_dns_wire::{WireDecoder, WireEncoder};
-use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockUrlKind};
+use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockSourceFormat, AdblockUrlKind};
 use lanforge_types::network::dns::{
     AdblockUrlEntry, DnsClass, DnsMessage, DnsQuestion, DnsRecordType, DnsResponseCode,
 };
 use std::collections::HashSet;
+use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::time::sleep;
 
 #[cfg(feature = "adblock")]
 #[tokio::test]
@@ -33,7 +35,7 @@ async fn test_dns_adblock_update_failure_and_fallback() {
     let temp_dir = tempfile::tempdir().unwrap();
     let cache_dir_path = temp_dir.path().to_str().unwrap().to_string();
     let sources_dir = temp_dir.path().join("adblock").join("sources");
-    std::fs::create_dir_all(&sources_dir).unwrap();
+    fs::create_dir_all(&sources_dir).unwrap();
     let cache_path = sources_dir.join("1.block.fst");
 
     // 1. Create a pre-existing compiled list (source 1) containing ads.example.com
@@ -49,7 +51,7 @@ async fn test_dns_adblock_update_failure_and_fallback() {
         name: None,
         url: "http://127.0.0.1:1/nonexistent.txt".to_string(),
         kind: AdblockUrlKind::Blocklist,
-        format: lanforge_types::network::dns::adblock::AdblockSourceFormat::Auto,
+        format: AdblockSourceFormat::Auto,
     }]);
     ctx_instance.update_dns_adblock(AdblockDbConfig {
         enabled: true,
@@ -73,7 +75,7 @@ async fn test_dns_adblock_update_failure_and_fallback() {
     let manager_handle = spawn_adblock_manager(Arc::clone(&dns_ctx_arc));
 
     // Wait a short duration to let it run the first download pass, which will FAIL
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(200)).await;
 
     // 5. Verify the adblocker still has ads.example.com in memory and is active
     assert!(

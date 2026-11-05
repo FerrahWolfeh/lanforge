@@ -15,8 +15,13 @@ use crate::pipeline::middleware::AdblockMiddleware;
 use crate::pipeline::middleware::{
     CacheMiddleware, LocalResolverMiddleware, RewriteMiddleware, UpstreamMiddleware,
 };
-use crate::resolver::recursive::UpstreamManager;
+use crate::resolver::recursive::{DnsCache, UpstreamManager};
 use crate::server::DnsContext;
+use crate::utils::ip_to_arpa;
+use lanforge_core::context::LanforgeContext;
+use lanforge_types::network::dns::upstream::UpstreamTarget;
+use parking_lot::{Mutex, RwLock};
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::Arc;
 
@@ -210,19 +215,12 @@ fn handle_reverse_dns_trigger(ctx: &DnsContext, client_ip: IpAddr) {
 }
 
 async fn resolve_reverse_ptr_background(
-    ctx_core: lanforge_core::context::LanforgeContext,
-    reverse_managers: Arc<
-        parking_lot::RwLock<
-            std::collections::HashMap<
-                lanforge_types::network::dns::upstream::UpstreamTarget,
-                Arc<UpstreamManager>,
-            >,
-        >,
-    >,
-    resolving_ips: Arc<parking_lot::Mutex<std::collections::HashSet<IpAddr>>>,
-    cache: Arc<crate::resolver::recursive::DnsCache>,
+    ctx_core: LanforgeContext,
+    reverse_managers: Arc<RwLock<HashMap<UpstreamTarget, Arc<UpstreamManager>>>>,
+    resolving_ips: Arc<Mutex<HashSet<IpAddr>>>,
+    cache: Arc<DnsCache>,
     ip: IpAddr,
-    resolver: lanforge_types::network::dns::upstream::UpstreamTarget,
+    resolver: UpstreamTarget,
 ) {
     // 1. Get or create UpstreamManager
     let mgr = {
@@ -256,12 +254,12 @@ async fn resolve_reverse_ptr_background(
     };
 
     // 2. Perform reverse PTR query
-    let arpa_name = crate::utils::ip_to_arpa(ip);
+    let arpa_name = ip_to_arpa(ip);
     let mut query = DnsMessage::new();
     query.header.rd = true;
     query.header.qdcount = 1;
     query.questions.push(DnsQuestion {
-        name: std::sync::Arc::from(arpa_name),
+        name: Arc::from(arpa_name),
         qtype: DnsRecordType::PTR,
         qclass: DnsClass::IN,
     });

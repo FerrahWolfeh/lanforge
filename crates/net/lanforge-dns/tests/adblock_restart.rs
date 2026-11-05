@@ -24,12 +24,14 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
+use tokio::time::{Instant, sleep};
 
 const HOSTS_BODY: &str = "# StevenBlack-style hosts\n127.0.0.1 localhost\n0.0.0.0 ads.example.com\n0.0.0.0 tracker.example.net # inline comment\n0.0.0.0 telemetry.example.org\n";
 
 /// Mock upstream: 200 + `ETag` on first fetch, 304 when the client sends `If-None-Match`.
 async fn spawn_conditional_server() -> u16 {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
         loop {
@@ -83,14 +85,14 @@ async fn boot_and_check(cache_dir: &Path, port: u16, domain: &str, timeout: Dura
     let handle = spawn_adblock_manager(Arc::clone(&dns_ctx));
 
     let filter = dns_ctx.filter.as_ref().unwrap();
-    let deadline = tokio::time::Instant::now() + timeout;
+    let deadline = Instant::now() + timeout;
     let mut blocked = false;
-    while tokio::time::Instant::now() < deadline {
+    while Instant::now() < deadline {
         if filter.should_block(domain) {
             blocked = true;
             break;
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        sleep(Duration::from_millis(50)).await;
     }
     handle.abort();
     blocked

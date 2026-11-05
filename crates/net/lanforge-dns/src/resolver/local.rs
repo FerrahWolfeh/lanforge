@@ -2,6 +2,7 @@
 
 use arc_swap::{ArcSwap, Guard};
 use lanforge_types::device::Device;
+use lanforge_types::identifiers::{DeviceIdentifier, MacAddr};
 use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::net::IpAddr;
@@ -135,7 +136,7 @@ impl LocalResolver {
             return (None, false);
         }
 
-        let parsed_mac = lanforge_types::identifiers::MacAddr::parse(hostname);
+        let parsed_mac = MacAddr::parse(hostname);
         let resolved_mac = self.ctx.with_state(|state| {
             if let Some(ref mac) = parsed_mac
                 && state.devices.contains_key(mac)
@@ -188,20 +189,18 @@ impl LocalResolver {
     #[must_use]
     pub fn resolve_device(
         &self,
-        id: &lanforge_types::identifiers::DeviceIdentifier,
+        id: &DeviceIdentifier,
         qtype: DnsRecordType,
     ) -> Option<SmallVec<[IpAddr; 8]>> {
         match id {
-            lanforge_types::identifiers::DeviceIdentifier::Mac(mac) => {
+            DeviceIdentifier::Mac(mac) => {
                 if let Some(device) = self.ctx.get_device(mac) {
                     self.collect_device_ips_filtered(&device, qtype)
                 } else {
                     None
                 }
             }
-            lanforge_types::identifiers::DeviceIdentifier::Name(name) => {
-                self.resolve_ip(name, qtype)
-            }
+            DeviceIdentifier::Name(name) => self.resolve_ip(name, qtype),
         }
     }
 

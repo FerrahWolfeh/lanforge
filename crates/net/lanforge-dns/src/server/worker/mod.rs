@@ -2,6 +2,8 @@ pub mod tcp;
 pub mod udp;
 
 #[cfg(feature = "adblock")]
+use std::fs;
+#[cfg(feature = "adblock")]
 use std::path::Path;
 #[cfg(feature = "adblock")]
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -9,6 +11,11 @@ use std::{
     sync::{Arc, atomic::Ordering},
     time::Duration,
 };
+#[cfg(feature = "adblock")]
+use tokio::task::spawn_blocking;
+use tokio::time::sleep;
+#[cfg(feature = "adblock")]
+use tokio::time::{self, interval_at};
 
 #[cfg(feature = "adblock")]
 use crate::resolver::AdBlocker;
@@ -65,11 +72,11 @@ async fn load_lists(
     lists: Vec<(i64, AdblockUrlKind)>,
 ) -> Option<DiskBlocklist> {
     let dir = sources_dir.to_path_buf();
-    let res = tokio::task::spawn_blocking(move || {
+    let res = spawn_blocking(move || {
         let (bl, failed) = DiskBlocklist::load(&dir, &lists);
         for id in failed {
             for ext in ["block.fst", "allow.fst", "bad"] {
-                let _ = std::fs::remove_file(dir.join(format!("{id}.{ext}")));
+                let _ = fs::remove_file(dir.join(format!("{id}.{ext}")));
             }
         }
         bl
@@ -98,7 +105,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
             let sources_dir = adblock_dir.join("sources");
             let manifest_path = adblock_dir.join("manifest.json");
 
-            let _ = std::fs::create_dir_all(&sources_dir);
+            let _ = fs::create_dir_all(&sources_dir);
             // Merged indexes of older versions: never read (other value encoding), only removed.
             for old in [
                 adblock_dir.join("block.fst"),
@@ -106,7 +113,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                 Path::new(cache_dir).join("blocklist.fst"),
                 Path::new(cache_dir).join("blocklist.hash"),
             ] {
-                let _ = std::fs::remove_file(old);
+                let _ = fs::remove_file(old);
             }
 
             let mut manifest = AdblockManifest::load_or_default(&manifest_path);
@@ -278,7 +285,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                 let s_dir = sources_dir.clone();
                                 let format = entry.format;
 
-                                let comp_res = tokio::task::spawn_blocking(move || {
+                                let comp_res = spawn_blocking(move || {
                                     let text = String::from_utf8_lossy(&body);
                                     compile_source_artifacts(
                                         source_id,
@@ -447,7 +454,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                 // Wait for valid NTP time if un-synced SBC boot (e.g. 1970)
                 while chrono::Local::now().year() < 2024 {
                     warn!("Adblock: system clock appears un-synchronized; waiting 15s for NTP...");
-                    tokio::time::sleep(Duration::from_secs(15)).await;
+                    sleep(Duration::from_secs(15)).await;
                 }
 
                 // Refresh scheduling: if any configured source failed, retry with backoff
@@ -488,12 +495,12 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                     scheduled_dur
                 };
 
-                let alarm = tokio::time::sleep(sleep_dur);
+                let alarm = sleep(sleep_dur);
                 tokio::pin!(alarm);
                 // Created once per wait: a `sleep` built inside the select would restart on every
                 // wake-up (one per client query on this topic) and never fire under traffic.
-                let mut clock_check = tokio::time::interval_at(
-                    tokio::time::Instant::now() + Duration::from_secs(1800),
+                let mut clock_check = interval_at(
+                    time::Instant::now() + Duration::from_secs(1800),
                     Duration::from_secs(1800),
                 );
 
@@ -525,7 +532,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                 // A pending failure retry that comes sooner is kept.
                                 let deadline = alarm
                                     .deadline()
-                                    .min(tokio::time::Instant::now() + wait);
+                                    .min(time::Instant::now() + wait);
                                 alarm.as_mut().reset(deadline);
                                 info!(
                                     target = %target_time.format("%Y-%m-%d %H:%M:%S"),
@@ -697,7 +704,7 @@ mod tests {
 pub fn spawn_cache_handler(ctx: Arc<DnsContext>) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
-            tokio::time::sleep(Duration::from_secs(60)).await;
+            sleep(Duration::from_secs(60)).await;
             for mgr in ctx.recursive.all_upstreams() {
                 mgr.cache.cleanup();
             }

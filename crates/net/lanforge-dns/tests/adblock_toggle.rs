@@ -23,14 +23,16 @@ use lanforge_types::network::dns::adblock::{
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
+use tokio::time::sleep;
 
 const RULES: &str = "||ads.example.com^\n||tracker.example.net^\n";
 
 /// Serves `RULES` and counts every request: one request = one download pass for one source.
 async fn spawn_counting_server() -> (u16, Arc<AtomicUsize>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let hits = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&hits);
@@ -66,7 +68,7 @@ fn source(id: i64, port: u16, path: &str) -> AdblockUrlEntry {
 }
 
 async fn settle() {
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    sleep(Duration::from_millis(400)).await;
 }
 
 /// A toggle, a pause or a schedule change only flips state: none of them may re-download the
@@ -96,9 +98,9 @@ async fn adblock_toggle_and_pause_do_not_refetch_lists() {
     let filter = dns_ctx.filter.clone().expect("adblock filter");
     let manager = spawn_adblock_manager(Arc::clone(&dns_ctx));
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while filter.blocklist_size() == 0 && tokio::time::Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(50)).await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while filter.blocklist_size() == 0 && Instant::now() < deadline {
+        sleep(Duration::from_millis(50)).await;
     }
     assert!(filter.blocklist_size() > 0, "initial list loaded");
     settle().await;
@@ -164,9 +166,9 @@ async fn adblock_toggle_and_pause_do_not_refetch_lists() {
 
     // A new source list is the one change that needs a download pass.
     ctx.update_dns_adblock_urls(vec![source(1, port, "a.txt"), source(2, port, "b.txt")]);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while hits.load(Ordering::SeqCst) < 3 && tokio::time::Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(50)).await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while hits.load(Ordering::SeqCst) < 3 && Instant::now() < deadline {
+        sleep(Duration::from_millis(50)).await;
     }
     settle().await;
     assert_eq!(
@@ -203,8 +205,8 @@ async fn adblock_lists_refresh_during_a_pause() {
     let filter = dns_ctx.filter.clone().expect("adblock filter");
 
     // Paused for 30 s (as the DNS service applies a WebUI pause).
-    let until = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let until = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs()
         + 30;
@@ -212,9 +214,9 @@ async fn adblock_lists_refresh_during_a_pause() {
     filter.set_enabled(false);
 
     let manager = spawn_adblock_manager(Arc::clone(&dns_ctx));
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while hits.load(Ordering::SeqCst) == 0 && tokio::time::Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(50)).await;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while hits.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
+        sleep(Duration::from_millis(50)).await;
     }
     assert_eq!(hits.load(Ordering::SeqCst), 1, "lists refresh while paused");
     assert!(!filter.is_enabled(), "the pause itself is untouched");

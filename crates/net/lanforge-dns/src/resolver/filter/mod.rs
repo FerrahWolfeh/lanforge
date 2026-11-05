@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
+use lanforge_core::context::LanforgeContext;
 use parking_lot::RwLock;
 use tracing::debug;
 
@@ -196,7 +197,7 @@ impl AdBlocker {
     }
 
     /// Loads the manual rules from the context (the global rules file's text).
-    pub fn sync_from_context(&self, ctx: &lanforge_core::context::LanforgeContext) {
+    pub fn sync_from_context(&self, ctx: &LanforgeContext) {
         ctx.with_config(|c| self.replace_rules(&c.dns_adblock_rules.0));
     }
 

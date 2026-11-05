@@ -8,24 +8,41 @@ use crate::pipeline::middleware::{
 };
 #[cfg(feature = "adblock")]
 use crate::resolver::AdBlocker;
+#[cfg(feature = "adblock")]
+use crate::resolver::filter::manifest::AdblockManifest;
 use crate::resolver::recursive::cache::CacheKey;
 use crate::resolver::{
     LocalResolver, RewriteStore,
     recursive::{DnsCache, UpstreamManager, UpstreamStrategy},
 };
+#[cfg(feature = "dot")]
+use crate::server::transport::dot::run_dot_worker;
+use crate::server::transport::net::bind_udp;
+#[cfg(feature = "adblock")]
+use crate::server::worker::compute_next_refresh_target;
+#[cfg(feature = "adblock")]
+use crate::server::worker::spawn_adblock_manager;
+use crate::server::worker::spawn_cache_handler;
+use crate::server::worker::tcp::spawn_tcp_worker;
+use crate::server::worker::udp::spawn_udp_worker;
 use crate::server::{CompiledIgnoreClients, DnsContext};
 use crate::telemetry::{DnsStats, DnsStatsSnapshot, QueryRing};
 use futures::future::join_all;
+use lanforge_core::bus::PppoeEvent;
+use lanforge_core::bus::{DnsEvent, LanforgeEvent, SystemEvent};
 #[cfg(feature = "adblock")]
 use lanforge_core::context::ConfigSubscription;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
+use lanforge_core::service::{
+    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
+    ServiceCommand, ServiceHandle, ServiceSpec,
+};
 use lanforge_dns_wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
 use lanforge_transport::TransportMetrics;
 #[cfg(feature = "adblock")]
 use lanforge_types::config::AdblockRules;
-use lanforge_types::config::{DnsListenConfig, SiteDomains};
+use lanforge_types::config::{ConfigDomain, DnsListenConfig, SiteDomains};
 use lanforge_types::network::dns::{
     AdblockCheckResponse, DnsAdblockSourcesResponse, DnsCacheEntry, DnsCacheResponse,
     DnsCacheStatsExtResponse, DnsClass, DnsLifetimeStats, DnsMessage, DnsQuestion, DnsRecordEntry,
@@ -35,18 +52,28 @@ use lanforge_types::network::dns::{
 };
 #[cfg(feature = "adblock")]
 use lanforge_types::network::dns::{
-    AdblockSourceMatch, AdblockSourceStatus, FilterMatch, FilterOrigin,
+    AdblockSourceMatch, AdblockSourceStatus, DnsAdblockStatusResponse, FilterMatch, FilterOrigin,
 };
-use lanforge_types::system::{DormantReason, PppoeSessionState, ServiceId, ServiceState};
+use lanforge_types::system::{
+    DegradedReason, DormantReason, PppoeSessionState, ServiceId, ServiceState,
+};
 use std::collections::{HashMap, HashSet};
+use std::future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::num::NonZero;
+#[cfg(feature = "adblock")]
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::oneshot;
+use tokio::task::JoinSet;
+use tokio::time;
 #[cfg(feature = "adblock")]
 use tracing::debug;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 #[derive(Clone)]
 pub struct DnsService {
@@ -122,7 +149,7 @@ impl DnsService {
         let upstreams = build_upstreams(&effective_upstream_targets(&self.ctx), &cache).await;
 
         if upstreams.is_empty() && self.cfg.enabled && !self.cfg.search_domains.is_empty() {
-            tracing::warn!("No upstreams configured — only local resolution active");
+            warn!("No upstreams configured — only local resolution active");
         }
         #[cfg(feature = "adblock")]
         let db_adblock = self.ctx.get_dns_adblock();
@@ -189,45 +216,41 @@ impl DnsService {
     }
 }
 
-const DNS_DEPS: &[lanforge_core::service::Edge] = &[
-    lanforge_core::service::Edge::after(ServiceId::Db),
-    lanforge_core::service::Edge::wants(ServiceId::Wan),
-    lanforge_core::service::Edge::wants(ServiceId::Interfaces),
-    lanforge_core::service::Edge::wants(ServiceId::Dhcp4),
-    lanforge_core::service::Edge::wants(ServiceId::Dhcp6),
+const DNS_DEPS: &[Edge] = &[
+    Edge::after(ServiceId::Db),
+    Edge::wants(ServiceId::Wan),
+    Edge::wants(ServiceId::Interfaces),
+    Edge::wants(ServiceId::Dhcp4),
+    Edge::wants(ServiceId::Dhcp6),
 ];
 
-impl lanforge_core::service::LanforgeService for DnsService {
-    fn spec(&self) -> lanforge_core::service::ServiceSpec {
-        lanforge_core::service::ServiceSpec {
+impl LanforgeService for DnsService {
+    fn spec(&self) -> ServiceSpec {
+        ServiceSpec {
             id: Self::SERVICE_ID,
             display_name: "DNS Server",
-            runtime: lanforge_core::service::RuntimeClass::Dedicated {
+            runtime: RuntimeClass::Dedicated {
                 multi_thread: true,
                 worker_threads: None,
             },
-            restart: lanforge_core::service::RestartPolicy {
-                base_backoff: std::time::Duration::from_secs(2),
-                max_backoff: std::time::Duration::from_secs(30),
+            restart: RestartPolicy {
+                base_backoff: Duration::from_secs(2),
+                max_backoff: Duration::from_secs(30),
                 max_retries: 0,
-                healthy_uptime: std::time::Duration::from_secs(30),
+                healthy_uptime: Duration::from_secs(30),
             },
-            shutdown_timeout: std::time::Duration::from_secs(3),
+            shutdown_timeout: Duration::from_secs(3),
             deps: DNS_DEPS,
-            condition: lanforge_core::service::Condition {
-                sections: &[lanforge_types::config::ConfigDomain::DnsListen],
+            condition: Condition {
+                sections: &[ConfigDomain::DnsListen],
                 eval: |ctx| {
                     let live = ctx.get_dns_listen();
                     if !live.enabled {
-                        lanforge_core::service::Activation::Dormant(
-                            lanforge_types::system::DormantReason::disabled("dns.enabled"),
-                        )
+                        Activation::Dormant(DormantReason::disabled("dns.enabled"))
                     } else if live.listen.as_slice().is_empty() {
-                        lanforge_core::service::Activation::Dormant(
-                            lanforge_types::system::DormantReason::disabled("dns.listen"),
-                        )
+                        Activation::Dormant(DormantReason::disabled("dns.listen"))
                     } else {
-                        lanforge_core::service::Activation::Active
+                        Activation::Active
                     }
                 },
             },
@@ -263,7 +286,7 @@ impl AsyncService for DnsService {
         // through a restart instead of failing on a closed channel.
         let mut mpsc_rx = ctx.take_dns_requests();
 
-        let parallelism = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+        let parallelism = thread::available_parallelism().map_or(1, NonZero::get);
         info!(handlers = parallelism, "Starting service");
 
         let mut workers = Vec::new();
@@ -274,10 +297,7 @@ impl AsyncService for DnsService {
             info!("Custom/inert UDP transport active");
             ctx.set_service_transports(Self::SERVICE_ID, vec![transport.metrics_handle()]);
             for _ in 0..parallelism {
-                workers.push(crate::server::worker::udp::spawn_udp_worker(
-                    Arc::clone(&dns_ctx),
-                    transport.clone(),
-                ));
+                workers.push(spawn_udp_worker(Arc::clone(&dns_ctx), transport.clone()));
             }
         } else {
             let addrs = self.cfg.listen.addrs();
@@ -291,21 +311,15 @@ impl AsyncService for DnsService {
             let mut counters = Vec::with_capacity(addrs.len() + 1);
             counters.push(Arc::clone(&dns_ctx.streams));
             for addr in &addrs {
-                let transport =
-                    crate::server::transport::net::bind_udp(*addr).map_err(CoreError::Io)?;
+                let transport = bind_udp(*addr).map_err(CoreError::Io)?;
                 counters.push(transport.metrics_handle());
                 info!(%addr, "UDP listening");
                 for _ in 0..parallelism {
-                    workers.push(crate::server::worker::udp::spawn_udp_worker(
-                        Arc::clone(&dns_ctx),
-                        transport.clone(),
-                    ));
+                    workers.push(spawn_udp_worker(Arc::clone(&dns_ctx), transport.clone()));
                 }
             }
             ctx.set_service_transports(Self::SERVICE_ID, counters);
-            tcp_worker = Some(crate::server::worker::tcp::spawn_tcp_worker(Arc::clone(
-                &dns_ctx,
-            )));
+            tcp_worker = Some(spawn_tcp_worker(Arc::clone(&dns_ctx)));
         }
 
         #[cfg(feature = "adblock")]
@@ -315,14 +329,12 @@ impl AsyncService for DnsService {
 
         #[cfg(feature = "adblock")]
         let adblock_worker = if dns_ctx.filter.is_some() {
-            Some(crate::server::worker::spawn_adblock_manager(Arc::clone(
-                &dns_ctx,
-            )))
+            Some(spawn_adblock_manager(Arc::clone(&dns_ctx)))
         } else {
             None
         };
 
-        let cache_worker = crate::server::worker::spawn_cache_handler(Arc::clone(&dns_ctx));
+        let cache_worker = spawn_cache_handler(Arc::clone(&dns_ctx));
 
         #[cfg(feature = "dot")]
         let dot_worker = if let Some(addr) = self.cfg.dot_listen {
@@ -331,15 +343,12 @@ impl AsyncService for DnsService {
                 let key = key.clone();
                 let ctx_dot = Arc::clone(&dns_ctx);
                 Some(tokio::spawn(async move {
-                    if let Err(e) =
-                        crate::server::transport::dot::run_dot_worker(addr, &cert, &key, ctx_dot)
-                            .await
-                    {
+                    if let Err(e) = run_dot_worker(addr, &cert, &key, ctx_dot).await {
                         tracing::error!("DoT worker error: {e}");
                     }
                 }))
             } else {
-                tracing::warn!(
+                warn!(
                     "DoT is enabled on {addr} but tls_cert/tls_key is missing; DoT listener dormant"
                 );
                 None
@@ -370,7 +379,7 @@ impl AsyncService for DnsService {
                     }
                 }))
             } else {
-                tracing::warn!(
+                warn!(
                     "DoQ is enabled on {addr} but tls_cert/tls_key is missing; DoQ listener dormant"
                 );
                 None
@@ -390,13 +399,13 @@ impl AsyncService for DnsService {
         let mut domains_sub = ctx.config_subscription::<SiteDomains>();
         let mut filter_subs = FilterSubscriptions::new(ctx);
 
-        let (mpsc_stop_tx, mut mpsc_stop_rx) = tokio::sync::oneshot::channel::<()>();
+        let (mpsc_stop_tx, mut mpsc_stop_rx) = oneshot::channel::<()>();
         let mpsc_worker = {
             let dns_ctx = Arc::clone(&dns_ctx);
             tokio::spawn(async move {
                 // Requests run concurrently: one waiting on an upstream (a diagnostic query)
                 // must not hold up stats or adblock toggles behind it.
-                let mut in_flight = tokio::task::JoinSet::new();
+                let mut in_flight = JoinSet::new();
                 loop {
                     tokio::select! {
                         biased;
@@ -421,8 +430,8 @@ impl AsyncService for DnsService {
         };
 
         // Closes the query log's repeat windows (see `QueryRing::admit`).
-        let mut repeat_tick = tokio::time::interval(LOG_REPEAT_TICK);
-        repeat_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut repeat_tick = time::interval(LOG_REPEAT_TICK);
+        repeat_tick.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
 
         h.ready();
 
@@ -439,7 +448,7 @@ impl AsyncService for DnsService {
                     if snap.is_up() {
                         h.recovered();
                     } else {
-                        h.degraded(lanforge_types::system::DegradedReason::UpstreamUnreachable);
+                        h.degraded(DegradedReason::UpstreamUnreachable);
                     }
                 }
 
@@ -459,7 +468,7 @@ impl AsyncService for DnsService {
                 }
                 event_res = sys_rx.recv() => match event_res {
                     Ok(event) => {
-                        if let lanforge_core::bus::LanforgeEvent::System(lanforge_core::bus::SystemEvent::Shutdown) = event.event {
+                        if let LanforgeEvent::System(SystemEvent::Shutdown) = event.event {
                             info!("DNS service received shutdown signal, terminating event loop");
                             break;
                         }
@@ -473,10 +482,10 @@ impl AsyncService for DnsService {
                     Ok(event) => {
                         if matches!(
                             event.event,
-                            lanforge_core::bus::LanforgeEvent::Pppoe(
-                                lanforge_core::bus::PppoeEvent::SessionUp(_)
-                                    | lanforge_core::bus::PppoeEvent::SessionDown { .. }
-                                    | lanforge_core::bus::PppoeEvent::DnsServersChanged { .. }
+                            LanforgeEvent::Pppoe(
+                                PppoeEvent::SessionUp(_)
+                                    | PppoeEvent::SessionDown { .. }
+                                    | PppoeEvent::DnsServersChanged { .. }
                             )
                         ) {
                             resync_upstreams(ctx, &dns_ctx, false).await;
@@ -516,22 +525,22 @@ impl AsyncService for DnsService {
                 msg = bus_rx.recv() => {
                     match msg {
                         Ok(timed_event) => match timed_event.event {
-                            lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::CacheFlush) => {
+                            LanforgeEvent::Dns(DnsEvent::CacheFlush) => {
                                 info!("Flushing cache");
                                 dns_ctx.cache.invalidate_all();
                                 info!("Cache flushed");
                             }
                             #[cfg(feature = "adblock")]
-                            lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::AdblockToggle { enabled, duration_secs }) => {
+                            LanforgeEvent::Dns(DnsEvent::AdblockToggle { enabled, duration_secs }) => {
                                 if let Some(filter) = &dns_ctx.filter {
                                     // Arm the pause deadline *before* disabling: the adblock worker
                                     // treats "disabled with no deadline" as a permanent state.
                                     if !enabled && let Some(secs) = duration_secs {
-                                        let until = std::time::SystemTime::now()
-                                            .duration_since(std::time::UNIX_EPOCH)
+                                        let until = SystemTime::now()
+                                            .duration_since(UNIX_EPOCH)
                                             .unwrap_or_default()
                                             .as_secs() + secs;
-                                        filter.timer.disabled_until.store(until, std::sync::atomic::Ordering::Relaxed);
+                                        filter.timer.disabled_until.store(until, Ordering::Relaxed);
                                         filter.set_enabled(false);
                                         info!(duration_secs = secs, "Adblocker disabled temporarily");
                                     } else {
@@ -545,8 +554,8 @@ impl AsyncService for DnsService {
                         }
                         // Toggles are also config writes, re-applied by `filter_subs`; only a
                         // temporary pause lives in the event alone.
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            tracing::warn!(lost = n, "DNS bus lagged; a temporary adblock pause may have been missed");
+                        Err(RecvError::Lagged(n)) => {
+                            warn!(lost = n, "DNS bus lagged; a temporary adblock pause may have been missed");
                         }
                         Err(_) => break,
                     }
@@ -765,13 +774,8 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
                         .adblock_cache_dir
                         .as_deref()
                         .unwrap_or("/var/lib/lanforge");
-                    let manifest_path = std::path::Path::new(cache_dir)
-                        .join("adblock")
-                        .join("manifest.json");
-                    let manifest =
-                        crate::resolver::filter::manifest::AdblockManifest::load_or_default(
-                            &manifest_path,
-                        );
+                    let manifest_path = Path::new(cache_dir).join("adblock").join("manifest.json");
+                    let manifest = AdblockManifest::load_or_default(&manifest_path);
                     let last_update = if manifest.last_merge == 0 {
                         None
                     } else {
@@ -789,7 +793,7 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
 
                     let adblock_cfg = dns_ctx.ctx.get_dns_adblock();
                     let next_update = if adblock_cfg.enabled {
-                        let target = crate::server::worker::compute_next_refresh_target(
+                        let target = compute_next_refresh_target(
                             chrono::Local::now(),
                             adblock_cfg.refresh_time,
                         );
@@ -798,30 +802,26 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
                         None
                     };
 
-                    DnsResponse::AdblockStatus(
-                        lanforge_types::network::dns::DnsAdblockStatusResponse {
-                            enabled: adblocker.is_enabled(),
-                            disabled_until: {
-                                let until = adblocker.timer.disabled_until.load(Ordering::Relaxed);
-                                if until == 0 { None } else { Some(until) }
-                            },
-                            remaining_secs: adblocker.timer.remaining_secs(),
-                            blocklist_size: adblocker.blocklist_size(),
-                            allowlist_size: adblocker.allowlist_size(),
-                            blocking_mode: runtime_cfg.mode,
-                            blocking_ip_v4: runtime_cfg.ipv4,
-                            blocking_ip_v6: runtime_cfg.ipv6,
-                            exceptions_size: adblocker.exceptions_size(),
-                            last_update,
-                            next_update,
-                            sources_ok,
-                            sources_failing,
-                            refresh_time: adblock_cfg.refresh_time,
+                    DnsResponse::AdblockStatus(DnsAdblockStatusResponse {
+                        enabled: adblocker.is_enabled(),
+                        disabled_until: {
+                            let until = adblocker.timer.disabled_until.load(Ordering::Relaxed);
+                            if until == 0 { None } else { Some(until) }
                         },
-                    )
+                        remaining_secs: adblocker.timer.remaining_secs(),
+                        blocklist_size: adblocker.blocklist_size(),
+                        allowlist_size: adblocker.allowlist_size(),
+                        blocking_mode: runtime_cfg.mode,
+                        blocking_ip_v4: runtime_cfg.ipv4,
+                        blocking_ip_v6: runtime_cfg.ipv6,
+                        exceptions_size: adblocker.exceptions_size(),
+                        last_update,
+                        next_update,
+                        sources_ok,
+                        sources_failing,
+                        refresh_time: adblock_cfg.refresh_time,
+                    })
                 } else {
-                    use lanforge_types::network::dns::DnsAdblockStatusResponse;
-
                     DnsResponse::AdblockStatus(DnsAdblockStatusResponse::default())
                 }
             }
@@ -841,12 +841,8 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
                     .adblock_cache_dir
                     .as_deref()
                     .unwrap_or("/var/lib/lanforge");
-                let manifest_path = std::path::Path::new(cache_dir)
-                    .join("adblock")
-                    .join("manifest.json");
-                let manifest = crate::resolver::filter::manifest::AdblockManifest::load_or_default(
-                    &manifest_path,
-                );
+                let manifest_path = Path::new(cache_dir).join("adblock").join("manifest.json");
+                let manifest = AdblockManifest::load_or_default(&manifest_path);
 
                 let sources = urls
                     .into_iter()
@@ -966,9 +962,9 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
             {
                 use lanforge_core::bus::LanforgeEvent;
 
-                let _ = dns_ctx.bus.publish(LanforgeEvent::Dns(
-                    lanforge_core::bus::DnsEvent::AdblockReload,
-                ));
+                let _ = dns_ctx
+                    .bus
+                    .publish(LanforgeEvent::Dns(DnsEvent::AdblockReload));
                 DnsResponse::AdblockReload(Ok(()))
             }
             #[cfg(not(feature = "adblock"))]
@@ -1127,7 +1123,7 @@ impl FilterSubscriptions {
         tokio::select! {
             Some(_) = self.rules.next() => FilterChange::Rules,
             Some(delta) = self.adblock.next() => FilterChange::Adblock(delta.new),
-            else => std::future::pending().await,
+            else => future::pending().await,
         }
     }
 }
@@ -1142,7 +1138,7 @@ impl FilterSubscriptions {
     }
 
     async fn next(&mut self) -> FilterChange {
-        std::future::pending().await
+        future::pending().await
     }
 }
 

@@ -13,6 +13,7 @@ pub use rewrite::RewriteStore;
 pub use filter::AdBlocker;
 
 use lanforge_dns_wire::WireLabelIter;
+use std::str;
 
 #[must_use]
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
@@ -22,7 +23,7 @@ pub fn labels_to_domain(labels: WireLabelIter<'_>) -> String {
         if !domain.is_empty() {
             domain.push('.');
         }
-        if let Ok(s) = std::str::from_utf8(label) {
+        if let Ok(s) = str::from_utf8(label) {
             domain.push_str(s);
         }
     }

@@ -8,6 +8,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::{JoinHandle, JoinSet};
+use tokio::time::sleep;
 use tracing::{error, trace};
 
 /// Upstream queries one worker keeps in flight; beyond it a miss is answered SERVFAIL (the
@@ -122,7 +123,7 @@ pub fn spawn_udp_worker(ctx: Arc<DnsContext>, transport: UdpTransport) -> JoinHa
                 }
                 Err(e) => {
                     error!("UDP worker receive error: {}", e);
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    sleep(Duration::from_millis(100)).await;
                 }
             }
         }

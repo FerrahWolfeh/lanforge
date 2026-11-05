@@ -25,12 +25,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
+use tokio::time::{Instant, sleep};
 
 const RULES: &str = "||ads.example.com^\n";
 
 /// Answers 503 until `online` is set: stands in for a list host that cannot be resolved yet.
 async fn spawn_list_server(online: Arc<AtomicBool>) -> (u16, Arc<AtomicUsize>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let hits = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&hits);
@@ -94,11 +96,11 @@ async fn adblock_failed_refresh_retries_when_upstreams_appear() {
     let filter = dns_ctx.filter.clone().expect("adblock filter");
     let manager = spawn_adblock_manager(Arc::clone(&dns_ctx));
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while hits.load(Ordering::SeqCst) == 0 && tokio::time::Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(50)).await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while hits.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
+        sleep(Duration::from_millis(50)).await;
     }
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
     assert_eq!(
         hits.load(Ordering::SeqCst),
         1,
@@ -114,9 +116,9 @@ async fn adblock_failed_refresh_retries_when_upstreams_appear() {
         .expect("upstream manager");
     dns_ctx.recursive.replace_upstreams(vec![mgr]);
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while filter.blocklist_size() == 0 && tokio::time::Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(50)).await;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while filter.blocklist_size() == 0 && Instant::now() < deadline {
+        sleep(Duration::from_millis(50)).await;
     }
     assert!(
         filter.blocklist_size() > 0,

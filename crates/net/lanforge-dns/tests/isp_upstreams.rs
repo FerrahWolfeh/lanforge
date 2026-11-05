@@ -28,7 +28,7 @@ use lanforge_types::network::dns::{DnsRequest, DnsResponse};
 use lanforge_types::system::{PppoeSessionState, PppoeStatusResponse, ServiceId};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 
 const ISP_DNS: IpAddr = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 53));
 
@@ -69,7 +69,7 @@ async fn upstream_addrs(ctx: &LanforgeContext) -> Vec<SocketAddr> {
 async fn wait_upstreams(ctx: &LanforgeContext, want: &[SocketAddr]) {
     timeout(Duration::from_millis(500), async {
         while upstream_addrs(ctx).await != want {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            sleep(Duration::from_millis(10)).await;
         }
     })
     .await

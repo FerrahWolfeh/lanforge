@@ -11,11 +11,14 @@ use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::dns::{
     DnsClass, DnsMessage, DnsQuestion, DnsRecordType, UpstreamHealthSnapshot,
 };
+use std::cmp::Reverse;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
-use tokio::sync::broadcast::Sender;
+use tokio::sync::broadcast::{self, Sender};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tokio::time::{Instant, sleep};
@@ -29,8 +32,7 @@ type QueryResult = (
     Arc<UpstreamManager>,
     Result<(Vec<u8>, bool, bool), DnsError>,
 );
-type QueryFuture<'a> =
-    std::pin::Pin<Box<dyn std::future::Future<Output = QueryResult> + Send + 'a>>;
+type QueryFuture<'a> = Pin<Box<dyn Future<Output = QueryResult> + Send + 'a>>;
 
 #[derive(Debug, Clone)]
 pub struct Resolved {
@@ -161,7 +163,7 @@ impl UpstreamStrategy {
         }
 
         // Sort descending by number of labels (longest suffix match wins)
-        routes.sort_by_key(|a| std::cmp::Reverse(a.labels.len()));
+        routes.sort_by_key(|a| Reverse(a.labels.len()));
         *self.conditional_routes.write() = Arc::from(routes);
         self.upstreams_epoch.send_modify(|epoch| *epoch += 1);
     }
@@ -300,7 +302,7 @@ impl UpstreamStrategy {
             dashmap::Entry::Occupied(occ) => (Some(occ.get().0.subscribe()), false),
             dashmap::Entry::Vacant(vac) => {
                 let batch_id = COALESCE_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
-                let (tx, _) = tokio::sync::broadcast::channel(16);
+                let (tx, _) = broadcast::channel(16);
                 vac.insert((tx, batch_id));
                 (None, true)
             }

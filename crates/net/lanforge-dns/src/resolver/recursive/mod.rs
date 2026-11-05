@@ -3,6 +3,8 @@ pub mod strategy;
 
 pub use cache::DnsCache;
 
+#[cfg(feature = "doh-upstream")]
+use crate::server::transport::doh::DohClient;
 use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
 pub use strategy::{Resolved, UpstreamMode, UpstreamStrategy};
 use tokio::task::{JoinHandle, yield_now};
@@ -24,8 +26,10 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
+#[cfg(any(feature = "dot", feature = "doq"))]
+use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::oneshot::{self, Sender};
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 use tracing::trace;
 
 #[cfg(feature = "dot")]
@@ -48,15 +52,15 @@ pub struct UpstreamManager {
     pub target: UpstreamTarget,
     pub health: Arc<UpstreamHealth>,
     #[cfg(feature = "doh-upstream")]
-    pub doh_client: Option<crate::server::transport::doh::DohClient>,
+    pub doh_client: Option<DohClient>,
     #[cfg(feature = "dot")]
     pub(crate) tls_connector: Option<TlsConnector>,
     #[cfg(feature = "dot")]
-    pub(crate) dot_pool: tokio::sync::Mutex<Vec<TlsStream<TcpStream>>>,
+    pub(crate) dot_pool: TokioMutex<Vec<TlsStream<TcpStream>>>,
     #[cfg(feature = "doq")]
     pub(crate) quic_endpoint: Option<quinn::Endpoint>,
     #[cfg(feature = "doq")]
-    pub(crate) quic_conn: tokio::sync::Mutex<Option<quinn::Connection>>,
+    pub(crate) quic_conn: TokioMutex<Option<quinn::Connection>>,
     pub(crate) rx_handle: Mutex<Option<JoinHandle<()>>>,
     pub(crate) probe_handle: Mutex<Option<JoinHandle<()>>>,
 }
@@ -115,7 +119,7 @@ impl UpstreamManager {
             health: Arc::new(UpstreamHealth::new()),
             #[cfg(feature = "doh-upstream")]
             doh_client: if target.protocol == UpstreamProtocol::Https {
-                Some(crate::server::transport::doh::DohClient::new())
+                Some(DohClient::new())
             } else {
                 None
             },
@@ -129,11 +133,11 @@ impl UpstreamManager {
                 None
             },
             #[cfg(feature = "dot")]
-            dot_pool: tokio::sync::Mutex::new(Vec::new()),
+            dot_pool: TokioMutex::new(Vec::new()),
             #[cfg(feature = "doq")]
             quic_endpoint,
             #[cfg(feature = "doq")]
-            quic_conn: tokio::sync::Mutex::new(None),
+            quic_conn: TokioMutex::new(None),
             rx_handle: Mutex::new(None),
             probe_handle: Mutex::new(None),
         });
@@ -202,7 +206,7 @@ impl UpstreamManager {
         let weak_mgr = Arc::downgrade(&mgr);
         let probe_task = tokio::spawn(async move {
             loop {
-                tokio::time::sleep(Duration::from_secs(10)).await;
+                sleep(Duration::from_secs(10)).await;
                 if let Some(mgr_clone) = weak_mgr.upgrade() {
                     mgr_clone.sweep_abandoned();
                     if mgr_clone.health.is_degraded() && mgr_clone.health.is_eligible_for_probing()

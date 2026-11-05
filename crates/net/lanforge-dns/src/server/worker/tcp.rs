@@ -1,5 +1,6 @@
 use crate::pipeline::DnsPipelineRequest;
 use crate::server::DnsContext;
+use crate::server::transport::net::bind_tcp;
 use futures::future::join_all;
 use lanforge_dns_wire::{WireHeader, WireOptScanner, WireQuestion, WireResponseWriter};
 use lanforge_transport::DualTcpListener;
@@ -10,7 +11,8 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::task::{JoinHandle, JoinSet};
-use tracing::{error, trace};
+use tokio::time::{sleep, timeout};
+use tracing::{error, info, trace};
 
 /// An open connection with no complete query for this long is closed (RFC 7766 §6.2.3); `DoT`
 /// and `DoQ` use the same bound for their handshake and for each query.
@@ -29,9 +31,9 @@ pub fn spawn_tcp_worker(ctx: Arc<DnsContext>) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut listeners = Vec::new();
         for addr in ctx.cfg.listen.addrs() {
-            match crate::server::transport::net::bind_tcp(addr) {
+            match bind_tcp(addr) {
                 Ok(listener) => {
-                    tracing::info!(%addr, "TCP listening");
+                    info!(%addr, "TCP listening");
                     listeners.push(serve_listener(listener, addr, Arc::clone(&ctx)));
                 }
                 Err(e) => error!("Failed to bind TCP listener on {}: {}", addr, e),
@@ -56,7 +58,7 @@ async fn serve_listener(listener: DualTcpListener, addr: SocketAddr, ctx: Arc<Dn
                 }
                 Err(e) => {
                     error!("TCP worker accept error on {}: {}", addr, e);
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    sleep(Duration::from_millis(100)).await;
                 }
             },
             // Reap finished connections so the set does not grow without bound.
@@ -136,7 +138,7 @@ pub(crate) async fn serve_stream<S: AsyncRead + AsyncWrite + Unpin>(
 ) {
     let mut len_buf = [0u8; 2];
     while matches!(
-        tokio::time::timeout(TCP_IDLE_TIMEOUT, stream.read_exact(&mut len_buf)).await,
+        timeout(TCP_IDLE_TIMEOUT, stream.read_exact(&mut len_buf)).await,
         Ok(Ok(_))
     ) {
         let len = u16::from_be_bytes(len_buf) as usize;
@@ -146,7 +148,7 @@ pub(crate) async fn serve_stream<S: AsyncRead + AsyncWrite + Unpin>(
 
         let mut data = vec![0u8; len];
         if !matches!(
-            tokio::time::timeout(TCP_IDLE_TIMEOUT, stream.read_exact(&mut data)).await,
+            timeout(TCP_IDLE_TIMEOUT, stream.read_exact(&mut data)).await,
             Ok(Ok(_))
         ) {
             break;

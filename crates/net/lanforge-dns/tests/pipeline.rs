@@ -17,10 +17,13 @@ use lanforge_types::network::dns::{
     DnsClass, DnsMessage, DnsRData, DnsRecord, DnsRecordType, DnsResponseCode, adblock::RewriteRule,
 };
 use lanforge_types::network::{DnsReverseResolver, IpSubnet};
+#[cfg(feature = "adblock")]
+use std::env;
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::time::sleep;
 
 #[tokio::test]
 async fn pipeline_nxdomain_basic() {
@@ -61,7 +64,7 @@ async fn pipeline_adblocking() {
 
     let mut domains = HashSet::new();
     domains.insert("doubleclick.net".to_string());
-    let temp_path = std::env::temp_dir().join("test_blocklist.rkyv");
+    let temp_path = env::temp_dir().join("test_blocklist.rkyv");
     let bl =
         DiskBlocklist::build(domains, &temp_path, 100).expect("Failed to build test blocklist");
 
@@ -133,7 +136,7 @@ async fn pipeline_cached_block() {
 
     let mut domains = HashSet::new();
     domains.insert("ads.com".to_string());
-    let temp_path = std::env::temp_dir().join("test_cache_block.rkyv");
+    let temp_path = env::temp_dir().join("test_cache_block.rkyv");
     let bl = DiskBlocklist::build(domains, &temp_path, 100).unwrap();
     filter.replace_blocklist(bl);
     filter.set_enabled(true);
@@ -249,7 +252,7 @@ async fn pipeline_transient_ip_reverse_dns_cached() {
             resolved = true;
             break;
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        sleep(Duration::from_millis(10)).await;
     }
     assert!(resolved, "Transient host resolution in background failed");
 }

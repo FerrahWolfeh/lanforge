@@ -1,7 +1,7 @@
 use lanforge_types::network::dns::{DnsRecordType, QueryResult};
 
 use crate::error::DnsError;
-use crate::pipeline::Middleware;
+use crate::pipeline::{DnsPipelineRequest, Middleware};
 use crate::server::{DnsContext, DnsLogEvent};
 use crate::utils::extract_first_answer_summary;
 
@@ -17,7 +17,7 @@ impl RewriteMiddleware {
     pub fn run_sync(
         &self,
         ctx: &DnsContext,
-        req: &crate::pipeline::DnsPipelineRequest<'_>,
+        req: &DnsPipelineRequest<'_>,
         resp: &mut Vec<u8>,
     ) -> Result<bool, DnsError> {
         if ctx.rewrites.try_resolve_rewrite_wire(
@@ -60,7 +60,7 @@ impl Middleware for RewriteMiddleware {
     fn run_sync(
         &self,
         ctx: &DnsContext,
-        req: &mut crate::pipeline::DnsPipelineRequest<'_>,
+        req: &mut DnsPipelineRequest<'_>,
         resp: &mut Vec<u8>,
     ) -> Result<bool, DnsError> {
         RewriteMiddleware::run_sync(self, ctx, req, resp)

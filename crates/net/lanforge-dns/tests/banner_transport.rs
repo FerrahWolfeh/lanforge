@@ -27,7 +27,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 
 fn free_port() -> u16 {
     TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
@@ -66,7 +66,7 @@ async fn banner_counts_tcp_queries() {
     let ctx_serve = ctx.clone();
     let serve = tokio::spawn(async move { service.serve(&ctx_serve, &h).await });
     wait_for_service_online(&ctx, ServiceId::Dns).await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     let query = DnsPacketBuilder::query("router.lan", DnsRecordType::A).build_bytes();
     let mut stream = TcpStream::connect(addr).await.expect("connect");

@@ -1,5 +1,6 @@
 //! Error hierarchy for DNS server operations.
 
+use std::io;
 use thiserror::Error;
 
 /// Errors that can occur during DNS server operation.
@@ -10,7 +11,7 @@ use thiserror::Error;
 pub enum DnsError {
     /// Standard I/O error from socket operations.
     #[error("I/O failure: {0}")]
-    Io(#[from] std::io::Error),
+    Io(#[from] io::Error),
 
     /// Failed to decode a UDP DNS response message.
     #[error("Corrupt UDP response: {0}")]
@@ -38,7 +39,7 @@ pub enum DnsError {
 
     /// Failed to bind the UDP or TCP socket.
     #[error("Failed to bind {0} socket: {1}")]
-    BindError(&'static str, #[source] std::io::Error),
+    BindError(&'static str, #[source] io::Error),
 
     /// Failed to parse a DNS message using the zero-allocation wire parser.
     /// The message may be truncated, malformed, or contain unsupported features.
