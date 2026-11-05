@@ -26,6 +26,9 @@ jobs:
       - name: Cargo Check
         run: cargo check --workspace
 
+      - name: Cargo Clippy
+        run: cargo clippy --workspace --all-targets
+
       - name: Cargo Test
         run: cargo test --workspace
 
