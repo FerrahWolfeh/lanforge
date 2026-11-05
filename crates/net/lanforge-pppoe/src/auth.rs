@@ -74,10 +74,7 @@ pub async fn authenticate(
         };
         // Checked every iteration: a peer that keeps sending frames must not extend the phase.
         if Instant::now() >= deadline {
-            return Err(PppoeError::AuthTimeout(timeout_reason(
-                creds.auth,
-                chap_answered,
-            )));
+            return Err(timeout_error(creds.auth, chap_answered));
         }
         if creds.auth == AuthMethod::Pap && Instant::now() >= pap_resend_at {
             pap_id = pap_id.wrapping_add(1);
@@ -96,10 +93,7 @@ pub async fn authenticate(
             match timeout_at(wake, session.recv_ppp_frame(&mut buf)).await {
                 Ok(res) => &buf[..res?],
                 Err(_) if Instant::now() >= deadline => {
-                    return Err(PppoeError::AuthTimeout(timeout_reason(
-                        creds.auth,
-                        chap_answered,
-                    )));
+                    return Err(timeout_error(creds.auth, chap_answered));
                 }
                 Err(_) => continue,
             }
@@ -141,11 +135,11 @@ pub async fn authenticate(
     }
 }
 
-fn timeout_reason(auth: AuthMethod, chap_answered: Option<u8>) -> String {
+fn timeout_error(auth: AuthMethod, chap_answered: Option<u8>) -> PppoeError {
     match (auth, chap_answered) {
-        (AuthMethod::Pap, _) => "no PAP Authenticate-Ack/Nak".into(),
-        (_, None) => "no CHAP Challenge".into(),
-        (_, Some(_)) => "no CHAP Success/Failure".into(),
+        (AuthMethod::Pap, _) => PppoeError::AuthTimeout("no PAP Authenticate-Ack/Nak".into()),
+        (_, None) => PppoeError::NoChallenge,
+        (_, Some(_)) => PppoeError::AuthTimeout("no CHAP Success/Failure".into()),
     }
 }
 

@@ -258,10 +258,7 @@ async fn a_missing_chap_challenge_ends_the_phase_within_seconds() {
     })
     .await;
     let waited = started.elapsed();
-    assert!(
-        matches!(&res, Err(PppoeError::AuthTimeout(reason)) if reason == "no CHAP Challenge"),
-        "{res:?}"
-    );
+    assert!(matches!(res, Err(PppoeError::NoChallenge)), "{res:?}");
     assert!(
         waited <= Duration::from_secs(6),
         "waited {waited:?} for a Challenge"

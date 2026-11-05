@@ -8,6 +8,9 @@
 //! - Only a session that stayed up for [`HEALTHY_UPTIME`] clears the failure count; one that drops
 //!   seconds after coming up counts as a failure (a concentrator kicking us in a loop).
 //! - Admin restarts and config changes bypass pacing ([`ReconnectBackoff::reset`]).
+//! - A session the concentrator left half-open (no CHAP Challenge, or the same session ID handed
+//!   out again) is retried after [`STALE_RETRY`], doubling, never later than a plain failure:
+//!   it clears within seconds once the concentrator has processed the PADT.
 
 use std::time::Duration;
 
@@ -15,6 +18,8 @@ use std::time::Duration;
 pub const MAX_DELAY: Duration = Duration::from_secs(300);
 /// Minimum wait after the concentrator explicitly rejected the credentials.
 pub const REJECT_FLOOR: Duration = Duration::from_secs(60);
+/// First wait after a half-open session (MX204 BNG: released between 1 and 8 s after a PADT).
+pub const STALE_RETRY: Duration = Duration::from_secs(3);
 /// Uptime after which a session counts as healthy and clears the failure count.
 pub const HEALTHY_UPTIME: Duration = Duration::from_secs(120);
 
@@ -25,6 +30,8 @@ pub struct SessionEnd {
     pub uptime: Option<Duration>,
     /// The concentrator explicitly rejected the credentials.
     pub rejected: bool,
+    /// The concentrator handed out a session it was still tearing down.
+    pub stale: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -62,7 +69,10 @@ impl ReconnectBackoff {
         self.failures = self.failures.saturating_add(1);
 
         let exp = self.failures.saturating_sub(1).min(16);
-        let raw = self.base.saturating_mul(1 << exp).min(MAX_DELAY);
+        let mut raw = self.base.saturating_mul(1 << exp).min(MAX_DELAY);
+        if end.stale {
+            raw = raw.min(STALE_RETRY.saturating_mul(1 << exp));
+        }
         let mut delay = raw.mul_f64(jitter.clamp(0.8, 1.2)).min(MAX_DELAY);
         if end.rejected {
             delay = delay.max(REJECT_FLOOR);
@@ -78,10 +88,25 @@ mod tests {
     const FAILED: SessionEnd = SessionEnd {
         uptime: None,
         rejected: false,
+        stale: false,
     };
 
     fn secs(d: Duration) -> u64 {
         d.as_secs()
+    }
+
+    #[test]
+    fn a_half_open_session_retries_fast_but_never_slower_than_a_failure() {
+        let mut b = ReconnectBackoff::new(Duration::from_secs(10));
+        let half_open = SessionEnd {
+            uptime: None,
+            rejected: false,
+            stale: true,
+        };
+        let seq: Vec<u64> = (0..5).map(|_| secs(b.next_delay(half_open, 1.0))).collect();
+        assert_eq!(seq, [3, 6, 12, 24, 48]);
+        // A plain failure after them keeps the count: no tight loop.
+        assert_eq!(secs(b.next_delay(FAILED, 1.0)), 300);
     }
 
     #[test]
@@ -110,6 +135,7 @@ mod tests {
         let flap = SessionEnd {
             uptime: Some(Duration::from_secs(3)),
             rejected: false,
+            stale: false,
         };
         let seq: Vec<u64> = (0..4).map(|_| secs(b.next_delay(flap, 1.0))).collect();
         assert_eq!(seq, [10, 20, 40, 80]);
@@ -124,6 +150,7 @@ mod tests {
         let healthy = SessionEnd {
             uptime: Some(HEALTHY_UPTIME),
             rejected: false,
+            stale: false,
         };
         assert_eq!(secs(b.next_delay(healthy, 1.0)), 10);
         assert_eq!(b.failures(), 1);
@@ -135,6 +162,7 @@ mod tests {
         let rejected = SessionEnd {
             uptime: None,
             rejected: true,
+            stale: false,
         };
         assert_eq!(b.next_delay(rejected, 1.0), REJECT_FLOOR);
         b.reset();

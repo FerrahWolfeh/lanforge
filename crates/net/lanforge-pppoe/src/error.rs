@@ -25,6 +25,16 @@ pub enum PppoeError {
     #[error("PPP Authentication timed out: {0}")]
     AuthTimeout(String),
 
+    /// LCP opened but no CHAP Challenge came: the concentrator handed out a session it was still
+    /// tearing down (same session ID right after a PADT).
+    #[error("PPP Authentication timed out: no CHAP Challenge")]
+    NoChallenge,
+
+    /// Discovery handed out again the session that just went silent: the concentrator still
+    /// holds it, so it is terminated (PADT) and retried shortly instead of negotiated.
+    #[error("Access concentrator still holds session {0} from the previous attempt")]
+    StaleSession(u16),
+
     #[error("PPP IPCP negotiation failed: {0}")]
     IpcpFailed(String),
 

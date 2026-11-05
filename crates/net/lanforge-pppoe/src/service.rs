@@ -86,6 +86,9 @@ pub struct PppoeService<H: PppoeHost = KernelHost> {
     wan_ra: Option<Icmp6Transport>,
     /// Interface lookup, link state and the kernel side of the PPP link.
     host: H,
+    /// (AC MAC, session ID) the concentrator left half-open: LCP opened, no CHAP Challenge.
+    /// Handed out again by the next discovery, it is terminated instead of negotiated.
+    stale_session: Option<(MacAddr, u16)>,
 }
 
 impl PppoeService<KernelHost> {
@@ -112,6 +115,7 @@ impl PppoeService<KernelHost> {
             config_sub,
             wan_ra: None,
             host: KernelHost,
+            stale_session: None,
         }
     }
 }
@@ -148,6 +152,7 @@ impl<H: PppoeHost> PppoeService<H> {
             config_sub,
             wan_ra: None,
             host,
+            stale_session: None,
         }
     }
 
@@ -835,6 +840,17 @@ impl<H: PppoeHost> PppoeService<H> {
         };
 
         let flow_res = async {
+            if self.stale_session == Some((disc_res.ac_mac, disc_res.session_id)) {
+                // Still the half-open session: negotiating it would only wait for a Challenge
+                // that never comes. The teardown below sends its PADT.
+                warn!(
+                    ac_mac = %disc_res.ac_mac,
+                    session_id = disc_res.session_id,
+                    "Access concentrator handed out the half-open session again; terminating it"
+                );
+                return Err(PppoeError::StaleSession(disc_res.session_id));
+            }
+            self.stale_session = None;
             info!(
                 ac_name = disc_res.ac_name.as_deref().unwrap_or("unknown"),
                 ac_mac = %disc_res.ac_mac,
@@ -894,6 +910,9 @@ impl<H: PppoeHost> PppoeService<H> {
 
         if matches!(flow_res, Err(PppoeError::TerminalUnreachable(..))) {
             self.terminal_status = Some((false, None, None));
+        }
+        if matches!(flow_res, Err(PppoeError::NoChallenge)) {
+            self.stale_session = Some((disc_res.ac_mac, disc_res.session_id));
         }
 
         let reason = match &flow_res {
@@ -1077,6 +1096,7 @@ impl<H: PppoeHost> AsyncService for PppoeService<H> {
                         SessionEnd {
                             uptime: self.last_uptime,
                             rejected: false,
+                            stale: false,
                         },
                         None,
                     )
@@ -1086,10 +1106,12 @@ impl<H: PppoeHost> AsyncService for PppoeService<H> {
                         break 'main_loop;
                     }
                     let rejected = matches!(e, PppoeError::AuthFailed(_));
+                    let stale = matches!(e, PppoeError::NoChallenge | PppoeError::StaleSession(_));
                     (
                         SessionEnd {
                             uptime: self.last_uptime,
                             rejected,
+                            stale,
                         },
                         Some(e),
                     )

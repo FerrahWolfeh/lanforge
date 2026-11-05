@@ -1277,3 +1277,101 @@ async fn test_pppoe_change_during_negotiation_is_not_lost() {
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = timeout(Duration::from_secs(2), handle).await;
 }
+
+/// The next `SessionUp`, however long the gaps between events (virtual clock).
+async fn session_up_within(
+    sub: &mut broadcast::Receiver<TimedEvent>,
+    limit: Duration,
+) -> PppoeSessionUp {
+    timeout(limit, async {
+        loop {
+            if let Ok(evt) = sub.recv().await
+                && let LanforgeEvent::Pppoe(PppoeEvent::SessionUp(up)) = evt.event
+            {
+                return *up;
+            }
+        }
+    })
+    .await
+    .expect("session comes up")
+}
+
+/// Owner logs (MX204 BNG, two restarts): the old instance's PADT went out, the new instance's
+/// PADR got the same session ID back within a second, LCP opened and no Challenge came; only an
+/// attempt a regular backoff later got a fresh ID. The half-open session must be retried within
+/// seconds, not after the regular reconnect delay.
+#[tokio::test(start_paused = true)]
+async fn a_half_open_session_after_restart_is_retried_within_seconds() {
+    let (ctx, bus) = create_test_context();
+    let mut pppoe_sub = bus.subscribe_pppoe();
+    let cfg = PppoeConfig {
+        enabled: true,
+        wan_iface: "eth1".into(),
+        username: "client1".into(),
+        reconnect_delay_secs: 10,
+        ..Default::default()
+    };
+    let bras = MockBrasConfig {
+        session_id: 0x0042,
+        half_open: Some((0x1222, Duration::from_secs(2))),
+        ..Default::default()
+    };
+    let started = tokio::time::Instant::now();
+    let (seen, _cmd_tx, handle) = start_with_bras(&ctx, cfg, bras);
+
+    let up = session_up_within(&mut pppoe_sub, Duration::from_secs(60)).await;
+    let took = started.elapsed();
+    assert_eq!(
+        up.session_id, 0x0042,
+        "the fresh session, not the half-open one"
+    );
+    assert!(took <= Duration::from_secs(11), "WAN down for {took:?}");
+    let (half_open, padts) = {
+        let seen = seen.lock().unwrap();
+        (seen.half_open_sessions, seen.padts)
+    };
+    assert_eq!(half_open, 1);
+    assert!(
+        padts >= 1,
+        "the half-open session is terminated ({padts} PADTs)"
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(Duration::from_secs(2), handle).await;
+}
+
+/// The concentrator holds the ID longer than the first short retry: the next PADS with the same
+/// ID is terminated on sight instead of waiting another 5 s for a Challenge.
+#[tokio::test(start_paused = true)]
+async fn the_same_half_open_session_is_not_negotiated_twice() {
+    let (ctx, bus) = create_test_context();
+    let mut pppoe_sub = bus.subscribe_pppoe();
+    let cfg = PppoeConfig {
+        enabled: true,
+        wan_iface: "eth1".into(),
+        username: "client1".into(),
+        reconnect_delay_secs: 10,
+        ..Default::default()
+    };
+    let bras = MockBrasConfig {
+        session_id: 0x0042,
+        half_open: Some((0x1222, Duration::from_secs(5))),
+        ..Default::default()
+    };
+    let (seen, _cmd_tx, handle) = start_with_bras(&ctx, cfg, bras);
+
+    let up = session_up_within(&mut pppoe_sub, Duration::from_secs(120)).await;
+    assert_eq!(up.session_id, 0x0042);
+    let (half_open, padts) = {
+        let seen = seen.lock().unwrap();
+        (seen.half_open_sessions, seen.padts)
+    };
+    assert!(half_open >= 2, "{half_open} half-open sessions");
+    assert!(
+        padts >= half_open,
+        "every half-open one is terminated ({padts} PADTs for {half_open})"
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(Duration::from_secs(2), handle).await;
+}

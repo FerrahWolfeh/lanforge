@@ -28,6 +28,10 @@ pub struct MockBrasConfig {
     pub padt_after: Option<Duration>,
     /// Wait this long before answering a PADI (a slow concentrator).
     pub pado_delay: Option<Duration>,
+    /// Still tearing down a previous session (MX204 BNG, owner logs): until this long after the
+    /// last PADT for `.0`, a PADR gets session ID `.0` back, LCP opens and no Challenge follows.
+    /// The clock starts at spawn (the previous instance's PADT on shutdown).
+    pub half_open: Option<(u16, Duration)>,
     /// What the concentrator saw: CHAP names and PADTs from the client.
     pub seen: Arc<Mutex<Seen>>,
 }
@@ -38,6 +42,8 @@ pub struct Seen {
     pub chap_names: Vec<String>,
     /// PADTs sent by the client.
     pub padts: usize,
+    /// Sessions handed out half-open (LCP opened, never challenged).
+    pub half_open_sessions: usize,
 }
 
 impl Default for MockBrasConfig {
@@ -55,6 +61,7 @@ impl Default for MockBrasConfig {
             terminate_after: None,
             padt_after: None,
             pado_delay: None,
+            half_open: None,
             seen: Arc::default(),
         }
     }
@@ -65,6 +72,8 @@ pub fn spawn_mock_bras(handle: PppoeInertHandle, cfg: MockBrasConfig) -> JoinHan
         let mut terminate_at: Option<Instant> = None;
         let mut padt_at: Option<Instant> = None;
         let mut client_mac = MacAddr([0; 6]);
+        let mut held_until = cfg.half_open.map(|(_, hold)| Instant::now() + hold);
+        let mut serving_half_open = false;
         // Discovery phase
         loop {
             tokio::select! {
@@ -137,16 +146,30 @@ pub fn spawn_mock_bras(handle: PppoeInertHandle, cfg: MockBrasConfig) -> JoinHan
                             if let Some(hu) = host_uniq {
                                 tags.push(*hu);
                             }
+                            serving_half_open =
+                                held_until.is_some_and(|until| Instant::now() < until);
+                            let session_id = match cfg.half_open {
+                                Some((old, _)) if serving_half_open => {
+                                    cfg.seen.lock().unwrap().half_open_sessions += 1;
+                                    old
+                                }
+                                _ => cfg.session_id,
+                            };
                             let pads = PppoeDiscoveryFrame {
                                 dst_mac: frame.src_mac,
                                 src_mac: cfg.ac_mac,
                                 code: CODE_PADS,
-                                session_id: cfg.session_id,
+                                session_id,
                                 tags,
                             };
                             handle.inject_discovery(pads.encode().to_vec()).await;
                         } else if frame.code == CODE_PADT {
                             cfg.seen.lock().unwrap().padts += 1;
+                            if let Some((old, hold)) = cfg.half_open
+                                && frame.session_id == old
+                            {
+                                held_until = Some(Instant::now() + hold);
+                            }
                         }
                     }
                 }
@@ -180,6 +203,7 @@ pub fn spawn_mock_bras(handle: PppoeInertHandle, cfg: MockBrasConfig) -> JoinHan
                                     ];
                                     handle.inject_session(bras_req).await;
                                 }
+                                2 if serving_half_open => {} // Opened, but never challenged
                                 2 => { // Conf-Ack
                                     // Client accepted our LCP options, initiate CHAP challenge
                                     let challenge = vec![
