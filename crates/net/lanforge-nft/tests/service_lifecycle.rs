@@ -906,3 +906,29 @@ async fn a_traffic_change_without_sqm_change_leaves_the_firewall_alone() {
     .await;
     assert!(got.is_err(), "no recompile for a bandwidth change");
 }
+
+/// The admin must be able to tell a stopped firewall that keeps the WAN closed from one that
+/// left no table: the service records what it left in the kernel, and a running ruleset
+/// clears it.
+#[tokio::test]
+async fn test_firewall_records_what_it_left_in_the_kernel() {
+    let (ctx, bus) = create_test_context();
+    let mut fw_sub = bus.subscribe_firewall();
+    let mut service = NftService::inert();
+    service.init(&ctx).await.expect("Init must succeed");
+    let _ = wait_for_ruleset_applied(&mut fw_sub).await;
+    assert_eq!(ctx.firewall_left(), None, "a running ruleset");
+
+    service.cleanup(&ctx).await.expect("Cleanup must succeed");
+    assert_eq!(ctx.firewall_left(), Some(FirewallStopAction::Lockdown));
+
+    service.init(&ctx).await.expect("Init must succeed");
+    let _ = wait_for_ruleset_applied(&mut fw_sub).await;
+    assert_eq!(ctx.firewall_left(), None, "started again");
+
+    let mut cfg = ctx.get_firewall_config().unwrap();
+    cfg.on_stop = FirewallStopAction::Remove;
+    ctx.update_firewall_config(cfg);
+    service.cleanup(&ctx).await.expect("Cleanup must succeed");
+    assert_eq!(ctx.firewall_left(), Some(FirewallStopAction::Remove));
+}

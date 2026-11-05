@@ -4,14 +4,26 @@ use std::time::{Instant, SystemTime};
 
 use lanforge_types::events::FirewallEvent;
 use lanforge_types::network::firewall::{
-    DynamicPortRequest, FirewallConfig, FirewallTransactionState, FirewallValidationReport,
-    L4Protocol, validate_firewall_candidate,
+    DynamicPortRequest, FirewallConfig, FirewallStopAction, FirewallTransactionState,
+    FirewallValidationReport, L4Protocol, validate_firewall_candidate,
 };
 
 use crate::bus::LanforgeEvent;
 use crate::context::LanforgeContext;
 
 impl LanforgeContext {
+    /// Records what the firewall left in the kernel when it stopped serving (lockdown table or
+    /// no table); `None` once a full ruleset runs again. Shown in the firewall's status line.
+    pub fn set_firewall_left(&self, left: Option<FirewallStopAction>) {
+        *self.inner.runtime.firewall_left.write() = left;
+    }
+
+    /// What a firewall that is not serving left in the kernel, if it recorded it.
+    #[must_use]
+    pub fn firewall_left(&self) -> Option<FirewallStopAction> {
+        *self.inner.runtime.firewall_left.read()
+    }
+
     /// Registers a dynamic port requirement for an internal service (e.g. HTTP `WebUI`, DNS, DHCP).
     ///
     /// Stores the port in context and broadcasts a `FirewallEvent::PortOpenRequested` on the bus.

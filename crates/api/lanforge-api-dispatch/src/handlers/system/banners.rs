@@ -3,6 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use lanforge_types::device::{DeviceStatus, IPv4State, IPv6State};
 use lanforge_types::network::dns::{DnsRequest, DnsResponse};
+use lanforge_types::network::firewall::FirewallStopAction;
 use lanforge_types::network::snapshot::{WanState, mask_ipv6};
 use lanforge_types::system::{PppoeSessionState, ServiceBanner, ServiceId};
 
@@ -19,7 +20,21 @@ impl ClientContext {
             banner.summary = if banner.state.is_serving() {
                 self.service_summary(banner.id).await
             } else {
-                banner.detail.as_ref().map(ToString::to_string)
+                let why = banner.detail.as_ref().map(ToString::to_string);
+                match (banner.id, self.ctx.firewall_left()) {
+                    // A stopped firewall either keeps the WAN closed or leaves no table: the
+                    // admin must be able to tell which.
+                    (ServiceId::Nft, Some(left)) => {
+                        let left = match left {
+                            FirewallStopAction::Lockdown => "WAN locked down",
+                            FirewallStopAction::Remove => {
+                                "table removed, WAN not filtered by lanforge"
+                            }
+                        };
+                        Some(why.map_or_else(|| left.to_string(), |why| format!("{why} · {left}")))
+                    }
+                    _ => why,
+                }
             };
         }
         banners

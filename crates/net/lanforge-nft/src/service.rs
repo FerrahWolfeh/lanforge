@@ -157,6 +157,7 @@ impl NftService {
         } else {
             info!(table = %cfg.table_name, on_stop = cfg.on_stop.as_str(), mode = ?cfg.mode, "Firewall stopping, removing nftables table from kernel");
             self.remove_table(&cfg.table_name).await;
+            ctx.set_firewall_left(Some(FirewallStopAction::Remove));
         }
     }
 
@@ -193,6 +194,7 @@ impl NftService {
             }
         }
         *self.last_ruleset.write() = Some(payload);
+        ctx.set_firewall_left(Some(FirewallStopAction::Lockdown));
         info!(
             table = %cfg.table_name,
             wan = ?self.active_wan,
@@ -256,6 +258,7 @@ impl NftService {
                 lanforge_types::system::ServiceState::Inactive,
             );
             self.remove_table(&cfg.table_name).await;
+            ctx.set_firewall_left(Some(FirewallStopAction::Remove));
             return;
         }
 
@@ -329,6 +332,7 @@ impl NftService {
 
         match result {
             Ok(()) => {
+                ctx.set_firewall_left(None);
                 ctx.set_service_state(
                     Self::SERVICE_ID,
                     lanforge_types::system::ServiceState::Online,
