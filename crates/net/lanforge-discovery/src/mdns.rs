@@ -35,11 +35,15 @@ use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
 use pnet::datalink::interfaces;
 use smallvec::SmallVec;
-use std::io::{ErrorKind, Write};
+use std::io::{Cursor, ErrorKind, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
+use std::str;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::task;
+use tokio::time::interval;
 use tracing::{debug, error, info, warn};
 
 use lanforge_dns_wire::{WireDecoder, WireEncoder};
@@ -174,7 +178,7 @@ async fn run_mdns_worker(
 
     let ctx_v4 = ctx.clone();
     let metrics_v4 = Arc::clone(&metrics);
-    tokio::task::spawn_blocking(move || {
+    task::spawn_blocking(move || {
         let mut buf = [0u8; 4096];
         while ctx_v4.is_running() {
             match socket_v4_clone.recv_from(&mut buf) {
@@ -203,7 +207,7 @@ async fn run_mdns_worker(
 
     let ctx_v6 = ctx.clone();
     let metrics_v6 = Arc::clone(&metrics);
-    tokio::task::spawn_blocking(move || {
+    task::spawn_blocking(move || {
         let mut buf = [0u8; 4096];
         while ctx_v6.is_running() {
             match socket_v6_clone.recv_from(&mut buf) {
@@ -223,7 +227,7 @@ async fn run_mdns_worker(
     });
 
     let mut bus_rx = bus.subscribe_system();
-    let mut probe_timer = tokio::time::interval(Duration::from_secs(cfg.probe_interval));
+    let mut probe_timer = interval(Duration::from_secs(cfg.probe_interval));
 
     if cfg.enabled {
         let _ = tx.try_send(MdnsCommand::ProbeAll);
@@ -253,7 +257,7 @@ async fn run_mdns_worker(
                             break;
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    Err(RecvError::Lagged(n)) => {
                         warn!(service = "mDNS", lost = n, "Event bus lagged");
                     }
                     Err(_) => break,
@@ -397,7 +401,7 @@ fn send_unicast_query(
     let name_len = match target {
         IpAddr::V4(v4) => {
             let octets = v4.octets();
-            let mut cursor = std::io::Cursor::new(&mut name_buf[..]);
+            let mut cursor = Cursor::new(&mut name_buf[..]);
             let _ = write!(
                 cursor,
                 "{}.{}.{}.{}.in-addr.arpa",
@@ -406,7 +410,7 @@ fn send_unicast_query(
             usize::try_from(cursor.position()).unwrap_or(0)
         }
         IpAddr::V6(v6) => {
-            let mut cursor = std::io::Cursor::new(&mut name_buf[..]);
+            let mut cursor = Cursor::new(&mut name_buf[..]);
             for seg in v6.octets().iter().rev() {
                 let _ = write!(cursor, "{:x}.{:x}.", seg & 0xf, seg >> 4);
             }
@@ -416,7 +420,7 @@ fn send_unicast_query(
     };
 
     let name_len = name_len.min(name_buf.len());
-    let name_str = std::str::from_utf8(&name_buf[..name_len]).unwrap_or("");
+    let name_str = str::from_utf8(&name_buf[..name_len]).unwrap_or("");
     msg.questions.push(DnsQuestion {
         name: Arc::from(name_str),
         qtype: DnsRecordType::PTR,
