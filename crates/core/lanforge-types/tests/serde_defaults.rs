@@ -1,3 +1,4 @@
+#![allow(unused_crate_dependencies, reason = "integration test crates see every dev-dependency")]
 //! A value deserialized from an empty object must equal the type's `Default`: every
 //! `#[serde(default = "...")]` has to agree with the hand-written `Default` impl, or a config built
 //! in code and one read from storage/API without the field silently differ (the

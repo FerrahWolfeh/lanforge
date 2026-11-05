@@ -2498,7 +2498,6 @@ dependencies = [
  "arc-swap",
  "dashmap",
  "hotpath",
- "lanforge-macros",
  "lanforge-types",
  "parking_lot",
  "serde",
@@ -2760,7 +2759,6 @@ dependencies = [
 name = "lanforge-macros"
 version = "0.43.0"
 dependencies = [
- "proc-macro2",
  "quote",
  "syn 2.0.117",
 ]

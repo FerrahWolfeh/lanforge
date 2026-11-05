@@ -1,3 +1,4 @@
+#![allow(unused_crate_dependencies, reason = "integration test crates see every dev-dependency")]
 //! `apply_static_hosts`: the device table follows `[hosts]`.
 
 use std::sync::Arc;

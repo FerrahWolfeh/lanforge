@@ -1,3 +1,4 @@
+#![allow(unused_crate_dependencies, reason = "integration test crates see every dev-dependency")]
 use lanforge_types::auth::*;
 use lanforge_types::device::DeviceIdentity;
 use lanforge_types::device::core::*;
