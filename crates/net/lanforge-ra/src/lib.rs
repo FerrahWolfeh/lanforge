@@ -72,7 +72,7 @@ use std::sync::Arc;
 
 pub use packet::{build_ra_packet, icmpv6_checksum};
 
-use crate::error::NetworkError;
+use crate::error::RaError;
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent};
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
@@ -910,11 +910,11 @@ fn send_ra_internal(
     iface_index: u32,
     unicast_dst: Option<Ipv6Addr>,
     state: &RaState,
-) -> Result<(), NetworkError> {
+) -> Result<(), RaError> {
     let if_ips = lctx.get_interface_state(iface_index);
 
     let Some(src_ll) = if_ips.link_local else {
-        return Err(NetworkError::NoLinkLocal(iface_index));
+        return Err(RaError::NoLinkLocal(iface_index));
     };
     // Only the LAN interface's own GUA (e.g. delegated by the OS DHCPv6-PD client) is
     // advertised. Never fall back to the WAN link prefix: it is not routed to the LAN, and
@@ -973,7 +973,7 @@ fn send_ra_internal(
 
     transport
         .send(&pkt, &dst_sa)
-        .map_err(|e| NetworkError::Socket(format!("ICMPv6 send: {e}")))?;
+        .map_err(|e| RaError::Socket(format!("ICMPv6 send: {e}")))?;
 
     Ok(())
 }

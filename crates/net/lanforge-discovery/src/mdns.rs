@@ -49,7 +49,7 @@ use tracing::{debug, error, info, warn};
 use lanforge_dns_wire::{WireDecoder, WireEncoder};
 use lanforge_transport::TransportMetrics;
 
-use crate::error::NetworkError;
+use crate::error::DiscoveryError;
 
 const MDNS_PORT: u16 = 5353;
 const MDNS_IPV4: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 251);
@@ -158,7 +158,7 @@ async fn run_mdns_worker(
     tx: Sender<MdnsCommand>,
     metrics: Arc<TransportMetrics>,
     h: &ServiceHandle,
-) -> Result<(), NetworkError> {
+) -> Result<(), DiscoveryError> {
     let bus = ctx.bus();
     // We bind to a random port to SEND queries, and a fixed port to LISTEN if we want passive,
     // but on Linux, to receive multicast, we usually bind to 5353 with REUSEPORT.
@@ -170,10 +170,10 @@ async fn run_mdns_worker(
     // Spawn listeners
     let socket_v4_clone = socket_v4
         .try_clone()
-        .map_err(|e| NetworkError::Socket(e.to_string()))?;
+        .map_err(|e| DiscoveryError::Socket(e.to_string()))?;
     socket_v4_clone
         .set_read_timeout(Some(Duration::from_millis(500)))
-        .map_err(|e| NetworkError::Socket(e.to_string()))?;
+        .map_err(|e| DiscoveryError::Socket(e.to_string()))?;
     let resp_tx_v4 = resp_tx.clone();
 
     let ctx_v4 = ctx.clone();
@@ -199,10 +199,10 @@ async fn run_mdns_worker(
 
     let socket_v6_clone = socket_v6
         .try_clone()
-        .map_err(|e| NetworkError::Socket(e.to_string()))?;
+        .map_err(|e| DiscoveryError::Socket(e.to_string()))?;
     socket_v6_clone
         .set_read_timeout(Some(Duration::from_millis(500)))
-        .map_err(|e| NetworkError::Socket(e.to_string()))?;
+        .map_err(|e| DiscoveryError::Socket(e.to_string()))?;
     let resp_tx_v6 = resp_tx.clone();
 
     let ctx_v6 = ctx.clone();
@@ -301,23 +301,23 @@ fn handle_command(
     }
 }
 
-fn setup_multicast_socket_v4() -> Result<UdpSocket, NetworkError> {
+fn setup_multicast_socket_v4() -> Result<UdpSocket, DiscoveryError> {
     use socket2::{Domain, Protocol, Socket, Type};
     let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))
-        .map_err(|e| NetworkError::Socket(e.to_string()))?;
+        .map_err(|e| DiscoveryError::Socket(e.to_string()))?;
 
     socket
         .set_reuse_address(true)
-        .map_err(|e| NetworkError::Socket(e.to_string()))?;
+        .map_err(|e| DiscoveryError::Socket(e.to_string()))?;
     #[cfg(unix)]
     socket
         .set_reuse_port(true)
-        .map_err(|e| NetworkError::Socket(e.to_string()))?;
+        .map_err(|e| DiscoveryError::Socket(e.to_string()))?;
 
     // Bind to all interfaces on 5353
     socket
         .bind(&SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), MDNS_PORT).into())
-        .map_err(|e| NetworkError::Socket(e.to_string()))?;
+        .map_err(|e| DiscoveryError::Socket(e.to_string()))?;
 
     // Join multicast on all interfaces
     let interfaces = interfaces();
@@ -335,25 +335,25 @@ fn setup_multicast_socket_v4() -> Result<UdpSocket, NetworkError> {
     Ok(socket.into())
 }
 
-fn setup_multicast_socket_v6() -> Result<UdpSocket, NetworkError> {
+fn setup_multicast_socket_v6() -> Result<UdpSocket, DiscoveryError> {
     use socket2::{Domain, Protocol, Socket, Type};
     let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))
-        .map_err(|e| NetworkError::Socket(e.to_string()))?;
+        .map_err(|e| DiscoveryError::Socket(e.to_string()))?;
 
     socket
         .set_only_v6(true)
-        .map_err(|e| NetworkError::Socket(e.to_string()))?;
+        .map_err(|e| DiscoveryError::Socket(e.to_string()))?;
     socket
         .set_reuse_address(true)
-        .map_err(|e| NetworkError::Socket(e.to_string()))?;
+        .map_err(|e| DiscoveryError::Socket(e.to_string()))?;
     #[cfg(unix)]
     socket
         .set_reuse_port(true)
-        .map_err(|e| NetworkError::Socket(e.to_string()))?;
+        .map_err(|e| DiscoveryError::Socket(e.to_string()))?;
 
     socket
         .bind(&SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), MDNS_PORT).into())
-        .map_err(|e| NetworkError::Socket(e.to_string()))?;
+        .map_err(|e| DiscoveryError::Socket(e.to_string()))?;
 
     let interfaces = interfaces();
     for iface in interfaces {

@@ -9,7 +9,7 @@ use rtnetlink::packet_route::address::{AddressAttribute, AddressFlags, AddressMe
 use rtnetlink::packet_route::link::LinkAttribute;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-use crate::error::NetworkError;
+use crate::error::DiscoveryError;
 
 /// Queries the kernel for all IP addresses (IPv4, Link-Local, GUA, ULA) and MAC address
 /// for the specified interface index, applying the resulting state to the context.
@@ -21,7 +21,7 @@ pub async fn refresh_interface(
     handle: &Handle,
     ifindex: u32,
     ctx: &LanforgeContext,
-) -> Result<InterfaceState, NetworkError> {
+) -> Result<InterfaceState, DiscoveryError> {
     let mut stream = handle
         .address()
         .get()

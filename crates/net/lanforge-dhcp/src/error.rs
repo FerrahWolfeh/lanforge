@@ -1,4 +1,4 @@
-//! Network error types for `lanforge-dhcp`.
+//! DHCP error types for `lanforge-dhcp`.
 //!
 //! Covers failure modes across the DHCP stack: I/O, socket creation,
 //! raw packet injection, and configuration issues.
@@ -8,7 +8,7 @@ use thiserror::Error;
 
 /// Errors that can occur in the Lanforge DHCP subsystem.
 #[derive(Debug, Error)]
-pub enum NetworkError {
+pub enum DhcpError {
     /// Standard I/O error (e.g., socket read/write failure).
     #[error("I/O failure: {0}")]
     Io(#[from] io::Error),

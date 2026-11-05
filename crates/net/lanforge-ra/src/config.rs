@@ -5,7 +5,7 @@
 //! - RFC 4191 §2.1   — Router priority
 //! - RFC 8106         — RDNSS and DNSSL
 
-use crate::error::NetworkError;
+use crate::error::RaError;
 pub use lanforge_types::network::ra::RouterPriority;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RaServerConfig, RdnssConfig};
 use serde::{Deserialize, Serialize};
@@ -261,17 +261,17 @@ impl RaConfig {
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss
     )]
-    pub fn validate(&self) -> Result<(), NetworkError> {
+    pub fn validate(&self) -> Result<(), RaError> {
         let max = self.max_interval.as_secs();
         if !(4..=1800).contains(&max) {
-            return Err(NetworkError::Config(format!(
+            return Err(RaError::Config(format!(
                 "max_interval={max}s out of range [4, 1800] (RFC 4861 §6.2.1)"
             )));
         }
 
         let min = self.effective_min_interval().as_secs();
         if min < 3 {
-            return Err(NetworkError::Config(format!(
+            return Err(RaError::Config(format!(
                 "min_interval={min}s < 3s minimum (RFC 4861 §6.2.1)"
             )));
         }
@@ -279,14 +279,14 @@ impl RaConfig {
         let max_float = max as f64;
         let limit = (max_float * 0.75).floor() as u64;
         if min > limit {
-            return Err(NetworkError::Config(format!(
+            return Err(RaError::Config(format!(
                 "min_interval={min}s > 0.75 * max_interval={max}s (RFC 4861 §6.2.1)"
             )));
         }
 
         let rl = self.effective_router_lifetime().as_secs();
         if rl != 0 && (rl < max || rl > 9000) {
-            return Err(NetworkError::Config(format!(
+            return Err(RaError::Config(format!(
                 "lifetime={rl}s must be 0 or in range [max_interval={max}s, 9000s] (RFC 4861 §4.2)"
             )));
         }
@@ -294,7 +294,7 @@ impl RaConfig {
         if let Some(mtu) = self.mtu
             && mtu < 1280
         {
-            return Err(NetworkError::Config(format!(
+            return Err(RaError::Config(format!(
                 "mtu={mtu} < 1280 (IPv6 minimum, RFC 8200 §5)"
             )));
         }
