@@ -10,7 +10,7 @@
 mod mock_bras;
 
 use std::net::Ipv4Addr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
@@ -20,21 +20,24 @@ use lanforge_core::error::CoreError;
 use lanforge_core::service::{
     AsyncService, LossPolicy, ServiceCommand, ServiceHandle, StatusReport,
 };
+use lanforge_pppoe::backoff::REJECT_FLOOR;
+use lanforge_pppoe::discovery::DiscoveryResult;
 use lanforge_pppoe::ipcp::IpcpNegotiated;
 use lanforge_pppoe::kernel::KernelSession;
 use lanforge_pppoe::lcp::LcpNegotiated;
 use lanforge_pppoe::session::PppoeSession;
 use lanforge_pppoe::{PppoeConfig, PppoeError, PppoeHost, PppoeService};
-use lanforge_transport::Icmp6Transport;
-use lanforge_transport::PppoeTransport;
+use lanforge_transport::{ArpProber, Icmp6Transport, PppoeTransport};
 use lanforge_types::events::TimedEvent;
 use lanforge_types::events::pppoe::{PppoeEvent, PppoeSessionUp};
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::pppoe::{AuthMethod, TerminalProbeConfig};
 use lanforge_types::network::snapshot::{WanSnapshot, WanState};
 use lanforge_types::system::{PppoeSessionState, ServiceId, ServiceState};
 use mock_bras::{MockBrasConfig, spawn_mock_bras};
-use tokio::sync::{broadcast, mpsc};
-use tokio::time::timeout;
+use tokio::sync::{broadcast, mpsc, watch};
+use tokio::task::JoinHandle;
+use tokio::time::{Instant, sleep, timeout};
 
 /// Handle wired to a command channel, as the supervisor provides (admin stop/restart).
 /// Stand-in for the machine: every interface exists with one fixed MAC, the link is up,
@@ -397,7 +400,7 @@ async fn test_pppoe_emits_auth_failed_and_reconnecting() {
     // `reconnect_delay_secs = 1`.
     assert_eq!(attempt, 1);
     assert!(
-        delay >= lanforge_pppoe::backoff::REJECT_FLOOR.as_secs(),
+        delay >= REJECT_FLOOR.as_secs(),
         "rejected credentials retried after {delay}s"
     );
 
@@ -499,19 +502,19 @@ async fn test_pppoe_cleanup_guarantees_session_down_on_abort() {
     let ctx_clone = ctx.clone();
 
     // 1. Manually establish session status in context to simulate an active session
-    let disc_res = lanforge_pppoe::discovery::DiscoveryResult {
-        ac_mac: lanforge_types::identifiers::MacAddr([0x02, 0, 0, 0xac, 0, 1]),
+    let disc_res = DiscoveryResult {
+        ac_mac: MacAddr([0x02, 0, 0, 0xac, 0, 1]),
         ac_name: Some("bras".into()),
         session_id: 10,
     };
-    let lcp_res = lanforge_pppoe::lcp::LcpNegotiated {
+    let lcp_res = LcpNegotiated {
         mru: 1492,
         local_magic: 1,
         peer_magic: 2,
-        auth_method: lanforge_types::network::pppoe::AuthMethod::ChapMd5,
+        auth_method: AuthMethod::ChapMd5,
         early_frames: Vec::new(),
     };
-    let ipcp_res = lanforge_pppoe::ipcp::IpcpNegotiated {
+    let ipcp_res = IpcpNegotiated {
         local_ip: Some(Ipv4Addr::new(100, 64, 0, 2)),
         peer_ip: Some(Ipv4Addr::new(100, 64, 0, 1)),
         dns: smallvec::smallvec![],
@@ -537,8 +540,7 @@ async fn test_pppoe_with_terminal_probe_enabled_reports_terminal_status() {
     let (ctx, bus) = create_test_context();
     let mut pppoe_sub = bus.subscribe_pppoe();
 
-    let (handle_prober, prober) =
-        lanforge_transport::ArpProber::inert([0x02, 0x00, 0x00, 0x00, 0x00, 0x01]);
+    let (handle_prober, prober) = ArpProber::inert([0x02, 0x00, 0x00, 0x00, 0x00, 0x01]);
 
     let responder = tokio::spawn(async move {
         if let Some(_req) = handle_prober.recv_payload().await {
@@ -559,7 +561,7 @@ async fn test_pppoe_with_terminal_probe_enabled_reports_terminal_status() {
         enabled: true,
         wan_iface: "wan0".into(),
         username: "client1".into(),
-        terminal_probe: lanforge_types::network::pppoe::TerminalProbeConfig {
+        terminal_probe: TerminalProbeConfig {
             enabled: true,
             target_ip: Ipv4Addr::new(192, 168, 1, 1),
             ..Default::default()
@@ -586,9 +588,7 @@ async fn test_pppoe_with_terminal_probe_enabled_reports_terminal_status() {
         assert_eq!(status.terminal_reachable, Some(true));
         assert_eq!(
             status.terminal_mac,
-            Some(lanforge_types::identifiers::MacAddr([
-                0x3c, 0x84, 0x6a, 0xbc, 0x8c, 0xe5
-            ]))
+            Some(MacAddr([0x3c, 0x84, 0x6a, 0xbc, 0x8c, 0xe5]))
         );
         assert!(status.terminal_rtt_us.is_some());
     }
@@ -602,14 +602,13 @@ async fn test_pppoe_with_injected_prober_reports_probe_response() {
     let (ctx, bus) = create_test_context();
     let mut pppoe_sub = bus.subscribe_pppoe();
 
-    let (handle_prober, prober) =
-        lanforge_transport::ArpProber::inert([0x02, 0x00, 0x00, 0x00, 0x00, 0x01]);
+    let (handle_prober, prober) = ArpProber::inert([0x02, 0x00, 0x00, 0x00, 0x00, 0x01]);
 
     let cfg = PppoeConfig {
         enabled: true,
         wan_iface: "wan0".into(),
         username: "client1".into(),
-        terminal_probe: lanforge_types::network::pppoe::TerminalProbeConfig {
+        terminal_probe: TerminalProbeConfig {
             enabled: true,
             target_ip: Ipv4Addr::new(192, 168, 1, 1),
             ..Default::default()
@@ -660,9 +659,7 @@ async fn test_pppoe_with_injected_prober_reports_probe_response() {
         assert_eq!(status.terminal_reachable, Some(true));
         assert_eq!(
             status.terminal_mac,
-            Some(lanforge_types::identifiers::MacAddr([
-                0xde, 0xad, 0xbe, 0xef, 0x00, 0x01
-            ]))
+            Some(MacAddr([0xde, 0xad, 0xbe, 0xef, 0x00, 0x01]))
         );
         assert!(status.terminal_rtt_us.is_some());
     }
@@ -926,7 +923,7 @@ async fn test_pppoe_reacts_to_padt_from_the_concentrator() {
     let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
     wait_for_session_up(&mut pppoe_sub).await;
-    let up_at = tokio::time::Instant::now();
+    let up_at = Instant::now();
 
     let reason = timeout(Duration::from_secs(600), async {
         loop {
@@ -985,7 +982,7 @@ async fn test_pppoe_settles_before_the_session_is_up() {
             if matches!(st, ServiceState::Degraded | ServiceState::Online) {
                 return st;
             }
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            sleep(Duration::from_millis(20)).await;
         }
     })
     .await;
@@ -1020,7 +1017,7 @@ async fn test_pppoe_reports_its_state_through_the_handle() {
     let (handle_inert, transport) = PppoeTransport::inert();
     let _bras = spawn_mock_bras(handle_inert, MockBrasConfig::default());
 
-    let (status_tx, mut status_rx) = tokio::sync::watch::channel::<StatusReport>(None);
+    let (status_tx, mut status_rx) = watch::channel::<StatusReport>(None);
     let (cmd_tx, cmd_rx) = mpsc::channel(8);
     let h = ServiceHandle::with_command_channel(ServiceId::Pppoe, ctx.clone(), cmd_rx)
         .with_status_reporter(status_tx);
@@ -1125,7 +1122,7 @@ async fn test_pppoe_follows_the_isp_ipv6_resolvers_from_ra() {
 }
 
 /// What the concentrator saw, plus the serve task as the supervisor's runner holds it.
-type Served = tokio::task::JoinHandle<(PppoeService<TestHost>, Result<(), CoreError>)>;
+type Served = JoinHandle<(PppoeService<TestHost>, Result<(), CoreError>)>;
 
 /// Starts the service against a mock concentrator.
 fn start_with_bras(
@@ -1133,7 +1130,7 @@ fn start_with_bras(
     cfg: PppoeConfig,
     bras: MockBrasConfig,
 ) -> (
-    Arc<std::sync::Mutex<mock_bras::Seen>>,
+    Arc<Mutex<mock_bras::Seen>>,
     mpsc::Sender<ServiceCommand>,
     Served,
 ) {
@@ -1257,7 +1254,7 @@ async fn test_pppoe_change_during_negotiation_is_not_lost() {
             .pppoe_status()
             .is_none_or(|s| s.state != PppoeSessionState::Discovering)
         {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            sleep(Duration::from_millis(5)).await;
         }
     })
     .await
@@ -1327,7 +1324,7 @@ async fn a_half_open_session_after_restart_is_retried_within_seconds() {
         half_open: Some((0x1222, Duration::from_secs(2))),
         ..Default::default()
     };
-    let started = tokio::time::Instant::now();
+    let started = Instant::now();
     let (seen, _cmd_tx, handle) = start_with_bras(&ctx, cfg, bras);
 
     let up = session_up_within(&mut pppoe_sub, Duration::from_secs(60)).await;

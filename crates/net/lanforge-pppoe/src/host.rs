@@ -9,9 +9,11 @@ use crate::lcp::LcpNegotiated;
 use crate::session::PppoeSession;
 use lanforge_transport::{Icmp6Transport, sys};
 use lanforge_types::identifiers::MacAddr;
+use std::fs::File;
 use std::future::Future;
 use std::io::Read;
 use std::path::Path;
+use std::str;
 use tracing::{debug, info, warn};
 
 /// The host operations of a `PPPoE` session: interface lookup, link state, and the kernel side
@@ -119,12 +121,12 @@ pub fn read_carrier(iface: &str) -> Option<bool> {
         path_buf[..prefix.len()].copy_from_slice(prefix);
         path_buf[prefix.len()..prefix.len() + name_bytes.len()].copy_from_slice(name_bytes);
         path_buf[prefix.len() + name_bytes.len()..total_len].copy_from_slice(suffix);
-        let path = std::str::from_utf8(&path_buf[..total_len]).ok()?;
+        let path = str::from_utf8(&path_buf[..total_len]).ok()?;
 
         let mut buf = [0u8; 8];
-        let mut file = std::fs::File::open(path).ok()?;
+        let mut file = File::open(path).ok()?;
         let n = file.read(&mut buf).ok()?;
-        let s = std::str::from_utf8(&buf[..n]).ok()?.trim();
+        let s = str::from_utf8(&buf[..n]).ok()?.trim();
         match s {
             "1" => Some(true),
             "0" => Some(false),

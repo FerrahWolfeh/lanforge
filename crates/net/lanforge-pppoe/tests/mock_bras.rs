@@ -10,11 +10,12 @@ use lanforge_pppoe::discovery::frame::{
 use lanforge_transport::PppoeInertHandle;
 use lanforge_types::identifiers::MacAddr;
 use smallvec::{SmallVec, smallvec};
+use std::future;
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::task::JoinHandle;
-use tokio::time::{Instant, sleep_until};
+use tokio::time::{Instant, sleep, sleep_until};
 
 #[derive(Debug, Clone)]
 pub struct MockBrasConfig {
@@ -85,7 +86,7 @@ pub fn spawn_mock_bras(handle: PppoeInertHandle, cfg: MockBrasConfig) -> JoinHan
                 () = async {
                     match terminate_at {
                         Some(at) => sleep_until(at).await,
-                        None => std::future::pending().await,
+                        None => future::pending().await,
                     }
                 } => {
                     terminate_at = None;
@@ -94,7 +95,7 @@ pub fn spawn_mock_bras(handle: PppoeInertHandle, cfg: MockBrasConfig) -> JoinHan
                 () = async {
                     match padt_at {
                         Some(at) => sleep_until(at).await,
-                        None => std::future::pending().await,
+                        None => future::pending().await,
                     }
                 } => {
                     padt_at = None;
@@ -115,7 +116,7 @@ pub fn spawn_mock_bras(handle: PppoeInertHandle, cfg: MockBrasConfig) -> JoinHan
                                 continue;
                             }
                             if let Some(delay) = cfg.pado_delay {
-                                tokio::time::sleep(delay).await;
+                                sleep(delay).await;
                             }
                             let host_uniq = frame.tags.iter().find(|t| t.tag_type == TAG_HOST_UNIQ);
                             let mut tags: SmallVec<[Tag; 8]> = smallvec![

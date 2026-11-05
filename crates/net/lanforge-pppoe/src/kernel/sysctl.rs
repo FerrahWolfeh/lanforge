@@ -2,6 +2,7 @@ use super::ifreq_named;
 use crate::error::PppoeError;
 use nix::sys::socket::{AddressFamily, SockFlag, SockType, socket};
 use std::ffi::CString;
+use std::fs;
 use std::os::fd::AsRawFd;
 use std::path::Path;
 
@@ -52,25 +53,25 @@ pub fn enable_interface_procfs(ifname: &str) {
     let accept_local_path = format!("/proc/sys/net/ipv4/conf/{ifname}/accept_local");
 
     if Path::new(&disable_ipv6_path).exists() {
-        let _ = std::fs::write(&disable_ipv6_path, "0");
+        let _ = fs::write(&disable_ipv6_path, "0");
     }
     if Path::new(&accept_ra_path).exists() {
-        let _ = std::fs::write(&accept_ra_path, "2");
+        let _ = fs::write(&accept_ra_path, "2");
     }
     if Path::new(&accept_ra_defrtr_path).exists() {
-        let _ = std::fs::write(&accept_ra_defrtr_path, "1");
+        let _ = fs::write(&accept_ra_defrtr_path, "1");
     }
     if Path::new(&accept_ra_pinfo_path).exists() {
-        let _ = std::fs::write(&accept_ra_pinfo_path, "1");
+        let _ = fs::write(&accept_ra_pinfo_path, "1");
     }
     if Path::new(&autoconf_path).exists() {
-        let _ = std::fs::write(&autoconf_path, "1");
+        let _ = fs::write(&autoconf_path, "1");
     }
     if Path::new(&rp_filter_path).exists() {
-        let _ = std::fs::write(&rp_filter_path, "2");
+        let _ = fs::write(&rp_filter_path, "2");
     }
     if Path::new(&accept_local_path).exists() {
-        let _ = std::fs::write(&accept_local_path, "1");
+        let _ = fs::write(&accept_local_path, "1");
     }
 
     // Disable TSO/GSO via kernel SIOCETHTOOL ioctl

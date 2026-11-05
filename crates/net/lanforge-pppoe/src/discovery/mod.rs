@@ -8,7 +8,9 @@ use frame::{
 use lanforge_transport::PppoeTransport;
 use lanforge_types::identifiers::MacAddr;
 use smallvec::{SmallVec, smallvec};
+use std::str;
 use std::time::Duration;
+use tokio::time::{self, Instant, sleep};
 use tracing::{debug, info, warn};
 
 pub struct DiscoveryResult {
@@ -133,13 +135,12 @@ async fn exchange_padi(
 
         // Wait for PADO
         let timeout = Duration::from_secs(padi_timeout_secs);
-        let start = tokio::time::Instant::now();
+        let start = Instant::now();
 
         while start.elapsed() < timeout {
             let remaining = timeout.saturating_sub(start.elapsed());
             let mut buf = [0u8; 2048];
-            if let Ok(Ok(n)) =
-                tokio::time::timeout(remaining, transport.recv_discovery(&mut buf)).await
+            if let Ok(Ok(n)) = time::timeout(remaining, transport.recv_discovery(&mut buf)).await
                 && let Some(frame) = PppoeDiscoveryFrame::parse(&buf[..n])
                 && frame.code == CODE_PADO
             {
@@ -155,8 +156,7 @@ async fn exchange_padi(
                         if tag.tag_type == TAG_AC_COOKIE {
                             frame_ac_cookie = Some(SmallVec::from_slice(tag.value));
                         } else if tag.tag_type == TAG_AC_NAME {
-                            frame_ac_name =
-                                std::str::from_utf8(tag.value).ok().map(ToString::to_string);
+                            frame_ac_name = str::from_utf8(tag.value).ok().map(ToString::to_string);
                         }
                     }
 
@@ -235,13 +235,12 @@ async fn exchange_padr(
 
         // Wait for PADS
         let timeout = Duration::from_secs(3);
-        let start = tokio::time::Instant::now();
+        let start = Instant::now();
 
         while start.elapsed() < timeout {
             let remaining = timeout.saturating_sub(start.elapsed());
             let mut buf = [0u8; 2048];
-            if let Ok(Ok(n)) =
-                tokio::time::timeout(remaining, transport.recv_discovery(&mut buf)).await
+            if let Ok(Ok(n)) = time::timeout(remaining, transport.recv_discovery(&mut buf)).await
                 && let Some(frame) = PppoeDiscoveryFrame::parse(&buf[..n])
                 && frame.code == CODE_PADS
             {
@@ -289,7 +288,7 @@ pub async fn send_padt(
                 "Failed to transmit PPPoE PADT frame"
             );
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        sleep(Duration::from_millis(10)).await;
     }
 
     info!(
