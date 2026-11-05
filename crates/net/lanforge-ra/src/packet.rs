@@ -18,6 +18,7 @@
 use lanforge_types::network::ra::{PrefixSource, RAPrefix, RdnssConfig};
 
 use std::net::Ipv6Addr;
+use std::time::Duration;
 
 use crate::RaConfig;
 
@@ -180,7 +181,7 @@ pub fn build_ra_packet(
 }
 
 /// Resolves the effective lifetime of a DNS option, defaulting to 2 × `max_interval` if not set.
-fn get_dns_lifetime(configured_lifetime: Option<u32>, max_interval: std::time::Duration) -> u32 {
+fn get_dns_lifetime(configured_lifetime: Option<u32>, max_interval: Duration) -> u32 {
     configured_lifetime
         .unwrap_or_else(|| u32::try_from(max_interval.as_secs() * 2).unwrap_or(u32::MAX))
 }
@@ -325,7 +326,7 @@ pub fn icmpv6_checksum(src: &Ipv6Addr, dst: &Ipv6Addr, payload: &[u8]) -> u16 {
 mod tests {
 
     use super::*;
-    use std::time::Duration;
+    use Duration;
 
     #[test]
     fn checksum_self_validates() {

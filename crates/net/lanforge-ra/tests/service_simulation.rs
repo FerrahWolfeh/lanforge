@@ -7,22 +7,26 @@
     unused_crate_dependencies,
     reason = "integration test crates see every dev-dependency"
 )]
+use std::collections::HashSet;
 use std::net::{Ipv6Addr, SocketAddrV6};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use lanforge_core::bus::{EventBus, LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
+use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_ra::{RaConfig, RaService};
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::Ipv6Prefix;
 use lanforge_types::network::ra::{
     PrefixLifetime, PrefixSource, PreviousLanPrefixes, RAPrefix, RaServerConfig, RouterPriority,
 };
-use lanforge_types::system::ServiceState;
+use lanforge_types::system::{ServiceId, ServiceState};
 use lanforge_types::update::{DeviceUpdate, InterfaceState};
-use tokio::time::timeout;
+use tokio::task::JoinHandle;
+use tokio::time::{sleep, timeout};
 
 /// Interface index of the LAN the RA serves in these tests.
 const LAN: u32 = 2;
@@ -84,7 +88,7 @@ async fn test_ra_inert_full_lifecycle() {
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
     let serve_handle = tokio::spawn(async move {
-        let h = ServiceHandle::new(lanforge_types::system::ServiceId::Ra, ctx_clone.clone());
+        let h = ServiceHandle::new(ServiceId::Ra, ctx_clone.clone());
         service_clone.serve(&ctx_clone, &h).await
     });
 
@@ -102,10 +106,7 @@ async fn test_ra_inert_full_lifecycle() {
     );
 
     // Verify service state is Online
-    assert_eq!(
-        ctx.get_service_state(lanforge_types::system::ServiceId::Ra),
-        ServiceState::Online
-    );
+    assert_eq!(ctx.get_service_state(ServiceId::Ra), ServiceState::Online);
 
     // Verify status was updated in context
     let initial_status = ctx.ra_status();
@@ -163,7 +164,7 @@ async fn test_ra_inert_full_lifecycle() {
             if st.sent_unicast_ras > 0 {
                 return st;
             }
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            sleep(Duration::from_millis(5)).await;
         }
     })
     .await
@@ -253,7 +254,7 @@ async fn test_ra_prefix_deprecation_on_renumber() {
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
     let serve_handle = tokio::spawn(async move {
-        let h = ServiceHandle::new(lanforge_types::system::ServiceId::Ra, ctx_clone.clone());
+        let h = ServiceHandle::new(ServiceId::Ra, ctx_clone.clone());
         service_clone.serve(&ctx_clone, &h).await
     });
     let next_ra = || async {
@@ -341,16 +342,16 @@ async fn test_ra_deprecates_prefix_from_before_restart() {
     });
     let old: Ipv6Addr = "2804:bdc:508e:db00::".parse().unwrap();
     let new: Ipv6Addr = "2804:bdc:509d:4500::".parse().unwrap();
-    ctx.provide_shared(Arc::new(PreviousLanPrefixes(vec![
-        lanforge_types::network::Ipv6Prefix::from_addr(old),
-    ])));
+    ctx.provide_shared(Arc::new(PreviousLanPrefixes(vec![Ipv6Prefix::from_addr(
+        old,
+    )])));
     set_iface_gua(&ctx, LAN, Some("2804:bdc:509d:4500::1".parse().unwrap()));
 
     let (handle, transport) = lanforge_transport::Icmp6Transport::inert();
     let mut service = RaService::with_transport(RaConfig::default(), ctx.clone(), transport);
     let ctx_clone = ctx.clone();
     let serve_handle = tokio::spawn(async move {
-        let h = ServiceHandle::new(lanforge_types::system::ServiceId::Ra, ctx_clone.clone());
+        let h = ServiceHandle::new(ServiceId::Ra, ctx_clone.clone());
         service.serve(&ctx_clone, &h).await
     });
 
@@ -392,16 +393,16 @@ async fn test_ra_deprecates_boot_prefix_withdrawn_before_start() {
     });
     let boot: Ipv6Addr = "2804:bdc:50a7:e800::".parse().unwrap();
     let new: Ipv6Addr = "2804:bdc:50a9:f300::".parse().unwrap();
-    ctx.provide_shared(Arc::new(PreviousLanPrefixes(vec![
-        lanforge_types::network::Ipv6Prefix::from_addr(boot),
-    ])));
+    ctx.provide_shared(Arc::new(PreviousLanPrefixes(vec![Ipv6Prefix::from_addr(
+        boot,
+    )])));
     set_iface_gua(&ctx, LAN, None);
 
     let (handle, transport) = lanforge_transport::Icmp6Transport::inert();
     let mut service = RaService::with_transport(RaConfig::default(), ctx.clone(), transport);
     let ctx_clone = ctx.clone();
     let serve_handle = tokio::spawn(async move {
-        let h = ServiceHandle::new(lanforge_types::system::ServiceId::Ra, ctx_clone.clone());
+        let h = ServiceHandle::new(ServiceId::Ra, ctx_clone.clone());
         service.serve(&ctx_clone, &h).await
     });
     let next_ra = || async {
@@ -457,7 +458,7 @@ async fn test_ra_refuses_to_serve_without_lan_ifindex() {
 
     let (handle, transport) = lanforge_transport::Icmp6Transport::inert();
     let mut service = RaService::with_transport(RaConfig::default(), ctx.clone(), transport);
-    let h = ServiceHandle::new(lanforge_types::system::ServiceId::Ra, ctx.clone());
+    let h = ServiceHandle::new(ServiceId::Ra, ctx.clone());
     let res = timeout(Duration::from_millis(500), service.serve(&ctx, &h))
         .await
         .expect("serve must return, not run on a guessed interface");
@@ -475,7 +476,7 @@ async fn start_ra(
     ctx: &LanforgeContext,
 ) -> (
     lanforge_transport::InertHandle<SocketAddrV6>,
-    tokio::task::JoinHandle<Result<(), lanforge_core::error::CoreError>>,
+    JoinHandle<Result<(), CoreError>>,
 ) {
     ctx.update_ra_server_config(RaServerConfig {
         enabled: true,
@@ -488,7 +489,7 @@ async fn start_ra(
     let mut service = RaService::with_transport(RaConfig::default(), ctx.clone(), transport);
     let ctx_clone = ctx.clone();
     let task = tokio::spawn(async move {
-        let h = ServiceHandle::new(lanforge_types::system::ServiceId::Ra, ctx_clone.clone());
+        let h = ServiceHandle::new(ServiceId::Ra, ctx_clone.clone());
         service.serve(&ctx_clone, &h).await
     });
     let (_, dst) = timeout(Duration::from_millis(1000), handle.recv_reply())
@@ -510,14 +511,14 @@ async fn test_ra_answers_a_solicitation_burst_concurrently() {
     let (ctx, bus) = create_test_context();
     let (handle, task) = start_ra(&ctx).await;
 
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     for i in 1..=HOSTS {
         let src = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, i);
         handle
             .inject(RS.to_vec(), SocketAddrV6::new(src, 0, 0, 0))
             .await;
     }
-    let mut answered = std::collections::HashSet::new();
+    let mut answered = HashSet::new();
     while answered.len() < usize::from(HOSTS) {
         let (pkt, dst) = timeout(Duration::from_millis(2000), handle.recv_reply())
             .await
@@ -546,7 +547,7 @@ async fn test_ra_answers_a_solicitation_burst_concurrently() {
 async fn test_ra_answers_unspecified_source_rs_after_min_delay() {
     let (ctx, bus) = create_test_context();
     let (handle, task) = start_ra(&ctx).await;
-    let startup = std::time::Instant::now();
+    let startup = Instant::now();
 
     handle
         .inject(
@@ -599,7 +600,7 @@ async fn test_ra_deprecation_survives_a_service_restart() {
     let mut service = RaService::with_transport(RaConfig::default(), ctx.clone(), transport);
     let ctx_clone = ctx.clone();
     let task = tokio::spawn(async move {
-        let h = ServiceHandle::new(lanforge_types::system::ServiceId::Ra, ctx_clone.clone());
+        let h = ServiceHandle::new(ServiceId::Ra, ctx_clone.clone());
         service.serve(&ctx_clone, &h).await
     });
     let ra = timeout(Duration::from_millis(1000), handle.recv_payload())
@@ -649,7 +650,7 @@ async fn test_ra_deprecated_valid_lifetime_is_capped_by_what_remains() {
     let mut service = RaService::with_transport(RaConfig::default(), ctx.clone(), transport);
     let ctx_clone = ctx.clone();
     let task = tokio::spawn(async move {
-        let h = ServiceHandle::new(lanforge_types::system::ServiceId::Ra, ctx_clone.clone());
+        let h = ServiceHandle::new(ServiceId::Ra, ctx_clone.clone());
         service.serve(&ctx_clone, &h).await
     });
     let next_ra = || async {
@@ -711,7 +712,7 @@ async fn test_ra_never_advertises_a_made_up_mac() {
     };
     let (handle, transport) = lanforge_transport::Icmp6Transport::inert();
     let mut service = RaService::with_transport(cfg, ctx.clone(), transport);
-    let h = ServiceHandle::new(lanforge_types::system::ServiceId::Ra, ctx.clone());
+    let h = ServiceHandle::new(ServiceId::Ra, ctx.clone());
     let res = timeout(Duration::from_millis(500), service.serve(&ctx, &h))
         .await
         .expect("serve must return");
