@@ -173,7 +173,7 @@ pub fn render_event(e: &TimedEvent, printer: &Printer, verbose: bool) {
         LanforgeEvent::System(sys_evt) => render_system_event(&time_str, sys_evt, printer),
         LanforgeEvent::Network(net_evt) => render_network_event(&time_str, net_evt, printer),
         LanforgeEvent::Storage(storage_evt) => {
-            render_storage_event(&time_str, storage_evt, printer)
+            render_storage_event(&time_str, storage_evt, printer);
         }
         LanforgeEvent::Traffic(_) => {}
     }
@@ -184,6 +184,7 @@ fn format_time(ts: SystemTime) -> String {
     dt.format("%H:%M:%S").to_string()
 }
 
+#[allow(clippy::too_many_lines)]
 fn render_device_event(time_str: &str, evt: &DeviceEvent, printer: &Printer, verbose: bool) {
     match evt {
         DeviceEvent::Discovered { mac, hostname } => {

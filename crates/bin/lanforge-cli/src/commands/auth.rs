@@ -188,7 +188,7 @@ async fn renew_token(
         return printer.print_json(&*resp);
     }
 
-    printer.success(&format!("API token '{target}' renewed successfully.",));
+    printer.success(&format!("API token '{target}' renewed successfully."));
     render_secret_token_banner(&resp.name, &resp.token);
     Ok(())
 }

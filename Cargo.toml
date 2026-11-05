@@ -27,6 +27,7 @@ needless_borrow = "warn"
 doc_markdown = "warn"
 undocumented_unsafe_blocks = "warn"
 multiple_unsafe_ops_per_block = "warn"
+absolute_paths = "warn"
 
 [workspace.dependencies]
 # Actual lanforge stuff

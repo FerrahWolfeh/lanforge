@@ -8,21 +8,23 @@
     reason = "integration test crates see every dev-dependency"
 )]
 use std::fs;
+use std::iter;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tempfile::TempDir;
+use tempfile::{TempDir, tempdir};
+use tokio::sync::broadcast::Receiver;
 use tokio::task::yield_now;
 use tokio::time::sleep;
 
 use lanforge_api::api::{
     AllowlistEntry, DnsUpstreamConfig, HostConfigEntry, Response, SystemConfigExport,
 };
-use lanforge_api::config_file::{ConfigFile, DnsSettings};
+use lanforge_api::config_file::{AdblockSettings, ConfigFile, DnsSettings};
 use lanforge_api_dispatch::ClientContext;
-use lanforge_core::bus::{DnsEvent, EventBus, LanforgeEvent, NetworkEvent};
+use lanforge_core::bus::{DnsEvent, EventBus, LanforgeEvent, NetworkEvent, TimedEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::{AsyncService, ServiceHandle};
@@ -1361,16 +1363,16 @@ const OWNER_RULES: &str = "! Bradesco\n@@||app-measurement.com^\n@@||www.googlet
 
 /// A client whose live adblock settings and rules are the owner's, as the boot applies them.
 #[cfg(feature = "adblock")]
-async fn owner_adblock_client(writable: bool) -> (ClientContext, tempfile::TempDir) {
+async fn owner_adblock_client(writable: bool) -> (ClientContext, TempDir) {
     let client_ctx = init_test_context().await;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir().unwrap();
     let path = dir.path().join("lanforge.toml");
-    std::fs::write(&path, OWNER_ADBLOCK).unwrap();
-    std::fs::create_dir(dir.path().join("adblock")).unwrap();
-    std::fs::write(dir.path().join("adblock/global.rules"), OWNER_RULES).unwrap();
+    fs::write(&path, OWNER_ADBLOCK).unwrap();
+    fs::create_dir(dir.path().join("adblock")).unwrap();
+    fs::write(dir.path().join("adblock/global.rules"), OWNER_RULES).unwrap();
     client_ctx.ctx.set_config_path(&path);
     client_ctx.ctx.set_config_writable(writable);
-    let (adblock, issues) = lanforge_api::config_file::ConfigFile::parse(OWNER_ADBLOCK)
+    let (adblock, issues) = ConfigFile::parse(OWNER_ADBLOCK)
         .unwrap()
         .adblock
         .to_config();
@@ -1385,10 +1387,10 @@ async fn owner_adblock_client(writable: bool) -> (ClientContext, tempfile::TempD
 /// `[adblock]` and the rules file as the boot reads them, plus the `lanforge.toml` text.
 #[cfg(feature = "adblock")]
 fn adblock_in_files(
-    dir: &tempfile::TempDir,
-) -> (lanforge_api::config_file::AdblockSettings, String, String) {
-    let text = std::fs::read_to_string(dir.path().join("lanforge.toml")).unwrap();
-    let (adblock, issues) = lanforge_api::config_file::ConfigFile::parse(&text)
+    dir: &TempDir,
+) -> (AdblockSettings, String, String) {
+    let text = fs::read_to_string(dir.path().join("lanforge.toml")).unwrap();
+    let (adblock, issues) = ConfigFile::parse(&text)
         .unwrap()
         .adblock
         .to_config();
@@ -1541,8 +1543,8 @@ async fn adblock_change_on_read_only_config_applies_in_memory_and_says_so() {
 async fn every_block_path_announces_the_block() {
     let (client_ctx, _dir) = owner_adblock_client(true).await;
     let mut rx = client_ctx.ctx.bus().subscribe_dns();
-    let blocked = |rx: &mut tokio::sync::broadcast::Receiver<_>| {
-        std::iter::from_fn(|| rx.try_recv().ok())
+    let blocked = |rx: &mut Receiver<_>| {
+        iter::from_fn(|| rx.try_recv().ok())
             .filter_map(|e: TimedEvent| match e.event {
                 LanforgeEvent::Dns(DnsEvent::AdblockBlock(d)) => Some(d),
                 _ => None,
@@ -1623,9 +1625,9 @@ async fn a_pasted_list_is_imported_in_one_write() {
 #[tokio::test]
 async fn the_first_rule_creates_the_rules_file() {
     let client_ctx = init_test_context().await;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir().unwrap();
     let path = dir.path().join("lanforge.toml");
-    std::fs::write(&path, "[adblock]\nenabled = true\n").unwrap();
+    fs::write(&path, "[adblock]\nenabled = true\n").unwrap();
     client_ctx.ctx.set_config_path(&path);
     client_ctx.ctx.set_config_writable(true);
 
