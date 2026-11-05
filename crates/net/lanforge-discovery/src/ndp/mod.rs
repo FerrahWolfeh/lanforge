@@ -45,7 +45,7 @@ use lanforge_core::service::{
     AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass, ServiceCommand,
     ServiceHandle, ServiceSpec,
 };
-use lanforge_transport::{ArpProber, TransportMetrics};
+use lanforge_transport::{ArpProber, TransportMetrics, sys};
 use lanforge_types::device::{IPv4State, IPv6State, Origin};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::NeighborEvent;
@@ -72,19 +72,6 @@ use tracing::{debug, error, info, warn};
 
 type NetlinkMessageStream = broadcast::Receiver<(NetlinkMessage<RouteNetlinkMessage>, SocketAddr)>;
 
-fn ifindex_to_name(ifindex: u32) -> Option<String> {
-    let mut buf = [0u8; libc::IF_NAMESIZE];
-    let res = unsafe { libc::if_indextoname(ifindex, buf.as_mut_ptr().cast()) };
-    if res.is_null() {
-        None
-    } else {
-        std::ffi::CStr::from_bytes_until_nul(&buf)
-            .ok()
-            .and_then(|cs| cs.to_str().ok())
-            .map(String::from)
-    }
-}
-
 #[derive(Default)]
 pub(crate) struct IfNameCache {
     pub(crate) cache: std::collections::HashMap<u32, String>,
@@ -101,7 +88,7 @@ impl IfNameCache {
         match self.cache.entry(ifindex) {
             std::collections::hash_map::Entry::Occupied(e) => Some(e.into_mut().as_str()),
             std::collections::hash_map::Entry::Vacant(e) => {
-                let name = ifindex_to_name(ifindex)?;
+                let name = sys::if_index_to_name(ifindex)?;
                 Some(e.insert(name).as_str())
             }
         }

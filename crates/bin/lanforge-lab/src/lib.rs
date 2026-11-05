@@ -39,5 +39,6 @@ pub use report::{
 /// Returns whether the current process has root privileges (EUID 0).
 #[must_use]
 pub fn is_root() -> bool {
+    // SAFETY: geteuid(2) takes no arguments and cannot fail.
     unsafe { libc::geteuid() == 0 }
 }

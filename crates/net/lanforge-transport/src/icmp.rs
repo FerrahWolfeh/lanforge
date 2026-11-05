@@ -1,11 +1,12 @@
 use crate::inert::{InertHandle, InertPort};
 use crate::metrics::{TransportMetrics, TransportStats};
+use crate::sys;
 use parking_lot::Mutex;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
-use std::os::unix::io::AsRawFd;
+use std::os::fd::AsFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
@@ -46,7 +47,7 @@ impl IcmpPinger {
         let socket_v4 = match Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::ICMPV4)) {
             Ok(s) => {
                 let _ = s.set_nonblocking(true);
-                Some(Arc::new(unsafe { AsyncFd::register(s)? }))
+                Some(Arc::new(sys::register_socket(s)?))
             }
             Err(e) => {
                 warn!("Failed to create raw IPv4 ICMP socket: {e}");
@@ -57,19 +58,8 @@ impl IcmpPinger {
         let socket_v6 = match Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6)) {
             Ok(s) => {
                 let _ = s.set_nonblocking(true);
-                let fd = s.as_raw_fd();
-                let offset = 2i32;
-                unsafe {
-                    libc::setsockopt(
-                        fd,
-                        libc::IPPROTO_IPV6,
-                        libc::IPV6_CHECKSUM,
-                        std::ptr::from_ref(&offset).cast::<libc::c_void>(),
-                        u32::try_from(std::mem::size_of::<libc::c_int>()).unwrap_or(4)
-                            as libc::socklen_t,
-                    );
-                }
-                Some(Arc::new(unsafe { AsyncFd::register(s)? }))
+                let _ = sys::set_sockopt_int(s.as_fd(), libc::IPPROTO_IPV6, libc::IPV6_CHECKSUM, 2);
+                Some(Arc::new(sys::register_socket(s)?))
             }
             Err(e) => {
                 warn!("Failed to create raw IPv6 ICMP socket: {e}");
@@ -142,7 +132,7 @@ impl IcmpPinger {
         let s_v6 = socket_v6.clone();
 
         tokio::spawn(async move {
-            let mut buf = [std::mem::MaybeUninit::<u8>::uninit(); 2048];
+            let mut buf = [0u8; 2048];
             loop {
                 if *shutdown_rx.borrow() {
                     break;
@@ -162,10 +152,10 @@ impl IcmpPinger {
                         }
                     } => {
                         if let Ok(mut guard) = guard_res {
-                            match guard.get_inner().recv_from(&mut buf) {
+                            match sys::recv_from(guard.get_inner(), &mut buf) {
                                 Ok((n, addr)) => {
                                     guard.clear_ready();
-                                    let bytes = unsafe { std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), n) };
+                                    let bytes = &buf[..n];
                                     if let Some(sock_addr) = addr.as_socket() {
                                         let ip = sock_addr.ip();
                                         if let Some((id, seq)) = parse_icmpv4_echo_reply(bytes) {
@@ -194,10 +184,10 @@ impl IcmpPinger {
                         }
                     } => {
                         if let Ok(mut guard) = guard_res {
-                            match guard.get_inner().recv_from(&mut buf) {
+                            match sys::recv_from(guard.get_inner(), &mut buf) {
                                 Ok((n, addr)) => {
                                     guard.clear_ready();
-                                    let bytes = unsafe { std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), n) };
+                                    let bytes = &buf[..n];
                                     if let Some(sock_addr) = addr.as_socket() {
                                         let ip = sock_addr.ip();
                                         if let Some((id, seq)) = parse_icmpv6_echo_reply(bytes) {

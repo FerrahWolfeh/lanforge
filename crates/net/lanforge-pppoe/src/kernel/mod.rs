@@ -8,9 +8,43 @@ use routes::{
     add_ipv4_default_route, add_ipv4_peer_route, add_ipv6_link_local, add_static_neighbour,
     assign_ipv4_address, deconfigure_routes_and_addrs, setup_interface_ifreq,
 };
+use std::mem;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use sysctl::enable_interface_procfs;
 use tracing::{info, warn};
+
+/// An `ifreq` naming interface `name` (at most `IFNAMSIZ - 1` bytes, NUL-terminated), all else zero.
+#[allow(
+    clippy::cast_possible_wrap,
+    reason = "c_char is i8 on x86_64 but u8 on aarch64: `as` is the portable byte copy"
+)]
+fn ifreq_named(name: &[u8]) -> libc::ifreq {
+    // SAFETY: `ifreq` is plain data (integers, arrays and unions of them): all-zero is a valid value.
+    let mut ifr: libc::ifreq = unsafe { mem::zeroed() };
+    let name = &name[..name.len().min(libc::IFNAMSIZ - 1)];
+    for (dst, &b) in ifr.ifr_name.iter_mut().zip(name) {
+        *dst = b as libc::c_char;
+    }
+    ifr
+}
+
+/// `ip` as a generic `sockaddr` holding a `sockaddr_in` (family, port 0, address), for `ifreq` fields.
+#[allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    reason = "portable c_char byte copy; AF_INET (2) fits sa_family_t"
+)]
+fn sockaddr_v4(ip: Ipv4Addr) -> libc::sockaddr {
+    let mut sa_data = [0 as libc::c_char; 14];
+    // sockaddr_in after the family: 2 bytes of port, then the address in network order.
+    for (dst, b) in sa_data[2..6].iter_mut().zip(ip.octets()) {
+        *dst = b as libc::c_char;
+    }
+    libc::sockaddr {
+        sa_family: libc::AF_INET as libc::sa_family_t,
+        sa_data,
+    }
+}
 
 pub async fn configure_interface(
     ifname: &str,

@@ -116,6 +116,7 @@ impl DiskBlocklist {
     /// The lists matching `domain` (itself, or a parent through a subdomain rule).
     #[inline]
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[must_use]
     pub fn match_lists(&self, domain: &str) -> ListMatches {
         let mut m = ListMatches::default();
         let mut key_buf = [0u8; 256];

@@ -10,6 +10,7 @@ use crate::server::{DnsContext, DnsLogEvent};
 pub struct AdblockMiddleware;
 
 impl AdblockMiddleware {
+    #[must_use]
     pub fn new() -> Self {
         Self
     }

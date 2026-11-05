@@ -119,6 +119,7 @@ impl<'a> WireHeader<'a> {
 }
 
 /// Helper to skip a DNS name in the wire format without decompressing.
+#[must_use]
 pub fn skip_name(data: &[u8], mut pos: usize) -> Option<usize> {
     loop {
         if pos >= data.len() {

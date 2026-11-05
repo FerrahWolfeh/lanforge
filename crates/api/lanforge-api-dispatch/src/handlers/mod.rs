@@ -13,16 +13,19 @@ use chrono::{DateTime, SecondsFormat, Utc};
 
 impl ClientContext {
     // Utility functions shared across handlers
+    #[must_use]
     pub fn last_seen_secs_ago(&self, last_seen: SystemTime) -> u64 {
         last_seen.elapsed().unwrap_or_default().as_secs()
     }
 }
 
+#[must_use]
 pub fn format_iso8601(t: SystemTime) -> String {
     let datetime: DateTime<Utc> = t.into();
     datetime.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
+#[must_use]
 pub fn duration_since_epoch_u64(t: SystemTime) -> u64 {
     t.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }

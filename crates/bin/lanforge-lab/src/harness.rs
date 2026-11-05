@@ -42,8 +42,8 @@ impl LabHarness {
     pub fn setup_direct() -> Result<Self, LabError> {
         Ok(Self {
             mode: LabMode::Direct,
-            dhcp_target: "127.0.0.1:1067".parse().unwrap(),
-            dns_target: "127.0.0.1:1053".parse().unwrap(),
+            dhcp_target: SocketAddr::from((Ipv4Addr::LOCALHOST, 1067)),
+            dns_target: SocketAddr::from((Ipv4Addr::LOCALHOST, 1053)),
             iface: None,
             netns_mgr: None,
         })

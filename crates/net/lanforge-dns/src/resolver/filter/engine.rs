@@ -14,11 +14,13 @@ pub const LABEL_SEPARATOR: u8 = b'\x01';
 const SOURCE_IDX_SHIFT: u32 = 16;
 
 #[inline]
+#[must_use]
 pub fn encode_val(flags: MatchFlags, source_idx: u16) -> u64 {
     (flags.0 as u64) | ((source_idx as u64) << SOURCE_IDX_SHIFT)
 }
 
 #[inline]
+#[must_use]
 pub fn decode_val(val: u64) -> (MatchFlags, u16) {
     let flags = MatchFlags((val & 0xFF) as u8);
     let source_idx = ((val >> SOURCE_IDX_SHIFT) & 0xFFFF) as u16;
@@ -68,8 +70,8 @@ pub fn encode_reversed_domain(domain: &str, out: &mut [u8; 256]) -> Option<usize
 pub fn reverse_domain_key(domain: &str) -> Option<String> {
     let mut buf = [0u8; 256];
     let len = encode_reversed_domain(domain, &mut buf)?;
-    // Input is ASCII only + 0x01 separator, thus valid UTF-8
-    Some(String::from_utf8(buf[..len].to_vec()).unwrap())
+    // Whole labels (split at the ASCII '.') plus 0x01 separators: always valid UTF-8.
+    String::from_utf8(buf[..len].to_vec()).ok()
 }
 
 /// A matched rule result from the FST engine.
@@ -144,6 +146,9 @@ pub struct DiskFilterMap {
 impl DiskFilterMap {
     pub fn open(path: &Path) -> Result<Self, DnsError> {
         let file = File::open(path)?;
+        // SAFETY: a mapped file must not change underneath us. Compiled lists are only ever written
+        // to a tempfile and renamed into place (`build_fst_map`) or unlinked; neither touches the
+        // inode this map holds.
         let mmap = unsafe { Mmap::map(&file)? };
         let map =
             Map::new(mmap).map_err(|e| DnsError::Generic(format!("FST map load failed: {e}")))?;
@@ -163,6 +168,7 @@ impl DiskFilterMap {
     }
 
     #[inline]
+    #[must_use]
     pub fn match_domain(&self, domain: &str) -> Option<MatchCandidate> {
         let mut key_buf = [0u8; 256];
         let len = encode_reversed_domain(domain, &mut key_buf)?;

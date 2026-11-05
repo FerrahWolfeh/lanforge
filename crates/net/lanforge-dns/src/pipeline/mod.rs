@@ -33,6 +33,7 @@ pub struct DnsPipelineRequest<'a> {
 }
 
 impl<'a> DnsPipelineRequest<'a> {
+    #[must_use]
     pub fn new(
         data: &'a [u8],
         header: &'a WireHeader<'a>,
@@ -75,6 +76,7 @@ pub struct Pipeline {
 }
 
 impl Pipeline {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }

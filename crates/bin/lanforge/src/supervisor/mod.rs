@@ -289,7 +289,7 @@ impl GraphSupervisor {
                 .remove(&id)
                 .expect("Runner missing for registered service");
             let spec = runner.spec();
-            let node = Arc::clone(nodes.get(&id).unwrap());
+            let node = Arc::clone(nodes.get(&id).expect("node created for every graph node"));
 
             // Build receiver map for all dependencies
             let mut dep_rxs = HashMap::new();

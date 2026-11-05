@@ -59,6 +59,7 @@ impl Default for AdblockManifest {
 
 impl AdblockManifest {
     /// Loads manifest from the given path. Returns default empty manifest if not present or corrupt.
+    #[must_use]
     pub fn load_or_default(path: &Path) -> Self {
         if !path.exists() {
             return Self::default();

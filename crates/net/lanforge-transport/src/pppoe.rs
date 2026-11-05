@@ -1,7 +1,8 @@
 use crate::inert::{InertHandle, InertPort};
 use crate::metrics::{TransportMetrics, TransportStats};
+use crate::sys;
 use std::io;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
 use std::sync::Arc;
 use tokio::io::unix::AsyncFd;
 
@@ -120,43 +121,13 @@ impl PppoeTransport {
     }
 
     fn open_discovery_socket(ifindex: u32) -> io::Result<AsyncFd<OwnedFd>> {
-        let fd = unsafe {
-            libc::socket(
-                libc::AF_PACKET,
-                libc::SOCK_RAW | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
-                (libc::ETH_P_ALL as u16).to_be() as libc::c_int,
-            )
-        };
-        if fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
-
-        let saddr = libc::sockaddr_ll {
-            sll_family: libc::AF_PACKET as u16,
-            sll_protocol: ETH_P_PPP_DISC.to_be(),
-            sll_ifindex: ifindex as i32,
-            sll_hatype: 0,
-            sll_pkttype: 0,
-            sll_halen: 6,
-            sll_addr: [0; 8],
-        };
-
-        let res = unsafe {
-            libc::bind(
-                fd,
-                std::ptr::addr_of!(saddr).cast::<libc::sockaddr>(),
-                std::mem::size_of::<libc::sockaddr_ll>() as libc::socklen_t,
-            )
-        };
-        if res < 0 {
-            let err = io::Error::last_os_error();
-            unsafe { libc::close(fd) };
-            return Err(err);
-        }
-
-        let owned_fd = unsafe { OwnedFd::from_raw_fd(fd) };
-        let async_fd = unsafe { AsyncFd::register(owned_fd)? };
-        Ok(async_fd)
+        let fd = sys::socket(
+            libc::AF_PACKET,
+            libc::SOCK_RAW | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
+            libc::c_int::from((libc::ETH_P_ALL as u16).to_be()),
+        )?;
+        sys::bind_packet(fd.as_fd(), ifindex, ETH_P_PPP_DISC)?;
+        sys::register_fd(fd)
     }
 
     /// Creates an inert transport for rootless testing and simulation.
@@ -194,21 +165,15 @@ impl PppoeTransport {
             return Ok(());
         }
 
-        let fd = unsafe {
-            libc::socket(
-                libc::AF_PPPOX,
-                libc::SOCK_STREAM | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
-                0,
-            )
-        };
-        if fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
+        let fd = sys::socket(
+            libc::AF_PPPOX,
+            libc::SOCK_STREAM | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
+            0,
+        )?;
 
         let mut dev_bytes = [0u8; 16];
         let bytes = ifname.as_bytes();
         if bytes.len() >= 16 || bytes.contains(&0) {
-            unsafe { libc::close(fd) };
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "Invalid interface name",
@@ -226,21 +191,20 @@ impl PppoeTransport {
             },
         };
 
+        // SAFETY: `addr` is a `#[repr(C, packed)]` mirror of the kernel's `sockaddr_pppox`, lives for
+        // the whole call, and the length passed is its exact size.
         let res = unsafe {
             libc::connect(
-                fd,
+                fd.as_raw_fd(),
                 std::ptr::addr_of!(addr).cast::<libc::sockaddr>(),
                 std::mem::size_of::<SockAddrPppox>() as libc::socklen_t,
             )
         };
         if res < 0 {
-            let err = io::Error::last_os_error();
-            unsafe { libc::close(fd) };
-            return Err(err);
+            return Err(io::Error::last_os_error());
         }
 
-        let owned_fd = unsafe { OwnedFd::from_raw_fd(fd) };
-        let async_fd = unsafe { AsyncFd::register(owned_fd)? };
+        let async_fd = sys::register_fd(fd)?;
         *self.inner.session.write() = Some(PppoeSessionBackend::Kernel {
             io_fd: Arc::new(async_fd),
             _pppox_fd: None,
@@ -278,7 +242,7 @@ impl PppoeTransport {
             }
         };
 
-        let async_fd = unsafe { AsyncFd::register(chan_fd)? };
+        let async_fd = sys::register_fd(chan_fd)?;
         *self.inner.session.write() = Some(PppoeSessionBackend::Kernel {
             io_fd: Arc::new(async_fd),
             _pppox_fd: pppox_fd,
@@ -305,18 +269,9 @@ impl PppoeTransport {
         let res = match backend {
             PppoeDiscoveryBackend::Kernel(async_fd) => {
                 let mut guard = async_fd.writable().await?;
-                let n = unsafe {
-                    libc::write(
-                        async_fd.get_ref().as_raw_fd(),
-                        frame.as_ptr().cast::<libc::c_void>(),
-                        frame.len(),
-                    )
-                };
+                let n = sys::write(async_fd.get_ref().as_fd(), frame);
                 guard.clear_ready();
-                if n < 0 {
-                    return Err(io::Error::last_os_error());
-                }
-                Ok(n as usize)
+                Ok(n?)
             }
             #[cfg(any(test, feature = "inert"))]
             PppoeDiscoveryBackend::Inert(port) => port
@@ -346,23 +301,17 @@ impl PppoeTransport {
             let res = match &backend {
                 PppoeDiscoveryBackend::Kernel(async_fd) => {
                     let mut guard = async_fd.readable().await?;
-                    let n = unsafe {
-                        libc::read(
-                            async_fd.get_ref().as_raw_fd(),
-                            buf.as_mut_ptr().cast::<libc::c_void>(),
-                            buf.len(),
-                        )
-                    };
-                    if n < 0 {
-                        let err = io::Error::last_os_error();
-                        if err.kind() == io::ErrorKind::WouldBlock {
+                    match sys::read(async_fd.get_ref().as_fd(), buf) {
+                        Ok(n) => {
+                            guard.clear_ready();
+                            Ok(n)
+                        }
+                        Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
                             guard.clear_ready();
                             continue;
                         }
-                        return Err(err);
+                        Err(err) => return Err(err),
                     }
-                    guard.clear_ready();
-                    Ok(n as usize)
                 }
                 #[cfg(any(test, feature = "inert"))]
                 PppoeDiscoveryBackend::Inert(port) => {
@@ -400,18 +349,9 @@ impl PppoeTransport {
         let res = match backend {
             PppoeSessionBackend::Kernel { io_fd, .. } => {
                 let mut guard = io_fd.writable().await?;
-                let n = unsafe {
-                    libc::write(
-                        io_fd.get_ref().as_raw_fd(),
-                        frame.as_ptr().cast::<libc::c_void>(),
-                        frame.len(),
-                    )
-                };
+                let n = sys::write(io_fd.get_ref().as_fd(), frame);
                 guard.clear_ready();
-                if n < 0 {
-                    return Err(io::Error::last_os_error());
-                }
-                Ok(n as usize)
+                Ok(n?)
             }
             #[cfg(any(test, feature = "inert"))]
             PppoeSessionBackend::Inert(port) => port
@@ -441,23 +381,17 @@ impl PppoeTransport {
             let res = match &backend {
                 PppoeSessionBackend::Kernel { io_fd, .. } => {
                     let mut guard = io_fd.readable().await?;
-                    let n = unsafe {
-                        libc::read(
-                            io_fd.get_ref().as_raw_fd(),
-                            buf.as_mut_ptr().cast::<libc::c_void>(),
-                            buf.len(),
-                        )
-                    };
-                    if n < 0 {
-                        let err = io::Error::last_os_error();
-                        if err.kind() == io::ErrorKind::WouldBlock {
+                    match sys::read(io_fd.get_ref().as_fd(), buf) {
+                        Ok(n) => {
+                            guard.clear_ready();
+                            Ok(n)
+                        }
+                        Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
                             guard.clear_ready();
                             continue;
                         }
-                        return Err(err);
+                        Err(err) => return Err(err),
                     }
-                    guard.clear_ready();
-                    Ok(n as usize)
                 }
                 #[cfg(any(test, feature = "inert"))]
                 PppoeSessionBackend::Inert(port) => {
@@ -540,6 +474,15 @@ impl TransportStats for PppoeTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::net::UnixStream;
+
+    /// A connected, non-blocking `AF_UNIX` stream pair standing in for a kernel socket.
+    fn nonblocking_pair() -> (OwnedFd, OwnedFd) {
+        let (a, b) = UnixStream::pair().unwrap();
+        a.set_nonblocking(true).unwrap();
+        b.set_nonblocking(true).unwrap();
+        (a.into(), b.into())
+    }
 
     #[tokio::test]
     async fn should_send_and_receive_in_inert_mode() {
@@ -573,43 +516,16 @@ mod tests {
         assert_eq!(snap.tx_bytes, 6);
 
         // Test attaching kernel channel in inert mode (no-op safety)
-        let dup_fd = unsafe { OwnedFd::from_raw_fd(libc::dup(0)) };
+        let dup_fd = io::stdin().as_fd().try_clone_to_owned().unwrap();
         assert!(transport.attach_kernel_channel(dup_fd).is_ok());
     }
 
     #[tokio::test]
     async fn should_preserve_pppox_fd_when_attaching_kernel_channel_and_release_on_close() {
-        let mut pppox_sv = [0i32; 2];
-        assert_eq!(
-            unsafe {
-                libc::socketpair(
-                    libc::AF_UNIX,
-                    libc::SOCK_STREAM | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
-                    0,
-                    pppox_sv.as_mut_ptr(),
-                )
-            },
-            0
-        );
-        let pppox_client = unsafe { OwnedFd::from_raw_fd(pppox_sv[0]) };
-        let pppox_peer = unsafe { OwnedFd::from_raw_fd(pppox_sv[1]) };
+        let (pppox_client, pppox_peer) = nonblocking_pair();
+        let (chan_client, chan_peer) = nonblocking_pair();
 
-        let mut chan_sv = [0i32; 2];
-        assert_eq!(
-            unsafe {
-                libc::socketpair(
-                    libc::AF_UNIX,
-                    libc::SOCK_STREAM | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
-                    0,
-                    chan_sv.as_mut_ptr(),
-                )
-            },
-            0
-        );
-        let chan_client = unsafe { OwnedFd::from_raw_fd(chan_sv[0]) };
-        let chan_peer = unsafe { OwnedFd::from_raw_fd(chan_sv[1]) };
-
-        let async_pppox = unsafe { AsyncFd::register(pppox_client).unwrap() };
+        let async_pppox = sys::register_fd(pppox_client).unwrap();
         let transport = PppoeTransport {
             inner: Arc::new(PppoeTransportInner {
                 discovery: parking_lot::RwLock::new(None),
@@ -626,28 +542,15 @@ mod tests {
 
         // Verify that the underlying pppox socket WAS NOT closed (peer read returns EAGAIN, not EOF 0)
         let mut probe = [0u8; 4];
-        let n = unsafe {
-            libc::read(
-                pppox_peer.as_raw_fd(),
-                probe.as_mut_ptr().cast::<libc::c_void>(),
-                probe.len(),
-            )
-        };
-        assert_eq!(n, -1);
+        let n = sys::read(pppox_peer.as_fd(), &mut probe);
         assert_eq!(
-            io::Error::last_os_error().kind(),
-            io::ErrorKind::WouldBlock,
+            n.map_err(|e| e.kind()),
+            Err(io::ErrorKind::WouldBlock),
             "Underlying AF_PPPOX socket must remain open after attach_kernel_channel"
         );
 
         // Verify session I/O now goes through the attached kernel channel
-        let written = unsafe {
-            libc::write(
-                chan_peer.as_raw_fd(),
-                [0xc0u8, 0x21, 0x0a, 0x01].as_ptr().cast::<libc::c_void>(),
-                4,
-            )
-        };
+        let written = sys::write(chan_peer.as_fd(), &[0xc0, 0x21, 0x0a, 0x01]).unwrap();
         assert_eq!(written, 4);
         let mut rx_buf = [0u8; 8];
         let rx_n = transport.recv_session(&mut rx_buf).await.unwrap();
@@ -655,13 +558,7 @@ mod tests {
 
         // Closing the session must release both the kernel channel and the underlying pppox socket
         transport.close_session();
-        let eof_pppox = unsafe {
-            libc::read(
-                pppox_peer.as_raw_fd(),
-                probe.as_mut_ptr().cast::<libc::c_void>(),
-                probe.len(),
-            )
-        };
+        let eof_pppox = sys::read(pppox_peer.as_fd(), &mut probe).unwrap();
         assert_eq!(eof_pppox, 0, "AF_PPPOX socket must close on close_session");
     }
 }

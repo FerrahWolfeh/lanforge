@@ -585,6 +585,7 @@ fn should_auto_enable(filter: &AdBlocker, config_enabled: bool) -> bool {
 
 /// Computes the next local DateTime when the daily blocklist check should trigger.
 #[cfg(feature = "adblock")]
+#[must_use]
 pub fn compute_next_refresh_target(
     now: chrono::DateTime<chrono::Local>,
     refresh_time: TimeOfDay,

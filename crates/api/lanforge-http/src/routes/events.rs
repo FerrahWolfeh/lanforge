@@ -236,16 +236,16 @@ fn enrich_interface_info(ctx: &LanforgeContext, ifindex: u32) -> serde_json::Val
     );
 
     let mut if_name = [0u8; libc::IF_NAMESIZE];
-    let name_opt = unsafe {
-        let ptr = libc::if_indextoname(ifindex, if_name.as_mut_ptr().cast());
-        if ptr.is_null() {
-            None
-        } else {
-            std::ffi::CStr::from_ptr(ptr)
-                .to_str()
-                .ok()
-                .map(String::from)
-        }
+    // SAFETY: `if_name` is IF_NAMESIZE bytes, the size if_indextoname(3) requires; on success it
+    // holds a NUL-terminated name.
+    let ptr = unsafe { libc::if_indextoname(ifindex, if_name.as_mut_ptr().cast()) };
+    let name_opt = if ptr.is_null() {
+        None
+    } else {
+        std::ffi::CStr::from_bytes_until_nul(&if_name)
+            .ok()
+            .and_then(|name| name.to_str().ok())
+            .map(String::from)
     };
     if let Some(name) = name_opt {
         map.insert("name".to_string(), serde_json::Value::String(name));

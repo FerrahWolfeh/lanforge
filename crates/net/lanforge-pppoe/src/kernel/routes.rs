@@ -1,5 +1,7 @@
+use super::{ifreq_named, sockaddr_v4};
 use crate::error::PppoeError;
 use futures::TryStreamExt;
+use lanforge_transport::sys;
 use nix::sys::socket::{AddressFamily, SockFlag, SockType, socket};
 use rtnetlink::RouteMessageBuilder;
 use rtnetlink::packet_route::address::{AddressAttribute, AddressHeaderFlags, AddressScope};
@@ -27,7 +29,6 @@ pub fn setup_interface_ifreq(
     let c_ifname = CString::new(ifname)
         .map_err(|_| PppoeError::NegotiationFailed("Invalid interface name for CString".into()))?;
     let bytes = c_ifname.as_bytes();
-    let len = bytes.len().min(15);
 
     let sock = socket(
         AddressFamily::Inet,
@@ -40,76 +41,46 @@ pub fn setup_interface_ifreq(
     // - For virtual ppp interfaces (e.g. ppp0), MTU is the negotiated PPPoE MRU (1492).
     // - For physical/Ethernet interfaces in eBPF mode (e.g. wan0), the physical interface MTU must be 1500.
     let dev_mtu = if ifname.starts_with("ppp") { mtu } else { 1500 };
-    let mut ifr: libc::ifreq = unsafe { std::mem::zeroed() };
-    for (i, &b) in bytes[..len].iter().enumerate() {
-        ifr.ifr_name[i] = b as libc::c_char;
-    }
+    let mut ifr = ifreq_named(bytes);
     ifr.ifr_ifru.ifru_mtu = libc::c_int::from(dev_mtu);
-    unsafe {
-        siocsifmtu(sock.as_raw_fd(), &raw const ifr)?;
-    }
+    // SAFETY: SIOCSIFMTU reads the `ifreq` we own (name + `ifru_mtu`) for the duration of the call.
+    unsafe { siocsifmtu(sock.as_raw_fd(), &raw const ifr) }?;
 
     // Only adjust flags for virtual ppp interfaces (e.g. ppp0), leaving physical/veth WAN links untouched
     if ifname.starts_with("ppp") {
-        let mut ifr_flags: libc::ifreq = unsafe { std::mem::zeroed() };
-        for (i, &b) in bytes[..len].iter().enumerate() {
-            ifr_flags.ifr_name[i] = b as libc::c_char;
-        }
-        unsafe {
-            siocgifflags(sock.as_raw_fd(), &raw mut ifr_flags)?;
-            ifr_flags.ifr_ifru.ifru_flags |=
-                (libc::IFF_UP | libc::IFF_RUNNING | libc::IFF_POINTOPOINT) as i16;
-            siocsifflags(sock.as_raw_fd(), &raw const ifr_flags)?;
-        }
+        let mut ifr_flags = ifreq_named(bytes);
+        // SAFETY: SIOCGIFFLAGS reads the name and writes `ifru_flags` inside the `ifreq` we own.
+        unsafe { siocgifflags(sock.as_raw_fd(), &raw mut ifr_flags) }?;
+        // SAFETY: SIOCGIFFLAGS succeeded, so `ifru_flags` is the field the kernel filled in.
+        let flags = unsafe { ifr_flags.ifr_ifru.ifru_flags };
+        ifr_flags.ifr_ifru.ifru_flags =
+            flags | (libc::IFF_UP | libc::IFF_RUNNING | libc::IFF_POINTOPOINT) as i16;
+        // SAFETY: SIOCSIFFLAGS reads the `ifreq` we own (name + `ifru_flags`).
+        unsafe { siocsifflags(sock.as_raw_fd(), &raw const ifr_flags) }?;
     }
 
     // Set Local & Peer IPv4 Address
     if let (Some(local), Some(peer)) = (local_ip, peer_ip) {
-        let mut ifr_addr: libc::ifreq = unsafe { std::mem::zeroed() };
-        for (i, &b) in bytes[..len].iter().enumerate() {
-            ifr_addr.ifr_name[i] = b as libc::c_char;
-        }
-        let sin = unsafe {
-            &mut *std::ptr::addr_of_mut!(ifr_addr.ifr_ifru.ifru_addr).cast::<libc::sockaddr_in>()
-        };
-        sin.sin_family = libc::AF_INET as u16;
-        sin.sin_addr.s_addr = u32::from_ne_bytes(local.octets());
-        unsafe {
-            siocsifaddr(sock.as_raw_fd(), &raw const ifr_addr)?;
-        }
+        let mut ifr_addr = ifreq_named(bytes);
+        ifr_addr.ifr_ifru.ifru_addr = sockaddr_v4(local);
+        // SAFETY: SIOCSIFADDR reads the `ifreq` we own (name + `ifru_addr`).
+        unsafe { siocsifaddr(sock.as_raw_fd(), &raw const ifr_addr) }?;
 
         // Set /32 netmask (255.255.255.255) to prevent default classful subnet assignment
-        let mut ifr_mask: libc::ifreq = unsafe { std::mem::zeroed() };
-        for (i, &b) in bytes[..len].iter().enumerate() {
-            ifr_mask.ifr_name[i] = b as libc::c_char;
-        }
-        let sin_mask = unsafe {
-            &mut *std::ptr::addr_of_mut!(ifr_mask.ifr_ifru.ifru_netmask).cast::<libc::sockaddr_in>()
-        };
-        sin_mask.sin_family = libc::AF_INET as u16;
-        sin_mask.sin_addr.s_addr = u32::from_ne_bytes([255, 255, 255, 255]);
-        unsafe {
-            siocsifnetmask(sock.as_raw_fd(), &raw const ifr_mask)?;
-        }
+        let mut ifr_mask = ifreq_named(bytes);
+        ifr_mask.ifr_ifru.ifru_netmask = sockaddr_v4(Ipv4Addr::BROADCAST);
+        // SAFETY: SIOCSIFNETMASK reads the `ifreq` we own (name + `ifru_netmask`).
+        unsafe { siocsifnetmask(sock.as_raw_fd(), &raw const ifr_mask) }?;
 
         if ifname.starts_with("ppp") {
-            let mut ifr_dst: libc::ifreq = unsafe { std::mem::zeroed() };
-            for (i, &b) in bytes[..len].iter().enumerate() {
-                ifr_dst.ifr_name[i] = b as libc::c_char;
-            }
-            let sin_dst = unsafe {
-                &mut *std::ptr::addr_of_mut!(ifr_dst.ifr_ifru.ifru_dstaddr)
-                    .cast::<libc::sockaddr_in>()
-            };
-            sin_dst.sin_family = libc::AF_INET as u16;
-            sin_dst.sin_addr.s_addr = u32::from_ne_bytes(peer.octets());
-            unsafe {
-                siocsifdstaddr(sock.as_raw_fd(), &raw const ifr_dst)?;
-            }
+            let mut ifr_dst = ifreq_named(bytes);
+            ifr_dst.ifr_ifru.ifru_dstaddr = sockaddr_v4(peer);
+            // SAFETY: SIOCSIFDSTADDR reads the `ifreq` we own (name + `ifru_dstaddr`).
+            unsafe { siocsifdstaddr(sock.as_raw_fd(), &raw const ifr_dst) }?;
         }
     }
 
-    let ifindex = unsafe { libc::if_nametoindex(c_ifname.as_ptr()) };
+    let ifindex = sys::if_name_to_index(ifname).unwrap_or(0);
     Ok(ifindex)
 }
 
@@ -248,13 +219,9 @@ pub async fn deconfigure_routes_and_addrs(ifname: &str, is_ebpf: bool, peer_ip: 
             "Deconfiguring eBPF physical interface routes and IP addresses via rtnetlink"
         );
 
-        let Ok(c_ifname) = CString::new(ifname) else {
+        let Some(ifindex) = sys::if_name_to_index(ifname) else {
             return;
         };
-        let ifindex = unsafe { libc::if_nametoindex(c_ifname.as_ptr()) };
-        if ifindex == 0 {
-            return;
-        }
 
         if let Ok((conn, handle, _)) = rtnetlink::new_connection() {
             tokio::spawn(conn);
@@ -304,5 +271,24 @@ pub async fn deconfigure_routes_and_addrs(ifname: &str, is_ebpf: bool, peer_ip: 
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::UdpSocket;
+
+    #[test]
+    #[ignore = "needs CAP_NET_ADMIN (run inside `unshare -rn`)"]
+    fn ifreq_setup_assigns_the_local_address() {
+        let local = Ipv4Addr::new(10, 99, 0, 1);
+        let ifindex =
+            setup_interface_ifreq("lo", 1492, Some(local), Some(Ipv4Addr::new(10, 99, 0, 2)))
+                .expect("ioctls on lo");
+        assert_eq!(Some(ifindex), sys::if_name_to_index("lo"));
+        // Binding succeeds only for a local address: proves the sockaddr_in bytes are in order.
+        UdpSocket::bind((local, 0)).expect("10.99.0.1 must be assigned to lo");
+        assert!(UdpSocket::bind((Ipv4Addr::new(1, 0, 99, 10), 0)).is_err());
     }
 }

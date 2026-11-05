@@ -658,7 +658,8 @@ impl Bootstrapper {
 
     /// Checks whether Lanforge is running with sufficient privileges (EUID 0 / root).
     fn check_privileges(cfg: &Config) -> Result<()> {
-        let is_root = unsafe { libc::geteuid() == 0 };
+        // SAFETY: geteuid(2) takes no arguments and cannot fail.
+        let is_root = unsafe { libc::geteuid() } == 0;
         if !is_root {
             if cfg.system.allow_unprivileged {
                 warn!(

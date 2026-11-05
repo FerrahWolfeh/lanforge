@@ -24,8 +24,8 @@ pub struct WatchArgs {
 impl WatchArgs {
     pub async fn execute(self, client: &LanforgeClient, printer: &Printer) -> Result<()> {
         #[cfg(feature = "remote")]
-        if client.remote.is_some() {
-            return stream_remote_events(client, printer, self.verbose).await;
+        if let Some(base) = client.remote.as_deref() {
+            return stream_remote_events(client, base, printer, self.verbose).await;
         }
 
         stream_uds_events(client, printer, self.verbose).await
@@ -89,6 +89,7 @@ async fn stream_uds_events(
 #[cfg(feature = "remote")]
 async fn stream_remote_events(
     client: &LanforgeClient,
+    base: &str,
     printer: &Printer,
     verbose: bool,
 ) -> Result<()> {
@@ -96,7 +97,6 @@ async fn stream_remote_events(
     use http_body_util::BodyExt;
     use hyper::{Method, Request, Uri};
 
-    let base = client.remote.as_ref().unwrap();
     let url = format!("{base}/api/v1/events?follow=true");
     let uri: Uri = url.parse()?;
 

@@ -517,12 +517,11 @@ impl State {
         make_event: impl FnOnce(MacAddr, C, Option<String>, bool) -> Option<DeviceEvent>,
     ) -> EventVec {
         let old_arc = self.devices.get(&mac).cloned();
-        let was_in_table = old_arc.is_some();
         let mut dev = old_arc
             .as_ref()
             .map_or_else(|| Device::new(mac), |d| (**d).clone());
 
-        let was_worthy = was_in_table && old_arc.as_ref().unwrap().is_worthy();
+        let was_worthy = old_arc.as_ref().is_some_and(|d| d.is_worthy());
         let was_status = dev.status;
 
         let change = f(&mut dev);

@@ -70,8 +70,8 @@ impl DependencyGraph {
                         to: target,
                     });
                 }
-                deps.get_mut(&id).unwrap().push(edge);
-                dependents.get_mut(&target).unwrap().push((id, edge));
+                deps.entry(id).or_default().push(edge);
+                dependents.entry(target).or_default().push((id, edge));
             }
         }
 
