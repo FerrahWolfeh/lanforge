@@ -11,10 +11,16 @@ use lanforge_core::error::CoreError;
 use lanforge_core::service::{
     AsyncService, LossPolicy, ServiceCommand, ServiceHandle, StatusReport,
 };
-use lanforge_pppoe::{PppoeConfig, PppoeService};
+use lanforge_pppoe::ipcp::IpcpNegotiated;
+use lanforge_pppoe::kernel::KernelSession;
+use lanforge_pppoe::lcp::LcpNegotiated;
+use lanforge_pppoe::session::PppoeSession;
+use lanforge_pppoe::{PppoeConfig, PppoeError, PppoeHost, PppoeService};
+use lanforge_transport::Icmp6Transport;
 use lanforge_transport::PppoeTransport;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::events::pppoe::{PppoeEvent, PppoeSessionUp};
+use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::snapshot::{WanSnapshot, WanState};
 use lanforge_types::system::{PppoeSessionState, ServiceId, ServiceState};
 use mock_bras::{MockBrasConfig, spawn_mock_bras};
@@ -22,6 +28,38 @@ use tokio::sync::{broadcast, mpsc};
 use tokio::time::timeout;
 
 /// Handle wired to a command channel, as the supervisor provides (admin stop/restart).
+/// Stand-in for the machine: every interface exists with one fixed MAC, the link is up,
+/// `/dev/ppp` is there, and bringing the session up yields `ppp0` without touching the kernel.
+#[derive(Clone, Copy)]
+struct TestHost;
+
+impl PppoeHost for TestHost {
+    fn interface(&self, _name: &str) -> Option<(u32, MacAddr)> {
+        Some((2, MacAddr([0x02, 0x00, 0x00, 0x00, 0x00, 0x02])))
+    }
+
+    fn carrier(&self, _name: &str) -> Option<bool> {
+        Some(true)
+    }
+
+    fn ppp_available(&self) -> bool {
+        true
+    }
+
+    async fn bring_up(
+        &self,
+        _session: &PppoeSession,
+        _lcp: &LcpNegotiated,
+        _ipcp: &IpcpNegotiated,
+    ) -> Result<(String, Option<KernelSession>), PppoeError> {
+        Ok(("ppp0".to_string(), None))
+    }
+
+    fn ra_listener(&self, _interface: &str) -> Option<Icmp6Transport> {
+        None
+    }
+}
+
 fn controlled_handle(ctx: &LanforgeContext) -> (ServiceHandle, mpsc::Sender<ServiceCommand>) {
     let (tx, rx) = mpsc::channel(8);
     (
@@ -42,7 +80,8 @@ where
     F: Fn(&PppoeEvent) -> Option<T>,
 {
     loop {
-        let evt = timeout(Duration::from_secs(3), sub.recv())
+        // Longer than the release wait after a PADT (6 s), during which no event is published.
+        let evt = timeout(Duration::from_secs(10), sub.recv())
             .await
             .expect("Timeout waiting for PPPoE event")
             .expect("Recv error");
@@ -87,8 +126,7 @@ async fn test_pppoe_inert_session_up_and_shutdown() {
     let (handle_inert, transport) = PppoeTransport::inert();
     let _bras = spawn_mock_bras(handle_inert, MockBrasConfig::default());
 
-    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
-    assert!(service.is_inert());
+    let mut service = PppoeService::with_host(cfg, ctx.clone(), transport, TestHost);
 
     let ctx_clone = ctx.clone();
     let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
@@ -128,7 +166,7 @@ async fn test_pppoe_inert_session_up_and_shutdown() {
     assert!(res.is_ok());
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn test_pppoe_reacts_to_config_change_in_place() {
     let (ctx, bus) = create_test_context();
     let mut pppoe_sub = bus.subscribe_pppoe();
@@ -145,7 +183,7 @@ async fn test_pppoe_reacts_to_config_change_in_place() {
     let (handle_inert, transport) = PppoeTransport::inert();
     let _bras = spawn_mock_bras(handle_inert, MockBrasConfig::default());
 
-    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
+    let mut service = PppoeService::with_host(cfg, ctx.clone(), transport, TestHost);
     let ctx_clone = ctx.clone();
     let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
@@ -201,7 +239,7 @@ async fn test_pppoe_reacts_to_config_change_in_place() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn test_pppoe_reacts_to_service_control_restart() {
     let (ctx, bus) = create_test_context();
     let mut pppoe_sub = bus.subscribe_pppoe();
@@ -218,7 +256,7 @@ async fn test_pppoe_reacts_to_service_control_restart() {
     let (handle_inert, transport) = PppoeTransport::inert();
     let _bras = spawn_mock_bras(handle_inert, MockBrasConfig::default());
 
-    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
+    let mut service = PppoeService::with_host(cfg, ctx.clone(), transport, TestHost);
     let ctx_clone = ctx.clone();
     let (h, cmd_tx) = controlled_handle(&ctx_clone);
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
@@ -268,7 +306,7 @@ async fn test_pppoe_reacts_to_service_control_stop() {
     let (handle_inert, transport) = PppoeTransport::inert();
     let _bras = spawn_mock_bras(handle_inert, MockBrasConfig::default());
 
-    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
+    let mut service = PppoeService::with_host(cfg, ctx.clone(), transport, TestHost);
     let ctx_clone = ctx.clone();
     let (h, cmd_tx) = controlled_handle(&ctx_clone);
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
@@ -323,7 +361,7 @@ async fn test_pppoe_emits_auth_failed_and_reconnecting() {
         },
     );
 
-    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
+    let mut service = PppoeService::with_host(cfg, ctx.clone(), transport, TestHost);
     let ctx_clone = ctx.clone();
     let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
@@ -388,7 +426,7 @@ async fn test_pppoe_carrier_drop_and_recovery() {
         },
     );
 
-    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
+    let mut service = PppoeService::with_host(cfg, ctx.clone(), transport, TestHost);
     let ctx_clone = ctx.clone();
     let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
@@ -423,7 +461,7 @@ async fn test_pppoe_disabled_at_startup_transitions_to_inactive() {
     };
 
     let (_handle_inert, transport) = PppoeTransport::inert();
-    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
+    let mut service = PppoeService::with_host(cfg, ctx.clone(), transport, TestHost);
     let h = ServiceHandle::new(ServiceId::Pppoe, ctx.clone());
     let res = service.serve(&ctx, &h).await;
     assert!(res.is_ok());
@@ -448,7 +486,7 @@ async fn test_pppoe_cleanup_guarantees_session_down_on_abort() {
     ctx.update_pppoe_config(cfg.clone());
 
     let (_handle_inert, transport) = PppoeTransport::inert();
-    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
+    let mut service = PppoeService::with_host(cfg, ctx.clone(), transport, TestHost);
     let ctx_clone = ctx.clone();
 
     // 1. Manually establish session status in context to simulate an active session
@@ -524,7 +562,8 @@ async fn test_pppoe_with_terminal_probe_enabled_reports_terminal_status() {
     let (handle_inert, transport) = PppoeTransport::inert();
     let _bras = spawn_mock_bras(handle_inert, MockBrasConfig::default());
 
-    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport).with_prober(prober);
+    let mut service =
+        PppoeService::with_host(cfg, ctx.clone(), transport, TestHost).with_prober(prober);
     let ctx_clone = ctx.clone();
     let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
@@ -573,7 +612,8 @@ async fn test_pppoe_with_injected_prober_reports_probe_response() {
     let (handle_inert, transport) = PppoeTransport::inert();
     let _bras = spawn_mock_bras(handle_inert, MockBrasConfig::default());
 
-    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport).with_prober(prober);
+    let mut service =
+        PppoeService::with_host(cfg, ctx.clone(), transport, TestHost).with_prober(prober);
     let ctx_clone = ctx.clone();
 
     // Spawn inert prober mock responder in background
@@ -648,7 +688,7 @@ async fn test_pppoe_flapping_session_backs_off() {
         },
     );
 
-    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
+    let mut service = PppoeService::with_host(cfg, ctx.clone(), transport, TestHost);
     let ctx_clone = ctx.clone();
     let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
@@ -699,7 +739,7 @@ async fn test_pppoe_session_survives_a_lagged_system_bus() {
     let (handle_inert, transport) = PppoeTransport::inert();
     let _bras = spawn_mock_bras(handle_inert, MockBrasConfig::default());
 
-    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
+    let mut service = PppoeService::with_host(cfg, ctx.clone(), transport, TestHost);
     let ctx_clone = ctx.clone();
     let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
@@ -751,7 +791,7 @@ async fn test_pppoe_session_survives_dependency_notifications() {
     let (handle_inert, transport) = PppoeTransport::inert();
     let _bras = spawn_mock_bras(handle_inert, MockBrasConfig::default());
 
-    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
+    let mut service = PppoeService::with_host(cfg, ctx.clone(), transport, TestHost);
     let ctx_clone = ctx.clone();
     let (h, cmd_tx) = controlled_handle(&ctx);
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
@@ -808,7 +848,7 @@ async fn test_pppoe_stop_then_cleanup_publishes_one_session_down() {
     let (handle_inert, transport) = PppoeTransport::inert();
     let _bras = spawn_mock_bras(handle_inert, MockBrasConfig::default());
 
-    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
+    let mut service = PppoeService::with_host(cfg, ctx.clone(), transport, TestHost);
     let ctx_clone = ctx.clone();
     let (h, cmd_tx) = controlled_handle(&ctx);
     let handle = tokio::spawn(async move {
@@ -872,7 +912,7 @@ async fn test_pppoe_reacts_to_padt_from_the_concentrator() {
         },
     );
 
-    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
+    let mut service = PppoeService::with_host(cfg, ctx.clone(), transport, TestHost);
     let ctx_clone = ctx.clone();
     let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
@@ -925,7 +965,7 @@ async fn test_pppoe_settles_before_the_session_is_up() {
         },
     );
 
-    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
+    let mut service = PppoeService::with_host(cfg, ctx.clone(), transport, TestHost);
     let ctx_clone = ctx.clone();
     let (h, cmd_tx) = controlled_handle(&ctx);
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
@@ -976,7 +1016,7 @@ async fn test_pppoe_reports_its_state_through_the_handle() {
     let h = ServiceHandle::with_command_channel(ServiceId::Pppoe, ctx.clone(), cmd_rx)
         .with_status_reporter(status_tx);
 
-    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
+    let mut service = PppoeService::with_host(cfg, ctx.clone(), transport, TestHost);
     let ctx_clone = ctx.clone();
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
     wait_for_session_up(&mut pppoe_sub).await;
@@ -1038,7 +1078,7 @@ async fn test_pppoe_follows_the_isp_ipv6_resolvers_from_ra() {
     let (handle_inert, transport) = PppoeTransport::inert();
     let _bras = spawn_mock_bras(handle_inert, MockBrasConfig::default());
     let (ra_handle, ra_transport) = Icmp6Transport::inert();
-    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport)
+    let mut service = PppoeService::with_host(cfg, ctx.clone(), transport, TestHost)
         .with_wan_ra_transport(ra_transport);
     let ctx_serve = ctx.clone();
     let h = ServiceHandle::new(ServiceId::Pppoe, ctx_serve.clone());
@@ -1076,7 +1116,7 @@ async fn test_pppoe_follows_the_isp_ipv6_resolvers_from_ra() {
 }
 
 /// What the concentrator saw, plus the serve task as the supervisor's runner holds it.
-type Served = tokio::task::JoinHandle<(PppoeService, Result<(), CoreError>)>;
+type Served = tokio::task::JoinHandle<(PppoeService<TestHost>, Result<(), CoreError>)>;
 
 /// Starts the service against a mock concentrator.
 fn start_with_bras(
@@ -1092,7 +1132,7 @@ fn start_with_bras(
     let (handle_inert, transport) = PppoeTransport::inert();
     let seen = bras.seen.clone();
     let _bras = spawn_mock_bras(handle_inert, bras);
-    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
+    let mut service = PppoeService::with_host(cfg, ctx.clone(), transport, TestHost);
     let ctx_clone = ctx.clone();
     let (h, cmd_tx) = controlled_handle(ctx);
     let handle = tokio::spawn(async move {
@@ -1105,7 +1145,7 @@ fn start_with_bras(
 /// New credentials end the session and the next one must log in with them. The service went
 /// back to discovery with the configuration it held before the change (the keepalive saw the
 /// change, the service never did): the ISP got the old username again.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn test_pppoe_reconnects_with_the_new_credentials() {
     let (ctx, bus) = create_test_context();
     let mut pppoe_sub = bus.subscribe_pppoe();
@@ -1187,7 +1227,7 @@ async fn test_pppoe_runtime_settings_apply_without_reconnect() {
 /// A change that lands while the session is still being negotiated (discovery, LCP, auth) is not
 /// lost: the keepalive used to open a fresh subscription, already "up to date", and the session
 /// stayed on the old credentials until the next drop.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn test_pppoe_change_during_negotiation_is_not_lost() {
     let (ctx, bus) = create_test_context();
     let mut pppoe_sub = bus.subscribe_pppoe();
@@ -1218,7 +1258,8 @@ async fn test_pppoe_change_during_negotiation_is_not_lost() {
         ..cfg
     });
 
-    let names = timeout(Duration::from_secs(5), async {
+    // Budget: the reconnect waits the 6 s release after its own PADT.
+    let names = timeout(Duration::from_secs(15), async {
         loop {
             wait_for_session_up(&mut pppoe_sub).await;
             let names = seen.lock().unwrap().chap_names.clone();
@@ -1235,6 +1276,176 @@ async fn test_pppoe_change_during_negotiation_is_not_lost() {
         )
     });
     assert!(names.len() <= 2, "{names:?}");
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(Duration::from_secs(2), handle).await;
+}
+
+/// The next `SessionUp`, however long the gaps between events (virtual clock).
+async fn session_up_within(
+    sub: &mut broadcast::Receiver<TimedEvent>,
+    limit: Duration,
+) -> PppoeSessionUp {
+    timeout(limit, async {
+        loop {
+            if let Ok(evt) = sub.recv().await
+                && let LanforgeEvent::Pppoe(PppoeEvent::SessionUp(up)) = evt.event
+            {
+                return *up;
+            }
+        }
+    })
+    .await
+    .expect("session comes up")
+}
+
+/// Owner logs (MX204 BNG, two restarts): the old instance's PADT went out, the new instance's
+/// PADR got the same session ID back within a second, LCP opened and no Challenge came; only an
+/// attempt a regular backoff later got a fresh ID. The half-open session must be retried within
+/// seconds, not after the regular reconnect delay.
+#[tokio::test(start_paused = true)]
+async fn a_half_open_session_after_restart_is_retried_within_seconds() {
+    let (ctx, bus) = create_test_context();
+    let mut pppoe_sub = bus.subscribe_pppoe();
+    let cfg = PppoeConfig {
+        enabled: true,
+        wan_iface: "eth1".into(),
+        username: "client1".into(),
+        reconnect_delay_secs: 10,
+        ..Default::default()
+    };
+    let bras = MockBrasConfig {
+        session_id: 0x0042,
+        half_open: Some((0x1222, Duration::from_secs(2))),
+        ..Default::default()
+    };
+    let started = tokio::time::Instant::now();
+    let (seen, _cmd_tx, handle) = start_with_bras(&ctx, cfg, bras);
+
+    let up = session_up_within(&mut pppoe_sub, Duration::from_secs(60)).await;
+    let took = started.elapsed();
+    assert_eq!(
+        up.session_id, 0x0042,
+        "the fresh session, not the half-open one"
+    );
+    // Old code: 14.8 s. Now: 5 s Challenge window + 6 s release wait + reconnect.
+    assert!(took <= Duration::from_secs(12), "WAN down for {took:?}");
+    let (half_open, padts) = {
+        let seen = seen.lock().unwrap();
+        (seen.half_open_sessions, seen.padts)
+    };
+    assert_eq!(half_open, 1);
+    assert!(
+        padts >= 1,
+        "the half-open session is terminated ({padts} PADTs)"
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(Duration::from_secs(2), handle).await;
+}
+
+/// The concentrator holds the ID longer than the release wait: the next PADS with the same ID is
+/// terminated on sight instead of waiting another 5 s for a Challenge.
+#[tokio::test(start_paused = true)]
+async fn the_same_half_open_session_is_not_negotiated_twice() {
+    let (ctx, bus) = create_test_context();
+    let mut pppoe_sub = bus.subscribe_pppoe();
+    let cfg = PppoeConfig {
+        enabled: true,
+        wan_iface: "eth1".into(),
+        username: "client1".into(),
+        reconnect_delay_secs: 10,
+        ..Default::default()
+    };
+    let bras = MockBrasConfig {
+        session_id: 0x0042,
+        half_open: Some((0x1222, Duration::from_secs(8))),
+        ..Default::default()
+    };
+    let (seen, _cmd_tx, handle) = start_with_bras(&ctx, cfg, bras);
+
+    let up = session_up_within(&mut pppoe_sub, Duration::from_secs(120)).await;
+    assert_eq!(up.session_id, 0x0042);
+    let (half_open, padts) = {
+        let seen = seen.lock().unwrap();
+        (seen.half_open_sessions, seen.padts)
+    };
+    assert!(half_open >= 2, "{half_open} half-open sessions");
+    assert!(
+        padts >= half_open,
+        "every half-open one is terminated ({padts} PADTs for {half_open})"
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(Duration::from_secs(2), handle).await;
+}
+
+/// Box logs (MX204): the ID was still handed out 2.9 s after a PADT and released by 6 s. After
+/// its own PADT the client waits that long before discovering again, so a concentrator holding
+/// the ID for 5 s gives out a half-open session once (the restart) and not a second time.
+#[tokio::test(start_paused = true)]
+async fn discovery_waits_for_the_concentrator_to_release_a_terminated_session() {
+    let (ctx, bus) = create_test_context();
+    let mut pppoe_sub = bus.subscribe_pppoe();
+    let cfg = PppoeConfig {
+        enabled: true,
+        wan_iface: "eth1".into(),
+        username: "client1".into(),
+        reconnect_delay_secs: 10,
+        ..Default::default()
+    };
+    let bras = MockBrasConfig {
+        session_id: 0x0042,
+        half_open: Some((0x1222, Duration::from_secs(5))),
+        ..Default::default()
+    };
+    let (seen, _cmd_tx, handle) = start_with_bras(&ctx, cfg, bras);
+
+    let up = session_up_within(&mut pppoe_sub, Duration::from_secs(60)).await;
+    assert_eq!(up.session_id, 0x0042);
+    let half_open = seen.lock().unwrap().half_open_sessions;
+    assert_eq!(
+        half_open, 1,
+        "the retry came before the concentrator let go"
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(Duration::from_secs(2), handle).await;
+}
+
+/// Some concentrators always hand the same session ID to the same MAC. A refused half-open ID
+/// is negotiated on the next attempt (not refused forever), and an admin reconnect (`Restart`)
+/// waits for the release instead of rediscovering straight after its own PADT.
+#[tokio::test(start_paused = true)]
+async fn a_concentrator_reusing_one_session_id_still_connects_and_reconnects() {
+    let (ctx, bus) = create_test_context();
+    let mut pppoe_sub = bus.subscribe_pppoe();
+    let cfg = PppoeConfig {
+        enabled: true,
+        wan_iface: "eth1".into(),
+        username: "client1".into(),
+        reconnect_delay_secs: 10,
+        ..Default::default()
+    };
+    let bras = MockBrasConfig {
+        session_id: 0x0042,
+        half_open: Some((0x0042, Duration::from_secs(2))),
+        ..Default::default()
+    };
+    let (seen, cmd_tx, handle) = start_with_bras(&ctx, cfg, bras);
+
+    let up = session_up_within(&mut pppoe_sub, Duration::from_secs(120)).await;
+    assert_eq!(up.session_id, 0x0042);
+    let before = seen.lock().unwrap().half_open_sessions;
+
+    cmd_tx.send(ServiceCommand::Restart).await.unwrap();
+    let up = session_up_within(&mut pppoe_sub, Duration::from_secs(60)).await;
+    assert_eq!(up.session_id, 0x0042);
+    let after = seen.lock().unwrap().half_open_sessions;
+    assert_eq!(
+        after, before,
+        "the reconnect hit the session its own PADT ended"
+    );
+
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = timeout(Duration::from_secs(2), handle).await;
 }

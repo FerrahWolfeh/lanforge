@@ -175,10 +175,9 @@ listen_addr = "[::]:69"
 enabled = true
 
 
-# [pppoe] - Integrated PPPoE WAN Concentrator & Fast-Path
+# [pppoe] - Integrated PPPoE WAN Concentrator
 [pppoe]
 enabled = false
-dataplane = "kernel"
 wan_iface = "eth1"
 username = "user@isp.com"
 password = "secretpassword"

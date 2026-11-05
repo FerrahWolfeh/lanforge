@@ -62,12 +62,7 @@ impl LanforgeContext {
                     let from_config = self.with_config(|c| c.ra.enabled);
                     from_status && from_config
                 }
-                Cap::NdpDiscovery
-                | Cap::MdnsProbe
-                | Cap::Uds
-                | Cap::Zstd
-                | Cap::Storage
-                | Cap::Ebpf => true,
+                Cap::NdpDiscovery | Cap::MdnsProbe | Cap::Uds | Cap::Zstd | Cap::Storage => true,
                 Cap::Http => status.as_ref().is_none_or(|s| s.http_enabled),
                 Cap::Webui => status.as_ref().is_none_or(|s| s.http_enabled),
                 Cap::Pppoe => {

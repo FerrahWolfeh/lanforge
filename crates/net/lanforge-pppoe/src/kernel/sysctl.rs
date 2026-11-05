@@ -4,11 +4,9 @@ use nix::sys::socket::{AddressFamily, SockFlag, SockType, socket};
 use std::ffi::CString;
 use std::os::fd::AsRawFd;
 use std::path::Path;
-use tracing::debug;
 
 const SIOCETHTOOL: libc::c_ulong = 0x8946;
 
-const ETHTOOL_STXCSUM: u32 = 0x0000_0017;
 const ETHTOOL_STSO: u32 = 0x0000_001f;
 const ETHTOOL_SGSO: u32 = 0x0000_0029;
 
@@ -78,19 +76,4 @@ pub fn enable_interface_procfs(ifname: &str) {
     // Disable TSO/GSO via kernel SIOCETHTOOL ioctl
     let _ = set_ethtool_flag(ifname, ETHTOOL_STSO, 0);
     let _ = set_ethtool_flag(ifname, ETHTOOL_SGSO, 0);
-
-    // For physical interfaces in eBPF mode, disable hardware TX checksum offload via kernel ioctl
-    if !ifname.starts_with("ppp") {
-        let _ = set_ethtool_flag(ifname, ETHTOOL_STXCSUM, 0);
-    }
-}
-
-pub fn restore_interface_offloads(ifname: &str) {
-    debug!(
-        ifname,
-        "Restoring network interface offloads via kernel ioctl"
-    );
-    let _ = set_ethtool_flag(ifname, ETHTOOL_STSO, 1);
-    let _ = set_ethtool_flag(ifname, ETHTOOL_SGSO, 1);
-    let _ = set_ethtool_flag(ifname, ETHTOOL_STXCSUM, 1);
 }

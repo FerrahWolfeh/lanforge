@@ -63,7 +63,6 @@ discovery = []
 http = ["dep:lanforge-http", "lanforge-http/server"]
 uds = ["dep:lanforge-uds"]
 webui = ["http", "lanforge-http/webui"]
-ebpf = ["pppoe", "lanforge-pppoe?/ebpf"]
 
 # Profiling & Diagnostics
 hotpath = [

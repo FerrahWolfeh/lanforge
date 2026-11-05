@@ -107,7 +107,6 @@ pub enum Cap {
     #[serde(alias = "sqm")]
     Traffic,
     Adblock,
-    Ebpf,
     Webui,
 }
 
@@ -486,7 +485,6 @@ impl PppoeSessionState {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PppoeStatusResponse {
     pub enabled: bool,
-    pub dataplane: Option<crate::network::pppoe::PppoeDataplane>,
     pub state: PppoeSessionState,
     pub interface: Option<String>,
     pub wan_iface: Option<String>,

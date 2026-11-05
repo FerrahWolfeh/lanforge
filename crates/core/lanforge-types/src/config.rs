@@ -269,8 +269,7 @@ impl ConfigSection for PppoeConfig {
             ChangeImpact::None
         } else if old.wan_iface != new.wan_iface {
             ChangeImpact::Rebind
-        } else if old.dataplane != new.dataplane
-            || old.username != new.username
+        } else if old.username != new.username
             || old.password != new.password
             || old.service_name != new.service_name
             || old.ac_name != new.ac_name
@@ -620,7 +619,7 @@ mod tests {
             ChangeImpact::Rebind
         );
 
-        // Reconnect: username, password, dataplane, auth, mru
+        // Reconnect: username, password, auth, mru
         let mut rec_user = base.clone();
         rec_user.username = "user2".into();
         assert_eq!(

@@ -23,7 +23,7 @@ A high-performance, resource-efficient Rust-based router and LAN orchestration p
 # Architectural Patterns & Service Lifecycle
 
 ## 1. The Service Model & The Golden Rule of Isolation
-Background daemons (DHCP, RA, DNS, PPPoE, Firewall, etc.) are implemented using the `#[lanforge_service]` attribute and the `AsyncService` or `SyncService` traits. They are managed by a central **Supervisor** that handles retries, backoff, and state monitoring.
+Background daemons (DHCP, RA, DNS, PPPoE, Firewall, etc.) implement the `AsyncService` or `SyncService` traits (with a hand-written `spec()`). They are managed by a central **Supervisor** that handles retries, backoff, and state monitoring.
 
 ### The Golden Rule of Isolation
 **Configuration changes, module reconnections, or single-service bounces MUST NEVER trigger a global daemon reboot or tear down unrelated services.**
@@ -122,6 +122,12 @@ Inter-service communication is powered by a multi-topic broadcast bus:
 - **Dual-Stack Native ("Y" Architecture)**: Avoid hybrid sockets (`IPV6_V6ONLY = false`) to eliminate kernel IPv4-mapped address translation (`::ffff:x.x.x.x`). Services bind native IPv4 and IPv6 independently while exposing unified async streams (`UdpTransport`, `DualTcpListener`).
 - **Rootless & Zero-Mock Daemons**: Domain services (`RaService`, `Dhcpv4Service`, `Dhcpv6Service`, `DnsService`, etc.) must not contain mock branches, synthetic flags, or simulation-specific conditionals.
 - **Pure Dependency Injection**: Tests and simulations instantiate in-memory transports via `(handle, transport) = ...::inert()` and pass them to services via `Service::with_transport(cfg, ctx, transport)`.
+- **Host seams**: what a service does to the machine beyond sockets is a trait with the real implementation as the
+  default type parameter: `PppoeService<H: PppoeHost = KernelHost>`, `NftService<A: NftApplier = KernelNft>`,
+  `TrafficService<H: TrafficHost = KernelTraffic>`. Test stand-ins live behind the crate's `inert` feature or in the
+  tests themselves, never as a flag or an `is_inert()` check inside the service.
+- **Raw syscalls** go through `lanforge_transport::sys` (one documented `unsafe` per wrapper); service crates do not
+  add their own `unsafe` blocks.
 
 ---
 

@@ -6,7 +6,6 @@ use socket2::{Domain, Protocol, Socket, Type};
 use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
-use std::os::fd::AsFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
@@ -58,7 +57,6 @@ impl IcmpPinger {
         let socket_v6 = match Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6)) {
             Ok(s) => {
                 let _ = s.set_nonblocking(true);
-                let _ = sys::set_sockopt_int(s.as_fd(), libc::IPPROTO_IPV6, libc::IPV6_CHECKSUM, 2);
                 Some(Arc::new(sys::register_socket(s)?))
             }
             Err(e) => {

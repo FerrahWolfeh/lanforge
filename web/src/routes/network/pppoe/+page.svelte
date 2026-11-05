@@ -13,7 +13,6 @@
 	import type {
 		PppoeConfig,
 		PppoeStatusResponse,
-		PppoeDataplane,
 		PppoeAuthMethod,
 		NetworkInterfaceInfo,
 	} from "$lib/api/types";
@@ -21,7 +20,6 @@
 	import { onMount } from "svelte";
 	import { fly } from "svelte/transition";
 	import { cubicOut } from "svelte/easing";
-	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
 	import { createPolling } from "$lib/utils/polling";
 
 	import PlugZapIcon from "@lucide/svelte/icons/plug-zap";
@@ -34,9 +32,7 @@
 
 	import PppoeStatsCards from "./components/PppoeStatsCards.svelte";
 	import PppoeConnectionTab from "./components/PppoeConnectionTab.svelte";
-	import PppoeAccelerationTab from "./components/PppoeAccelerationTab.svelte";
 	import PppoeTimersTab from "./components/PppoeTimersTab.svelte";
-	import PppoeEbpfModal from "./components/PppoeEbpfModal.svelte";
 	import FloatingSaveBar from "$lib/components/FloatingSaveBar.svelte";
 	import PageHeader from "$lib/components/PageHeader.svelte";
 	import StatusBadge from "$lib/components/StatusBadge.svelte";
@@ -48,7 +44,6 @@
 	let saving = $state(false);
 	let reconnecting = $state(false);
 	let disconnecting = $state(false);
-	let showEbpfWarningDialog = $state(false);
 	let availableInterfaces = $state<NetworkInterfaceInfo[]>([]);
 	let activeTab = $state("connection");
 
@@ -71,7 +66,6 @@
 
 	// Editable form fields
 	let formEnabled = $state(false);
-	let formDataplane = $state<PppoeDataplane>("kernel");
 	let formWanIface = $state("eth1");
 	let formUsername = $state("");
 	let formPassword = $state("");
@@ -99,7 +93,6 @@
 	let isDirty = $derived.by(() => {
 		if (!config) return false;
 		if (formEnabled !== config.enabled) return true;
-		if (formDataplane !== (config.dataplane ?? "kernel")) return true;
 		const defaultWan = availableInterfaces[0]?.name || "eth1";
 		if (formWanIface !== (config.wan_iface || defaultWan)) return true;
 		if (formUsername !== config.username) return true;
@@ -133,7 +126,6 @@
 
 	function syncFormFromConfig(c: PppoeConfig) {
 		formEnabled = c.enabled;
-		formDataplane = c.dataplane ?? "kernel";
 		formWanIface = c.wan_iface || availableInterfaces[0]?.name || "eth1";
 		formUsername = c.username;
 		formPassword = c.password;
@@ -202,7 +194,6 @@
 		try {
 			const payload: PppoeConfig = {
 				enabled: formEnabled,
-				dataplane: formDataplane,
 				wan_iface: formWanIface.trim(),
 				username: formUsername.trim(),
 				password: formPassword,
@@ -277,14 +268,6 @@
 		}
 	}
 
-	function handleDataplaneSelect(mode: PppoeDataplane) {
-		if (mode === "ebpf" && formDataplane !== "ebpf") {
-			showEbpfWarningDialog = true;
-		} else {
-			formDataplane = mode;
-		}
-	}
-
 	onMount(() => {
 		loadAll();
 		const stopPolling = createPolling(() => loadAll(true), 4000);
@@ -298,7 +281,7 @@
 	<!-- Page Header -->
 	<PageHeader
 		title="PPPoE WAN Concentrator"
-		description="Carrier broadband link orchestration, credentials, MSS clamping, and eBPF Fast-Path."
+		description="Carrier broadband link orchestration, credentials, and MSS clamping."
 		icon={PlugZapIcon}
 	>
 		{#snippet badge()}
@@ -405,7 +388,6 @@
 	<PppoeStatsCards
 		{status}
 		{config}
-		{formDataplane}
 		{formWanIface}
 		{formAuth}
 		{formServiceName}
@@ -415,9 +397,6 @@
 	<Tabs.Root bind:value={activeTab} class="w-full">
 		<Tabs.List class="flex w-full overflow-x-auto justify-start sm:inline-flex sm:w-auto p-1 mb-4 no-scrollbar">
 			<Tabs.Trigger value="connection">Uplink & Credentials</Tabs.Trigger>
-			{#if capabilitiesState.isCompiled("ebpf")}
-				<Tabs.Trigger value="acceleration">Dataplane & Acceleration</Tabs.Trigger>
-			{/if}
 			<Tabs.Trigger value="timers">Parameters & Timers</Tabs.Trigger>
 		</Tabs.List>
 
@@ -441,15 +420,6 @@
 			/>
 		</Tabs.Content>
 
-		{#if capabilitiesState.isCompiled("ebpf")}
-			<Tabs.Content value="acceleration">
-				<PppoeAccelerationTab
-					bind:formDataplane
-					onSelectEbpf={() => handleDataplaneSelect("ebpf")}
-				/>
-			</Tabs.Content>
-		{/if}
-
 		<Tabs.Content value="timers">
 			<PppoeTimersTab
 				bind:formMru
@@ -462,12 +432,6 @@
 			/>
 		</Tabs.Content>
 	</Tabs.Root>
-
-	<!-- eBPF Modal Dialog -->
-	<PppoeEbpfModal
-		bind:open={showEbpfWarningDialog}
-		onConfirm={() => { formDataplane = "ebpf"; }}
-	/>
 
 	<!-- Floating GPU-Accelerated Save/Discard Action Island -->
 	<FloatingSaveBar

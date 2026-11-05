@@ -19,6 +19,11 @@ parking_lot = { workspace = true }
 nftables = "0.6.3"
 serde_json.workspace = true
 
+[features]
+default = ["inert"]
+# In-memory ruleset recorder for rootless tests (`NftService::inert`).
+inert = []
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
 serde_json = { workspace = true }

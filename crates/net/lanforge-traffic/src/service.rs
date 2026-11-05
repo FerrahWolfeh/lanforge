@@ -12,8 +12,9 @@ use lanforge_types::network::TrafficConfig;
 use lanforge_types::system::{DormantReason, ServiceId, ServiceState, TrafficStatusResponse};
 use tracing::{debug, info};
 
-use crate::sqm::{apply_sqm, clear_sqm};
-use crate::tuning::apply_tuning;
+#[cfg(any(test, feature = "inert"))]
+use crate::host::InertTraffic;
+use crate::host::{KernelTraffic, TrafficHost};
 
 const TRAFFIC_DEPS: &[Edge] = &[
     Edge::requires(
@@ -24,36 +25,41 @@ const TRAFFIC_DEPS: &[Edge] = &[
 ];
 
 #[derive(Clone)]
-pub struct TrafficService {
+pub struct TrafficService<H: TrafficHost = KernelTraffic> {
     cfg: TrafficConfig,
     active_wan: Option<String>,
     active_ifb: Option<String>,
     is_pppoe_active: bool,
     tuned_interfaces: Vec<String>,
     effective_cpu_mask: String,
-    inert: bool,
+    /// NIC tuning, `tc` queues and counters: the kernel, or nothing in rootless tests.
+    host: H,
 }
 
-impl TrafficService {
-    /// Static identifier for the service.
-    pub const SERVICE_ID: ServiceId = ServiceId::Traffic;
+impl TrafficService<KernelTraffic> {
+    /// The production service: tunes NICs and shapes the WAN through the kernel.
     #[must_use]
     pub fn new(cfg: TrafficConfig) -> Self {
-        let cpu_mask = crate::tuning::cpu::resolve_effective_cpu_mask(&cfg.tuning.cpu_mask);
-        Self {
-            cfg,
-            active_wan: None,
-            active_ifb: None,
-            is_pppoe_active: false,
-            tuned_interfaces: Vec::new(),
-            effective_cpu_mask: cpu_mask,
-            inert: false,
-        }
+        Self::with_host(cfg, KernelTraffic)
     }
+}
 
-    /// Creates an inert instance of `TrafficService` for rootless testing and dry-run execution.
+#[cfg(any(test, feature = "inert"))]
+impl TrafficService<InertTraffic> {
+    /// A service that tracks tuning and SQM state without touching the machine (rootless).
     #[must_use]
     pub fn inert(cfg: TrafficConfig) -> Self {
+        Self::with_host(cfg, InertTraffic)
+    }
+}
+
+impl<H: TrafficHost> TrafficService<H> {
+    /// Static identifier for the service.
+    pub const SERVICE_ID: ServiceId = ServiceId::Traffic;
+
+    /// A service acting on the machine through `host`.
+    #[must_use]
+    pub fn with_host(cfg: TrafficConfig, host: H) -> Self {
         let cpu_mask = crate::tuning::cpu::resolve_effective_cpu_mask(&cfg.tuning.cpu_mask);
         Self {
             cfg,
@@ -62,19 +68,8 @@ impl TrafficService {
             is_pppoe_active: false,
             tuned_interfaces: Vec::new(),
             effective_cpu_mask: cpu_mask,
-            inert: true,
+            host,
         }
-    }
-
-    #[must_use]
-    pub const fn with_inert(mut self, inert: bool) -> Self {
-        self.inert = inert;
-        self
-    }
-
-    #[must_use]
-    pub const fn is_inert(&self) -> bool {
-        self.inert
     }
 
     fn publish_status(&self, ctx: &LanforgeContext, state: ServiceState) {
@@ -143,22 +138,15 @@ impl TrafficService {
             return;
         }
 
-        let ifb = if self.inert {
-            let dev = if self.cfg.sqm.ingress_device.trim().is_empty() {
-                "ifb4lanforge".to_string()
-            } else {
-                self.cfg.sqm.ingress_device.clone()
-            };
-            Some(dev)
-        } else {
-            // Clean up existing if on different interface
-            if let Some(ref current) = self.active_wan
-                && current != iface
-            {
-                clear_sqm(current, &self.cfg.sqm.ingress_device).await;
-            }
-            apply_sqm(iface, &self.cfg.sqm, is_pppoe).await
-        };
+        // Clean up existing if on different interface
+        if let Some(ref current) = self.active_wan
+            && current != iface
+        {
+            self.host
+                .clear_sqm(current, &self.cfg.sqm.ingress_device)
+                .await;
+        }
+        let ifb = self.host.apply_sqm(iface, &self.cfg.sqm, is_pppoe).await;
 
         self.active_wan = Some(iface.to_string());
         self.active_ifb.clone_from(&ifb);
@@ -176,9 +164,9 @@ impl TrafficService {
     /// Clears any active SQM configuration.
     async fn clear_sqm_internal(&mut self, ctx: &LanforgeContext) {
         if let Some(wan) = self.active_wan.take() {
-            if !self.inert {
-                clear_sqm(&wan, &self.cfg.sqm.ingress_device).await;
-            }
+            self.host
+                .clear_sqm(&wan, &self.cfg.sqm.ingress_device)
+                .await;
             self.active_ifb = None;
             let _ = ctx
                 .bus()
@@ -219,11 +207,10 @@ impl TrafficService {
 
         if is_tuning_enabled {
             let default_ifaces = Self::resolve_default_interfaces(ctx);
-            let tuned = if self.inert {
-                default_ifaces.clone()
-            } else {
-                apply_tuning(&self.cfg.tuning, &default_ifaces).await
-            };
+            let tuned = self
+                .host
+                .apply_tuning(&self.cfg.tuning, &default_ifaces)
+                .await;
             self.effective_cpu_mask =
                 crate::tuning::cpu::resolve_effective_cpu_mask(&self.cfg.tuning.cpu_mask);
             self.tuned_interfaces.clone_from(&tuned);
@@ -248,11 +235,7 @@ impl TrafficService {
 
         let wan = self.active_wan.as_deref();
         let ifb = self.active_ifb.as_deref();
-        let initial_snapshot = if self.inert {
-            crate::TrafficTelemetryResponse::default()
-        } else {
-            crate::collect_traffic_telemetry(wan, ifb).await
-        };
+        let initial_snapshot = self.host.telemetry(wan, ifb).await;
         ctx.set_traffic_telemetry(initial_snapshot);
         true
     }
@@ -270,11 +253,10 @@ impl TrafficService {
         if tuning_changed {
             if new_cfg.tuning.enabled {
                 let default_ifaces = Self::resolve_default_interfaces(ctx);
-                let tuned = if self.inert {
-                    default_ifaces
-                } else {
-                    apply_tuning(&new_cfg.tuning, &default_ifaces).await
-                };
+                let tuned = self
+                    .host
+                    .apply_tuning(&new_cfg.tuning, &default_ifaces)
+                    .await;
                 self.effective_cpu_mask =
                     crate::tuning::cpu::resolve_effective_cpu_mask(&new_cfg.tuning.cpu_mask);
                 self.tuned_interfaces = tuned;
@@ -362,11 +344,10 @@ impl TrafficService {
         if self.cfg.tuning.enabled {
             let default_ifaces = Self::resolve_default_interfaces(ctx);
             if default_ifaces != self.tuned_interfaces {
-                let tuned = if self.inert {
-                    default_ifaces
-                } else {
-                    apply_tuning(&self.cfg.tuning, &default_ifaces).await
-                };
+                let tuned = self
+                    .host
+                    .apply_tuning(&self.cfg.tuning, &default_ifaces)
+                    .await;
                 if tuned != self.tuned_interfaces {
                     self.tuned_interfaces = tuned;
                     changed = true;
@@ -433,12 +414,10 @@ impl TrafficService {
                 }
 
                 _ = telemetry_tick.tick() => {
-                    if !self.inert {
-                        let wan = self.active_wan.as_deref();
-                        let ifb = self.active_ifb.as_deref();
-                        let snapshot = crate::collect_traffic_telemetry(wan, ifb).await;
-                        ctx.set_traffic_telemetry(snapshot);
-                    }
+                    let wan = self.active_wan.as_deref();
+                    let ifb = self.active_ifb.as_deref();
+                    let snapshot = self.host.telemetry(wan, ifb).await;
+                    ctx.set_traffic_telemetry(snapshot);
                 }
 
                 traffic_event = traffic_rx.recv() => {
@@ -488,7 +467,7 @@ impl TrafficService {
     }
 }
 
-impl LanforgeService for TrafficService {
+impl<H: TrafficHost> LanforgeService for TrafficService<H> {
     fn spec(&self) -> ServiceSpec {
         ServiceSpec {
             id: Self::SERVICE_ID,
@@ -523,7 +502,7 @@ impl LanforgeService for TrafficService {
     }
 }
 
-impl AsyncService for TrafficService {
+impl<H: TrafficHost> AsyncService for TrafficService<H> {
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         if !self.initialize(ctx, h).await {
             return Ok(());

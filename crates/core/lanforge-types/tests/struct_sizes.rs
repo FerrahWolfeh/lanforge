@@ -89,7 +89,6 @@ fn test_print_all_struct_sizes() {
 
     println!("\n=== PPPoE ===");
     print_size::<AuthMethod>("AuthMethod");
-    print_size::<PppoeDataplane>("PppoeDataplane");
     print_size::<PppoeNftablesConfig>("PppoeNftablesConfig");
     print_size::<PppoeConfig>("PppoeConfig");
     print_size::<PppoeSessionState>("PppoeSessionState");

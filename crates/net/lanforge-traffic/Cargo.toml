@@ -19,5 +19,10 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 parking_lot = { workspace = true }
 
+[features]
+default = ["inert"]
+# Host stand-in for rootless tests (`TrafficService::inert`).
+inert = []
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

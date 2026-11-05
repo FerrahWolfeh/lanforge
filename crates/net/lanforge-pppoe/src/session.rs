@@ -35,11 +35,6 @@ impl PppoeSession {
             .map_err(|e| PppoeError::NegotiationFailed(e.to_string()))
     }
 
-    #[must_use]
-    pub fn is_inert(&self) -> bool {
-        self.transport.is_inert()
-    }
-
     pub fn try_clone_session_fd(&self) -> Result<Option<OwnedFd>, PppoeError> {
         self.transport
             .try_clone_session_fd()

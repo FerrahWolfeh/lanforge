@@ -277,8 +277,6 @@ impl Bootstrapper {
         compiled.push(lanforge_types::system::Cap::Storage);
         #[cfg(feature = "pppoe")]
         compiled.push(lanforge_types::system::Cap::Pppoe);
-        #[cfg(feature = "ebpf")]
-        compiled.push(lanforge_types::system::Cap::Ebpf);
         #[cfg(feature = "tftp")]
         compiled.push(lanforge_types::system::Cap::Tftp);
         #[cfg(feature = "nft")]

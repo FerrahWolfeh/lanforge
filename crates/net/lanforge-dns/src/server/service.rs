@@ -258,15 +258,13 @@ impl AsyncService for DnsService {
         // through a restart instead of failing on a closed channel.
         let mut mpsc_rx = ctx.take_dns_requests();
 
-        let is_inert = self.custom_transport.as_ref().is_some_and(|t| t.is_inert());
-        let parallelism = if is_inert {
-            1
-        } else {
-            std::thread::available_parallelism().map_or(1, std::num::NonZero::get)
-        };
-        info!(handlers = parallelism, is_inert, "Starting service");
+        let parallelism = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+        info!(handlers = parallelism, "Starting service");
 
         let mut workers = Vec::new();
+        // The service serves the sockets it is given: an injected transport alone, or UDP and TCP
+        // bound on the configured listen addresses.
+        let mut tcp_worker = None;
         if let Some(ref transport) = self.custom_transport {
             info!("Custom/inert UDP transport active");
             ctx.set_service_transports(Self::SERVICE_ID, vec![transport.metrics_handle()]);
@@ -300,15 +298,10 @@ impl AsyncService for DnsService {
                 }
             }
             ctx.set_service_transports(Self::SERVICE_ID, counters);
-        }
-
-        let tcp_worker = if !is_inert {
-            Some(crate::server::worker::tcp::spawn_tcp_worker(Arc::clone(
+            tcp_worker = Some(crate::server::worker::tcp::spawn_tcp_worker(Arc::clone(
                 &dns_ctx,
-            )))
-        } else {
-            None
-        };
+            )));
+        }
 
         #[cfg(feature = "adblock")]
         info!("Adblock feature compiled in");
