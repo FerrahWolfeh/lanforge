@@ -1,3 +1,4 @@
+use std::io;
 use std::net::AddrParseError;
 use thiserror::Error;
 
@@ -5,7 +6,7 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum LabError {
     #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
+    Io(#[from] io::Error),
 
     #[error("Socket error: {0}")]
     Socket(String),

@@ -1,10 +1,14 @@
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
+use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::dns::DnsRecordType;
 use parking_lot::Mutex;
 use rand::RngExt;
 
+use crate::engine::DiscoveryEngine;
 use crate::harness::LabHarness;
 
 /// Visual action item in the TUI menu.
@@ -149,8 +153,7 @@ impl App {
             match action {
                 LabAction::DhcpDora => {
                     let b = rand::rng().random_range(10..=250);
-                    let mac =
-                        lanforge_types::identifiers::MacAddr([0x02, 0x11, 0x22, 0x33, 0x44, b]);
+                    let mac = MacAddr([0x02, 0x11, 0x22, 0x33, 0x44, b]);
                     logs.lock().push_back(format!(
                         "-> [DHCP] Simulating client {mac} (hostname: 'lab-device-{b}')..."
                     ));
@@ -212,11 +215,7 @@ impl App {
                     for d in domains {
                         logs.lock()
                             .push_back(format!("-> [DNS] Querying '{d}' (A record)..."));
-                        match harness
-                            .dns()
-                            .query(d, lanforge_types::network::dns::DnsRecordType::A)
-                            .await
-                        {
+                        match harness.dns().query(d, DnsRecordType::A).await {
                             Ok(res) => {
                                 let blk = if res.is_blocked {
                                     " [ADBLOCK BLOCKED]"
@@ -238,7 +237,7 @@ impl App {
                 LabAction::DiscoveryPing => {
                     logs.lock()
                         .push_back("-> [PROBE] Sending connectivity probe...".to_string());
-                    match crate::engine::DiscoveryEngine::probe_rtt(harness.dhcp_target).await {
+                    match DiscoveryEngine::probe_rtt(harness.dhcp_target).await {
                         Ok(dur) => {
                             logs.lock().push_back(format!(
                                 "<- [PROBE] RTT against {}: {:.2} ms",
@@ -269,7 +268,7 @@ impl App {
                         .push_back("-> [FLOOD] Running DNS Flood (1,000 queries)...".to_string());
                     match harness
                         .dns()
-                        .flood_benchmark(1000, std::time::Duration::from_secs(1), &[])
+                        .flood_benchmark(1000, Duration::from_secs(1), &[])
                         .await
                     {
                         Ok(rep) => {

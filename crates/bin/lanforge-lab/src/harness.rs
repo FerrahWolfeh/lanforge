@@ -1,4 +1,4 @@
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::DnsRecordType;
@@ -63,9 +63,8 @@ impl LabHarness {
         mgr.setup()?;
 
         let host_iface = mgr.config().host_iface.clone();
-        let dhcp_target =
-            SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::new(192, 168, 100, 1)), 67);
-        let dns_target = SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::new(192, 168, 100, 1)), 53);
+        let dhcp_target = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 100, 1)), 67);
+        let dns_target = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 100, 1)), 53);
 
         Ok(Self {
             mode: LabMode::Netns,
@@ -81,14 +80,8 @@ impl LabHarness {
     pub fn targeting_interface(iface: &str, dhcp_port: u16, dns_port: u16) -> Self {
         Self {
             mode: LabMode::Interface,
-            dhcp_target: SocketAddr::new(
-                std::net::IpAddr::V4(Ipv4Addr::new(192, 168, 100, 1)),
-                dhcp_port,
-            ),
-            dns_target: SocketAddr::new(
-                std::net::IpAddr::V4(Ipv4Addr::new(192, 168, 100, 1)),
-                dns_port,
-            ),
+            dhcp_target: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 100, 1)), dhcp_port),
+            dns_target: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 100, 1)), dns_port),
             iface: Some(iface.to_string()),
             netns_mgr: None,
         }
