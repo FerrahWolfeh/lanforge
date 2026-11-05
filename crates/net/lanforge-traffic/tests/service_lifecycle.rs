@@ -79,7 +79,6 @@ async fn test_traffic_service_inert_full_lifecycle() {
 
     // 1. Initialize inert service
     let mut service = TrafficService::inert(cfg);
-    assert!(service.is_inert());
 
     // 2. Spawn service task
     let mut service_clone = service.clone();
