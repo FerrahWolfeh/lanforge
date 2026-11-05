@@ -288,6 +288,17 @@ impl ConfigPatch {
         self
     }
 
+    /// The whole RA configuration: the server settings and the prefix/RDNSS/DNSSL sections the
+    /// service subscribes to separately.
+    #[must_use]
+    pub fn with_ra(self, cfg: RaServerConfig) -> Self {
+        let (prefixes, rdnss, dnssl) = (cfg.prefixes.clone(), cfg.rdnss.clone(), cfg.dnssl.clone());
+        self.with_ra_server(cfg)
+            .with_ra_prefixes(prefixes)
+            .with_ra_rdnss(rdnss)
+            .with_ra_dnssl(dnssl)
+    }
+
     #[must_use]
     pub fn with_ra_server(mut self, cfg: RaServerConfig) -> Self {
         self.ra_server = Some(cfg);

@@ -1,3 +1,4 @@
+use lanforge_core::context::ConfigPatch;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -529,15 +530,20 @@ async fn the_worker_never_writes_configuration() {
         range_end: Ipv4Addr::new(192, 168, 1, 200),
         ..Default::default()
     }]);
-    ctx.update_dhcp_options(lanforge_types::network::dhcp::DhcpOptionsConfig::default());
+    let _ = ctx.apply_config(
+        ConfigPatch::new()
+            .with_dhcp_options(lanforge_types::network::dhcp::DhcpOptionsConfig::default()),
+    );
     ctx.update_firewall_config(FirewallConfig::default());
     ctx.update_dns_adblock_rules("@@||bank.example^\n".to_string());
-    ctx.update_dns_rewrites(vec![lanforge_types::network::dns::adblock::RewriteRule {
-        id: None,
-        domain: "router.lan".into(),
-        rtype: DnsRecordType::A,
-        answer: RewriteAnswer::A(Ipv4Addr::new(192, 0, 2, 1)),
-    }]);
+    let _ = ctx.apply_config(ConfigPatch::new().with_dns_rewrites(vec![
+        lanforge_types::network::dns::adblock::RewriteRule {
+            id: None,
+            domain: "router.lan".into(),
+            rtype: DnsRecordType::A,
+            answer: RewriteAnswer::A(Ipv4Addr::new(192, 0, 2, 1)),
+        },
+    ]));
     let _ = bus.publish(LanforgeEvent::Storage(StorageEvent::TableDirty));
     sleep(Duration::from_millis(20)).await;
     storage.flush_now().await.expect("flush_now");

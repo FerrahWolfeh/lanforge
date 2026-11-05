@@ -1,6 +1,7 @@
 mod common;
 
 use common::*;
+use lanforge_core::context::ConfigPatch;
 use lanforge_dns::config::DnsConfig;
 use lanforge_dns::server::service::DnsService;
 use lanforge_types::network::dns::upstream::UpstreamMode;
@@ -11,7 +12,7 @@ use lanforge_types::network::dns::upstream::UpstreamMode;
 #[tokio::test]
 async fn upstream_mode_comes_from_the_live_config() {
     let ctx = init_test_context();
-    ctx.update_dns_upstream_mode(UpstreamMode::Sequential);
+    let _ = ctx.apply_config(ConfigPatch::new().with_dns_upstream_mode(UpstreamMode::Sequential));
     let cfg = DnsConfig {
         upstream_mode: UpstreamMode::Parallel,
         ..mock_config()

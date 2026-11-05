@@ -445,3 +445,40 @@ async fn firewall_get_serves_an_empty_external_zone_as_written() {
     let external = served.zones.iter().find(|z| z.name == "external").unwrap();
     assert!(external.interfaces.is_empty(), "{:?}", external.interfaces);
 }
+
+/// A reload that changes several file-owned sections applies them as one patch: one
+/// `ConfigChanged` naming every changed section, so each subscriber wakes once and no service
+/// sees half of the new file.
+#[tokio::test]
+async fn reload_applies_all_changed_sections_as_one_change() {
+    use lanforge_core::bus::{LanforgeEvent, SystemEvent};
+    use lanforge_types::config::DomainSet;
+
+    let (client, _dir, _) = with_file(concat!(
+        "[pppoe]\nenabled = true\nusername = \"new-user\"\n\n",
+        "[traffic.sqm]\nenabled = true\ndownload_mbps = 700\n\n",
+        "[dns.upstreams.default]\naddresses = [\"udp://9.9.9.9:53\"]\n",
+    ));
+    let mut sys = client.ctx.bus().subscribe_system();
+    reload(&client).await;
+
+    let mut changes = Vec::new();
+    while let Ok(Ok(ev)) =
+        tokio::time::timeout(std::time::Duration::from_millis(100), sys.recv()).await
+    {
+        if let LanforgeEvent::System(SystemEvent::ConfigChanged { sections }) = ev.event {
+            changes.push(sections);
+        }
+    }
+    assert_eq!(
+        changes.len(),
+        1,
+        "one change for the whole reload: {changes:?}"
+    );
+    let want = DomainSet::PPPOE | DomainSet::TRAFFIC | DomainSet::DNS_UPSTREAMS;
+    assert!(
+        changes[0].contains(want),
+        "all sections in it: {:?}",
+        changes[0]
+    );
+}

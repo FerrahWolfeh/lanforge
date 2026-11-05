@@ -1,21 +1,23 @@
 //! Storage and lifecycle state management.
 
 use lanforge_types::DnsListenConfig;
-use lanforge_types::config::SiteDomains;
 use lanforge_types::events::EventVec;
-use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
+use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
-use lanforge_types::network::dns::adblock::{AdblockDbConfig, RewriteRule};
+use lanforge_types::network::dns::adblock::AdblockDbConfig;
 use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamTarget};
 use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
-use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RaServerConfig, RdnssConfig};
+use lanforge_types::network::ra::RaServerConfig;
 use lanforge_types::network::{DnsReverseResolver, IpSubnet, TrafficConfig};
 
 use crate::context::LanforgeContext;
 use crate::context::config::ConfigPatch;
 use crate::context::state::State;
 
+/// The `update_*` methods are one-section shortcuts over [`LanforgeContext::apply_config`] for
+/// tests and simple callers; production paths that change several sections build one
+/// [`ConfigPatch`] (one `ConfigChanged`, one wake-up per subscriber).
 impl LanforgeContext {
     /// Updates the configured `DHCPv4` pools and publishes the change event.
     pub fn update_dhcp_v4_pools(&self, pools: Vec<Dhcpv4Pool>) {
@@ -27,40 +29,9 @@ impl LanforgeContext {
         let _ = self.apply_config(ConfigPatch::new().with_dhcp_v6_pools(pools));
     }
 
-    /// Updates the configured DHCP & TFTP options and broadcasts config change events.
-    pub fn update_dhcp_options(&self, options: DhcpOptionsConfig) {
-        let _ = self.apply_config(
-            ConfigPatch::new()
-                .with_dhcp_v4_options(options.v4)
-                .with_dhcp_v6_options(options.v6)
-                .with_tftp(options.tftp),
-        );
-    }
-
-    /// Updates the configured RA prefix/DNS/domain search lists and publishes the change event.
-    pub fn update_ra_config(
-        &self,
-        prefixes: Vec<RAPrefix>,
-        rdnss: Vec<RdnssConfig>,
-        dnssl: Vec<DnsslConfig>,
-    ) {
-        let _ = self.apply_config(
-            ConfigPatch::new()
-                .with_ra_prefixes(prefixes)
-                .with_ra_rdnss(rdnss)
-                .with_ra_dnssl(dnssl),
-        );
-    }
-
     /// Updates the full RA server configuration and publishes the change event.
     pub fn update_ra_server_config(&self, config: RaServerConfig) {
-        let _ = self.apply_config(
-            ConfigPatch::new()
-                .with_ra_server(config.clone())
-                .with_ra_prefixes(config.prefixes)
-                .with_ra_rdnss(config.rdnss)
-                .with_ra_dnssl(config.dnssl),
-        );
+        let _ = self.apply_config(ConfigPatch::new().with_ra(config));
     }
 
     /// Updates the dynamic `PPPoE` configuration in context and publishes change event.
@@ -89,24 +60,9 @@ impl LanforgeContext {
         self.with_config(|cfg| cfg.dns_upstream_mode)
     }
 
-    /// Updates the configured DNS upstream resolution mode and publishes the change event.
-    pub fn update_dns_upstream_mode(&self, mode: UpstreamMode) {
-        let _ = self.apply_config(ConfigPatch::new().with_dns_upstream_mode(mode));
-    }
-
     /// Updates the DNS listeners (UDP/TCP, `DoT`, `DoQ`, TLS identity): restarts the DNS service.
     pub fn update_dns_listen(&self, listen: DnsListenConfig) {
         let _ = self.apply_config(ConfigPatch::new().with_dns_listen(listen));
-    }
-
-    /// Updates the site's search domains (DNS applies them in place).
-    pub fn update_site_domains(&self, domains: SiteDomains) {
-        let _ = self.apply_config(ConfigPatch::new().with_site_domains(domains));
-    }
-
-    /// Updates the configured DNS rewrites and publishes the change event.
-    pub fn update_dns_rewrites(&self, rewrites: Vec<RewriteRule>) {
-        let _ = self.apply_config(ConfigPatch::new().with_dns_rewrites(rewrites));
     }
 
     /// Updates the configured DNS adblock config and publishes the change event.
