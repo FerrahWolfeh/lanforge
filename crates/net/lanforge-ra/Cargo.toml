@@ -8,7 +8,6 @@ authors.workspace = true
 [dependencies]
 # Lanforge
 lanforge-core = { workspace = true }
-lanforge-macros = { workspace = true }
 lanforge-types = { workspace = true }
 lanforge-transport = { workspace = true }
 
@@ -23,9 +22,7 @@ tokio = { workspace = true, features = [
 ] }
 serde = { workspace = true }
 tracing = { workspace = true }
-socket2 = { workspace = true }
 rand = { workspace = true }
-libc = { workspace = true }
 hotpath = { workspace = true, optional = true }
 parking_lot.workspace = true
 

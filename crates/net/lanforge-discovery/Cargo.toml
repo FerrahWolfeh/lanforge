@@ -26,7 +26,6 @@ serde = { workspace = true }
 tracing = { workspace = true }
 parking_lot = { workspace = true }
 rtnetlink = { workspace = true }
-libc = { workspace = true }
 socket2 = { workspace = true }
 netlink-packet-core = { workspace = true }
 netlink-sys = { workspace = true }

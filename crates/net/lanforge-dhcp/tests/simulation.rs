@@ -1,3 +1,7 @@
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 mod common;
 
 use std::net::{Ipv4Addr, Ipv6Addr};

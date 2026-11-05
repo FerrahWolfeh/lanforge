@@ -1,3 +1,7 @@
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 use lanforge_core::bus::EventBus;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;

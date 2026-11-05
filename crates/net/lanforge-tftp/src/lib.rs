@@ -1,5 +1,8 @@
 pub mod config;
 
+#[cfg(test)]
+use tempfile as _;
+
 pub use crate::config::TftpConfig;
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;

@@ -1,3 +1,7 @@
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 use std::net::{Ipv6Addr, SocketAddrV6};
 use std::sync::Arc;
 use std::time::Duration;

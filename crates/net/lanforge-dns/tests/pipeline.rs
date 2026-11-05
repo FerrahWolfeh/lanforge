@@ -1,3 +1,7 @@
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 mod common;
 use common::*;
 use lanforge_dns::resolver::recursive::cache::CacheKey;

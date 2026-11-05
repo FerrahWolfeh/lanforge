@@ -8,11 +8,9 @@ authors.workspace = true
 [dependencies]
 # Lanforge
 lanforge-core = { workspace = true }
-lanforge-macros = { workspace = true }
 lanforge-types = { workspace = true }
 
 # Workspace & Async
-thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time", "rt"] }
 tracing = { workspace = true }
 parking_lot = { workspace = true }
@@ -26,4 +24,3 @@ inert = []
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
-serde_json = { workspace = true }

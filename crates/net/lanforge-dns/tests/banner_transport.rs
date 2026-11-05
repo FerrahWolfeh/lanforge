@@ -1,3 +1,7 @@
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 //! The DNS banner counts the messages served over TCP, not only the UDP datagrams.
 
 #[path = "common/mod.rs"]

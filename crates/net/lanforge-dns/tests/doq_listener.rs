@@ -1,3 +1,7 @@
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 //! `DoQ` listener (RFC 9250): framed queries, owned connections.
 //!
 //! Regressions: queries and answers were sent without the 2-byte length prefix of RFC 9250

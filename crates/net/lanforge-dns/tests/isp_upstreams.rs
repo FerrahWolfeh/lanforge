@@ -1,3 +1,7 @@
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 //! Without configured upstreams, DNS forwards to the resolvers the ISP announced over `PPPoE`.
 //!
 //! They used to be learned only from the `SessionUp` event, so a DNS restart with the session

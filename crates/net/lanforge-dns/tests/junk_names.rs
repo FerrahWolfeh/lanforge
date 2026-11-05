@@ -1,3 +1,7 @@
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 //! Names a client loops on (an IP camera asking for `:0` forever) and the root name.
 //!
 //! The root `.` is a real query (`dig` with no name asks `. NS`) and goes to the upstreams; a

@@ -1,3 +1,7 @@
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 //! A stopped TFTP server releases its port even with a transfer in flight.
 
 use lanforge_core::bus::EventBus;

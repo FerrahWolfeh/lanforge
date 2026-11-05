@@ -1,3 +1,7 @@
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 //! A name matched by a rewrite never leaves the router (owner rule, 2026-10-28): a query type the
 //! rule does not answer gets NODATA (NOERROR, no answer), never NXDOMAIN and never the upstream —
 //! a rewrite of a public domain must not leak its public records. `rtype` A/AAAA delimits what a

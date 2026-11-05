@@ -1,3 +1,7 @@
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 use lanforge_dns_wire::{
     WireDecoder, WireEncoder, WireHeader, WireOptScanner, WireQuestion, skip_name,
 };

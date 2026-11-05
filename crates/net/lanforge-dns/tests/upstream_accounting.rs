@@ -1,3 +1,7 @@
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 //! Per-upstream accounting under sequential hedging and parallel races.
 
 use std::sync::Arc;

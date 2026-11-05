@@ -8,7 +8,6 @@ authors.workspace = true
 [dependencies]
 # Lanforge
 lanforge-core = { workspace = true }
-lanforge-macros = { workspace = true }
 lanforge-transport = { workspace = true }
 lanforge-types = { workspace = true }
 
@@ -25,14 +24,10 @@ tokio = { workspace = true, features = [
 tracing = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
-futures = { workspace = true }
 smallvec = { workspace = true }
-bytes = { workspace = true }
 
 # Third party
-smol_str = "0.3.6"
 parking_lot.workspace = true
-socket2 = { workspace = true }
 
 
 [lints.clippy]

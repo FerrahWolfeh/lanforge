@@ -19,7 +19,6 @@ socket2 = { workspace = true }
 libc = { workspace = true }
 parking_lot = { workspace = true }
 tracing = { workspace = true }
-thiserror = { workspace = true }
 
 [features]
 default = ["inert"]

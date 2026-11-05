@@ -1,3 +1,7 @@
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 //! Regression: stopping the DNS service must release its TCP listener immediately, so a
 //! restart can rebind the port (it used to leak detached accept tasks holding the socket).
 
