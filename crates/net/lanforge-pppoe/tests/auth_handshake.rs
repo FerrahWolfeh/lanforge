@@ -32,6 +32,9 @@ struct Bras {
     echo_before_challenge: bool,
     /// Negotiate PAP instead of CHAP and silently drop the first Authenticate-Request.
     pap_drop_first: bool,
+    /// Open LCP but never challenge: a session the concentrator is still tearing down, handed
+    /// out again under the same session ID right after a PADT (owner logs, MX204 BNG).
+    never_challenge: bool,
 }
 
 fn bras_conf_req(pap: bool) -> Vec<u8> {
@@ -125,7 +128,7 @@ async fn run_bras(h: PppoeInertHandle, b: Bras) {
 
         if !opened && acked_client && got_ack {
             opened = true;
-            if b.pap_drop_first {
+            if b.pap_drop_first || b.never_challenge {
                 continue;
             }
             if b.echo_before_challenge {
@@ -239,4 +242,28 @@ async fn pap_retransmits_a_dropped_request() {
     })
     .await
     .expect("PAP must retransmit");
+}
+
+/// Owner logs: right after a restart the BNG answered PADR with the session ID it was still
+/// tearing down, opened LCP and never sent a Challenge; the client sat out the whole 20 s
+/// authentication deadline before retrying (with a fresh ID it then worked). The authenticator
+/// challenges as soon as the link is up (RFC 1994 §3), so missing Challenge must end the phase
+/// within a few seconds.
+#[tokio::test(start_paused = true)]
+async fn a_missing_chap_challenge_ends_the_phase_within_seconds() {
+    let started = tokio::time::Instant::now();
+    let res = handshake(Bras {
+        never_challenge: true,
+        ..Bras::default()
+    })
+    .await;
+    let waited = started.elapsed();
+    assert!(
+        matches!(&res, Err(PppoeError::AuthTimeout(reason)) if reason == "no CHAP Challenge"),
+        "{res:?}"
+    );
+    assert!(
+        waited <= Duration::from_secs(6),
+        "waited {waited:?} for a Challenge"
+    );
 }

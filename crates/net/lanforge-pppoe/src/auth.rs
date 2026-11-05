@@ -8,6 +8,9 @@
 //! - CHAP: the authenticator drives retransmission. Every Challenge is answered, including a
 //!   re-sent one after a lost Response (RFC 1994 §4.1); only a Success/Failure matching the last
 //!   answered Identifier ends the phase.
+//! - CHAP: the first Challenge must arrive within [`CHAP_CHALLENGE_WAIT`]. The authenticator
+//!   sends it as soon as the link is up (RFC 1994 §3), before any RADIUS round trip; a silent
+//!   peer is a concentrator still tearing down the previous session (owner logs, MX204 BNG).
 //! - LCP is Opened: Echo-Request is answered and Terminate-Request acknowledged (RFC 1661 §5).
 //! - An explicit reject (`AuthFailed`) is reported apart from silence (`AuthTimeout`).
 
@@ -26,6 +29,9 @@ use tracing::debug;
 /// Overall authentication deadline: well above a slow RADIUS round trip (several seconds), short
 /// enough that a concentrator still holding the previous session is retried soon.
 const AUTH_DEADLINE: Duration = Duration::from_secs(20);
+/// How long an Opened link may go without a CHAP Challenge. Only the Response's answer waits
+/// on RADIUS, so this is far shorter than [`AUTH_DEADLINE`].
+const CHAP_CHALLENGE_WAIT: Duration = Duration::from_secs(5);
 /// PAP restart timer (RFC 1334 suggests the LCP default of 3 s).
 const PAP_RESTART_TIMER: Duration = Duration::from_secs(3);
 
@@ -47,7 +53,9 @@ pub async fn authenticate(
         return Ok(());
     }
 
-    let deadline = Instant::now() + AUTH_DEADLINE;
+    let started = Instant::now();
+    let deadline = started + AUTH_DEADLINE;
+    let challenge_deadline = started + CHAP_CHALLENGE_WAIT;
     let mut early = lcp.early_frames.iter();
     let mut buf = [0u8; 1500];
 
@@ -58,6 +66,12 @@ pub async fn authenticate(
     let mut chap_answered: Option<u8> = None;
 
     loop {
+        // Until the first Challenge is answered, CHAP waits for it on the short clock.
+        let deadline = if creds.auth == AuthMethod::ChapMd5 && chap_answered.is_none() {
+            deadline.min(challenge_deadline)
+        } else {
+            deadline
+        };
         // Checked every iteration: a peer that keeps sending frames must not extend the phase.
         if Instant::now() >= deadline {
             return Err(PppoeError::AuthTimeout(timeout_reason(
