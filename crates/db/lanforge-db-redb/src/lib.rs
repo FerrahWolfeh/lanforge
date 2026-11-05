@@ -13,7 +13,12 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU64};
-use tables::*;
+use tables::{
+    TABLE_ADBLOCK_RULES, TABLE_ADBLOCK_URLS, TABLE_API_TOKENS, TABLE_CONFIG, TABLE_DEVICES,
+    TABLE_DNS_ALLOWLIST, TABLE_DNS_BLOCKED, TABLE_DNS_QUERIES, TABLE_DNS_REWRITES,
+    TABLE_DNS_STATS_HOURLY, TABLE_DNS_TELEMETRY, TABLE_DNS_UPSTREAMS, TABLE_LOG_EVENTS, TABLE_META,
+    TABLE_RUNTIME_DEVICES, TABLE_STATIC_HOSTS, TABLE_USERS,
+};
 
 pub use self::DbWriteTx as WriteTx;
 pub use log::BlockedQueryEntry;
