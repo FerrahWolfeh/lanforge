@@ -505,7 +505,7 @@ impl LanforgeContext {
             .runtime
             .event_counters
             .dns_blocked
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// Captures a snapshot of the device registry for database persistence.

@@ -1,7 +1,8 @@
 #![forbid(unsafe_code)]
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Ident, ItemStruct, ItemTrait, LitStr, Meta, parse_macro_input};
+use syn::punctuated::Punctuated;
+use syn::{Data, DeriveInput, Ident, ItemStruct, ItemTrait, LitStr, Meta, Token, parse_macro_input};
 
 /// Attribute macro that automatically implements `LanforgeService` for a struct.
 ///
@@ -15,7 +16,7 @@ use syn::{Data, DeriveInput, Ident, ItemStruct, ItemTrait, LitStr, Meta, parse_m
 /// - `describe`: Custom expression for the `describe()` method (optional).
 #[proc_macro_attribute]
 pub fn lanforge_service(args: TokenStream, input: TokenStream) -> TokenStream {
-    let args_list = parse_macro_input!(args with syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated);
+    let args_list = parse_macro_input!(args with Punctuated::<Meta, Token![,]>::parse_terminated);
     let input_struct = parse_macro_input!(input as ItemStruct);
     let struct_name = &input_struct.ident;
 

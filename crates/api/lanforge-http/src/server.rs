@@ -1,13 +1,16 @@
 use std::io;
 use std::net::{SocketAddr, TcpListener as StdTcpListener};
 use std::path::Path;
+use std::str;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "webui")]
 use axum::handler::Handler;
 #[cfg(feature = "webui")]
-use axum::http::StatusCode;
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH};
+#[cfg(feature = "webui")]
+use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::{
     Router,
     body::Body,
@@ -49,6 +52,8 @@ use tracing::{error, info, warn};
 
 use crate::auth::{AuthManager, middleware as auth_middleware};
 use crate::config::HttpConfig;
+#[cfg(feature = "doh")]
+use crate::doh::handle_dns_query;
 use crate::error::{HttpError, Result as HttpResult};
 use crate::metrics::generate_metrics;
 use crate::routes;
@@ -161,7 +166,7 @@ impl HttpService {
             if cfg.doh_enabled {
                 app = app.route(
                     "/dns-query",
-                    get(crate::doh::handle_dns_query).post(crate::doh::handle_dns_query),
+                    get(handle_dns_query).post(handle_dns_query),
                 );
             }
         }
@@ -486,8 +491,8 @@ const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
 
 #[cfg(feature = "webui")]
 async fn handle_embedded_webui(
-    headers: axum::http::HeaderMap,
-    uri: axum::http::Uri,
+    headers: HeaderMap,
+    uri: Uri,
 ) -> impl IntoResponse {
     let path = uri.path();
     match WebUiAssets::get_file_or_fallback(path) {
@@ -500,10 +505,10 @@ async fn handle_embedded_webui(
                 etag_bytes[2 + i * 2] = HEX_DIGITS[(b & 0x0f) as usize];
             }
             etag_bytes[65] = b'"';
-            let etag = std::str::from_utf8(&etag_bytes).unwrap_or("");
+            let etag = str::from_utf8(&etag_bytes).unwrap_or("");
 
             if let Some(if_none_match) = headers
-                .get(axum::http::header::IF_NONE_MATCH)
+                .get(IF_NONE_MATCH)
                 .and_then(|v| v.to_str().ok())
                 && if_none_match == etag
             {
@@ -519,9 +524,9 @@ async fn handle_embedded_webui(
 
             (
                 [
-                    (axum::http::header::CONTENT_TYPE, mime.as_ref()),
-                    (axum::http::header::ETAG, etag),
-                    (axum::http::header::CACHE_CONTROL, cache_control),
+                    (CONTENT_TYPE, mime.as_ref()),
+                    (ETAG, etag),
+                    (CACHE_CONTROL, cache_control),
                 ],
                 content.data,
             )

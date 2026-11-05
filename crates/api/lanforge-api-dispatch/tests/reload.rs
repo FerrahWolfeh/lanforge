@@ -402,8 +402,8 @@ async fn reload_applies_adblock_and_keeps_rules_it_cannot_read() {
     let file = "[adblock]\nenabled = true\nlists = [\"l\"]\nrules = \"adblock/global.rules\"\n\n\
                 [adblock.sources.l]\nurl = \"https://example.com/l\"\n";
     let (client, dir, _path) = with_file(file);
-    std::fs::create_dir(dir.path().join("adblock")).unwrap();
-    std::fs::write(
+    fs::create_dir(dir.path().join("adblock")).unwrap();
+    fs::write(
         dir.path().join("adblock/global.rules"),
         "@@||bank.example^\n",
     )
@@ -416,8 +416,8 @@ async fn reload_applies_adblock_and_keeps_rules_it_cannot_read() {
     assert_eq!(urls[0].url, "https://example.com/l");
     assert_eq!(client.ctx.get_dns_adblock_rules(), "@@||bank.example^\n");
 
-    std::fs::remove_file(dir.path().join("adblock/global.rules")).unwrap();
-    std::fs::create_dir(dir.path().join("adblock/global.rules")).unwrap();
+    fs::remove_file(dir.path().join("adblock/global.rules")).unwrap();
+    fs::create_dir(dir.path().join("adblock/global.rules")).unwrap();
     let _ = client.handle_reload().await;
     assert_eq!(
         client.ctx.get_dns_adblock_rules(),

@@ -23,6 +23,10 @@ use lanforge_types::network::dns::adblock::{AdblockRuleAction, AdblockRuleEntry}
 use lanforge_types::network::dns::adblock::{
     AdblockSourceFormat, AdblockUrlKind, BlockingMode, TimeOfDay,
 };
+#[cfg(feature = "adblock")]
+use lanforge_types::network::dns::{
+    AdblockCheckResponse, AdblockUrlEntry, DnsAdblockSourcesResponse, DnsRequest, DnsResponse,
+};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 /// The rules text with `line` active and its opposite (the same rule with `@@` added or
@@ -112,8 +116,8 @@ impl ClientContext {
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_adblock_status(&self) -> Response {
         if let Some(handle) = self.ctx.dns_handle()
-            && let Ok(lanforge_types::network::dns::DnsResponse::AdblockStatus(res)) = handle
-                .send_request(lanforge_types::network::dns::DnsRequest::AdblockStatus)
+            && let Ok(DnsResponse::AdblockStatus(res)) = handle
+                .send_request(DnsRequest::AdblockStatus)
                 .await
         {
             return Response::DnsAdblockStatus(Box::new(DnsAdblockStatusResponse {
@@ -150,14 +154,14 @@ impl ClientContext {
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_adblock_sources(&self) -> Response {
         if let Some(handle) = self.ctx.dns_handle()
-            && let Ok(lanforge_types::network::dns::DnsResponse::AdblockSources(res)) = handle
-                .send_request(lanforge_types::network::dns::DnsRequest::AdblockSources)
+            && let Ok(DnsResponse::AdblockSources(res)) = handle
+                .send_request(DnsRequest::AdblockSources)
                 .await
         {
             return Response::DnsAdblockSources(res);
         }
         Response::DnsAdblockSources(
-            lanforge_types::network::dns::DnsAdblockSourcesResponse::default(),
+            DnsAdblockSourcesResponse::default(),
         )
     }
 
@@ -172,8 +176,8 @@ impl ClientContext {
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_adblock_check(&self, domain: String) -> Response {
         if let Some(handle) = self.ctx.dns_handle()
-            && let Ok(lanforge_types::network::dns::DnsResponse::AdblockCheck(res)) = handle
-                .send_request(lanforge_types::network::dns::DnsRequest::AdblockCheck {
+            && let Ok(DnsResponse::AdblockCheck(res)) = handle
+                .send_request(DnsRequest::AdblockCheck {
                     domain: domain.clone(),
                 })
                 .await
@@ -181,7 +185,7 @@ impl ClientContext {
             return Response::AdblockCheck(Box::new(res));
         }
         Response::AdblockCheck(Box::new(
-            lanforge_types::network::dns::AdblockCheckResponse {
+            AdblockCheckResponse {
                 domain,
                 matched: false,
                 filter: None,
@@ -218,7 +222,7 @@ impl ClientContext {
                             "src",
                         );
                         a.sources
-                            .push(lanforge_types::network::dns::AdblockUrlEntry {
+                            .push(AdblockUrlEntry {
                                 id: None,
                                 name: Some(name.clone()),
                                 url: url.clone(),
