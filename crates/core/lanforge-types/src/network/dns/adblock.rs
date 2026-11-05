@@ -66,6 +66,14 @@ pub enum RewriteAnswer {
 }
 
 impl RewriteAnswer {
+    /// Follows a renamed device (see [`DeviceIdentifier::rename_device`]).
+    pub fn rename_device(&mut self, old: &str, new: &DeviceIdentifier) -> bool {
+        match self {
+            Self::Device { identifier, .. } => identifier.rename_device(old, new),
+            _ => false,
+        }
+    }
+
     /// The record type the answer gives on its own: `DEVICE` for a device (both families).
     #[must_use]
     pub const fn inferred_rtype(&self) -> DnsRecordType {
@@ -610,6 +618,16 @@ impl AdblockRuleEntry {
 pub enum ClientSelector {
     Subnet(IpSubnet),
     Device(DeviceIdentifier),
+}
+
+impl ClientSelector {
+    /// Follows a renamed device (see [`DeviceIdentifier::rename_device`]).
+    pub fn rename_device(&mut self, old: &str, new: &DeviceIdentifier) -> bool {
+        match self {
+            Self::Device(id) => id.rename_device(old, new),
+            Self::Subnet(_) => false,
+        }
+    }
 }
 
 impl FromStr for ClientSelector {

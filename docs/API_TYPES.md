@@ -334,12 +334,12 @@ Represents the compiled feature flags and runtime enabled capabilities of the da
 
 ```json
 {
-  "compiled": ["dns", "upstream_udp_tcp", "upstream_do_t", "upstream_do_h", "doh_downstream", "dhcp_v4", "dhcp_v6", "ra", "ndp_discovery", "mdns_probe", "uds", "http", "storage", "pppoe", "tftp", "firewall", "traffic", "adblock", "webui"],
-  "enabled": ["dns", "upstream_do_t", "dhcp_v4", "ra", "uds", "http", "storage"]
+  "compiled": ["dns", "upstream_udp_tcp", "upstream_dot", "upstream_doh", "doh_downstream", "dhcp_v4", "dhcp_v6", "ra", "ndp_discovery", "mdns_probe", "uds", "http", "storage", "pppoe", "tftp", "firewall", "traffic", "adblock", "webui"],
+  "enabled": ["dns", "upstream_dot", "dhcp_v4", "ra", "uds", "http", "storage"]
 }
 ```
 
-- **Cap Enum:** `dns`, `upstream_udp_tcp`, `upstream_do_t`, `upstream_do_q`, `upstream_do_h`, `doh_downstream`, `dhcp_v4`, `dhcp_v6`, `ra`, `ndp_discovery`, `mdns_probe`, `uds`, `http`, `zstd`, `storage` (alias `redb`), `pppoe`, `tftp`, `firewall` (alias `nft`), `traffic` (alias `sqm`), `adblock`, `ebpf`, `webui`. (The DoT/DoQ/DoH names come from serde's snake_case of `UpstreamDoT` etc.)
+- **Cap Enum:** `dns`, `upstream_udp_tcp`, `upstream_dot`, `upstream_doq`, `upstream_doh`, `doh_downstream`, `dhcp_v4`, `dhcp_v6`, `ra`, `ndp_discovery`, `mdns_probe`, `uds`, `http`, `zstd`, `storage` (alias `redb`), `pppoe`, `tftp`, `firewall` (alias `nft`), `traffic` (alias `sqm`), `adblock`, `ebpf`, `webui`. (`upstream_do_t`/`_q`/`_h`, the spelling before 0.42.1, are still accepted on input.)
 
 ### ServiceState
 Represents the operating state of a managed background service:

@@ -56,6 +56,18 @@ impl<'de> serde::Deserialize<'de> for DeviceIdentifier {
 }
 
 impl DeviceIdentifier {
+    /// Points a reference by name at a renamed device: `Name(old)` becomes `new`. Returns
+    /// whether it changed; a MAC reference never does (the MAC did not change).
+    pub fn rename_device(&mut self, old: &str, new: &Self) -> bool {
+        match self {
+            Self::Name(name) if name.eq_ignore_ascii_case(old) => {
+                *self = new.clone();
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Returns the string representation of the identifier.
     #[must_use]
     pub fn as_str(&self) -> Cow<'_, str> {

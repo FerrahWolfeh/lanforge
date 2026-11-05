@@ -483,3 +483,43 @@ async fn reload_applies_all_changed_sections_as_one_change() {
         changes[0]
     );
 }
+
+/// Renaming a static host keeps everything that names it: `dev:<old>` in port forwards, DNS
+/// rewrites and adblock groups becomes `dev:<new>`, in the file and in what runs.
+#[tokio::test]
+async fn renaming_a_host_moves_its_dev_references() {
+    use lanforge_types::network::dns::adblock::RewriteAnswer;
+    use lanforge_types::network::firewall::ForwardTarget;
+
+    let text = "[hosts.nas]\nmac = \"02:00:00:00:05:01\"\nv4 = \"192.168.0.128\"\n\n\
+                [firewall.port_forwards.qbt]\nport = 6881\nto = \"dev:nas\"\n\n\
+                [dns.rewrites]\n\"files.lan\" = \"dev:nas\"\n\n\
+                [adblock.groups.servers]\nclients = [\"dev:nas\", \"192.168.0.0/28\"]\n";
+    let (client, _dir, path) = with_file(text);
+    reload(&client).await;
+    assert_eq!(client.ctx.static_hosts()[0].hostname, "nas");
+
+    client
+        .change_hosts(|hosts| hosts[0].hostname = "storage".to_string())
+        .expect("renamed");
+
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(!written.contains("dev:nas"), "{written}");
+    assert_eq!(written.matches("dev:storage").count(), 3, "{written}");
+    assert!(
+        written.contains("192.168.0.0/28"),
+        "other selectors kept: {written}"
+    );
+
+    let storage: lanforge_types::identifiers::DeviceIdentifier = "storage".parse().unwrap();
+    let fw = client.ctx.get_firewall_config().expect("firewall");
+    assert_eq!(
+        fw.port_forwards[0].internal_ip,
+        ForwardTarget::Device(storage.clone())
+    );
+    let rewrites = client.ctx.get_dns_rewrites();
+    assert!(matches!(
+        &rewrites[0].answer,
+        RewriteAnswer::Device { identifier, .. } if *identifier == storage
+    ));
+}

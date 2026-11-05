@@ -121,6 +121,14 @@ pub enum ForwardTarget {
 }
 
 impl ForwardTarget {
+    /// Follows a renamed device (see [`DeviceIdentifier::rename_device`]).
+    pub fn rename_device(&mut self, old: &str, new: &DeviceIdentifier) -> bool {
+        match self {
+            Self::Device(id) => id.rename_device(old, new),
+            Self::Ip(_) => false,
+        }
+    }
+
     /// The fixed address, if the target is one.
     #[must_use]
     pub const fn ip(&self) -> Option<IpAddr> {

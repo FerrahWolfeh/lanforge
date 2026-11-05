@@ -36,11 +36,14 @@ fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
         ..Default::default()
     });
     ctx.set_target_interface_name("lan0".to_string());
-    // The LAN (ifindex 2) has its link-local, the RA source address.
+    // The LAN (ifindex 2) has its link-local (RA source address) and MAC (source link-layer).
     let _ = ctx.apply(DeviceUpdate::InterfaceIpsChanged {
         ifindex: 2,
         state: Box::new(InterfaceState {
             link_local: Some("fe80::1".parse().unwrap()),
+            mac: Some(lanforge_types::identifiers::MacAddr([
+                0x02, 0, 0, 0, 0, 0x01,
+            ])),
             ..InterfaceState::default()
         }),
     });
