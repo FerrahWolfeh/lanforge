@@ -105,12 +105,12 @@ impl App {
         }
     }
 
-    pub fn add_log(&self, msg: impl Into<String>) {
+    pub fn add_log(&self, msg: String) {
         let mut l = self.logs.lock();
         if l.len() >= 200 {
             l.pop_front();
         }
-        l.push_back(msg.into());
+        l.push_back(msg);
     }
 
     pub fn next_action(&mut self) {

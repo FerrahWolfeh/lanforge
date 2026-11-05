@@ -40,11 +40,8 @@ pub struct Hostname {
 
 impl Hostname {
     #[must_use]
-    pub fn new(name: impl Into<String>, origin: HostnameOrigin) -> Self {
-        Self {
-            name: name.into(),
-            origin,
-        }
+    pub fn new(name: String, origin: HostnameOrigin) -> Self {
+        Self { name, origin }
     }
 
     #[must_use]

@@ -507,7 +507,7 @@ async fn the_worker_never_writes_configuration() {
     let original =
         "# Keep this operator comment\n[system]\niface = \"test0\"\n\n[http]\nenabled = false\n";
     fs::write(&config_path, original).unwrap();
-    ctx.set_config_path(config_path.clone());
+    ctx.set_config_path(&config_path);
     ctx.set_config_writable(true);
 
     let db = Arc::new(LanforgeDb::open_in_memory().unwrap());

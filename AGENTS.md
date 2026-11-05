@@ -176,6 +176,7 @@ Lanforge runs on single-board computers (Raspberry Pi, NanoPi, OpenWrt routers) 
   and helpers; allocate only on rare admin paths, never in hot paths (DNS engine, packet loops).
 - **DSL crates**: `lanforge-types` and `lanforge-api` describe the domain language. Logic there is allowed only as
   methods/trait impls (`FromStr`, `Display`, ...) on the type it belongs to, never as a free-function `utils` module.
+- **Generics vs dyn**: monomorphize only on per-packet hot paths (transport, wire codecs, DNS/DHCP fast path); use `dyn` for handlers, setup, config plumbing, CLI/API. No `impl Into<T>` parameters.
 - **RFCs are the spec**: protocol behaviour (DHCPv4/v6, RA, DNS, DoT/DoQ/DoH, PPPoE) is derived from the RFCs, not
   from what the current code does.
 

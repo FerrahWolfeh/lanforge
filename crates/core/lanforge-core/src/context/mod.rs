@@ -63,7 +63,7 @@ use lanforge_types::system::DormantReason;
 use arc_swap::ArcSwap;
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::SystemTime;
@@ -286,8 +286,8 @@ impl LanforgeContext {
     }
 
     /// Sets the path to the active TOML configuration file.
-    pub fn set_config_path(&self, path: impl Into<PathBuf>) {
-        *self.inner.runtime.config_path.write() = Some(path.into());
+    pub fn set_config_path(&self, path: &Path) {
+        *self.inner.runtime.config_path.write() = Some(path.to_path_buf());
     }
 
     /// Returns the path to the active TOML configuration file, if set.

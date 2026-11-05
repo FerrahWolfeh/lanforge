@@ -564,7 +564,7 @@ pub(crate) fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: Socke
         updates.push(DeviceUpdate::TransientHostResolved(Box::new(
             TransientHostUpdate {
                 ip: from.ip(),
-                hostname: Hostname::new(clean_host, HostnameOrigin::Mdns),
+                hostname: Hostname::new(clean_host.to_string(), HostnameOrigin::Mdns),
                 origin: TransientOrigin::Mdns,
             },
         )));

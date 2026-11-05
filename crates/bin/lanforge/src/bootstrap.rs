@@ -304,7 +304,7 @@ impl Bootstrapper {
         if Self::is_recovery(cfg, db) {
             ctx.set_recovery_mode(true);
         }
-        ctx.set_config_path(&cfg.config_path);
+        ctx.set_config_path(Path::new(&cfg.config_path));
         ctx.set_config_writable(cfg.config_writable);
         ctx.set_config_issues(cfg.config_issues.clone());
 
