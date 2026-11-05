@@ -4,7 +4,13 @@
 //! Replaces full Hickory Message parsing for local/upstream routing decisions.
 //! Optimized for performance by avoiding UTF-8 validation and heap allocations.
 
-use std::net::IpAddr;
+use std::borrow::Borrow;
+use std::fmt::{self, Debug, Display, Formatter};
+use std::hash::{Hash, Hasher};
+use std::mem;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::ops::Deref;
+use std::str;
 use std::sync::Arc;
 
 use smallvec::SmallVec;
@@ -294,7 +300,7 @@ impl<'a> WireQuestion<'a> {
         }
 
         // Ensure valid UTF-8 guarantees for zero-copy string slicing
-        if std::str::from_utf8(&buf[..pos]).is_err() {
+        if str::from_utf8(&buf[..pos]).is_err() {
             for b in &mut buf[..pos] {
                 if !b.is_ascii() {
                     *b = b'?';
@@ -348,9 +354,9 @@ impl StackDomain {
         let take = bytes.len().min(256);
         buf[..take].copy_from_slice(&bytes[..take]);
         // Slice at char boundary if truncated
-        let valid_str = match std::str::from_utf8(&buf[..take]) {
+        let valid_str = match str::from_utf8(&buf[..take]) {
             Ok(v) => v,
-            Err(e) => std::str::from_utf8(&buf[..e.valid_up_to()]).unwrap_or(""),
+            Err(e) => str::from_utf8(&buf[..e.valid_up_to()]).unwrap_or(""),
         };
         let len = valid_str.len() as u16;
         Self { buf, len }
@@ -360,7 +366,7 @@ impl StackDomain {
     #[must_use]
     pub fn as_str(&self) -> &str {
         let bound = (self.len as usize).min(self.buf.len());
-        std::str::from_utf8(&self.buf[..bound]).unwrap_or("")
+        str::from_utf8(&self.buf[..bound]).unwrap_or("")
     }
 
     /// Converts the stack domain into an owned `Arc<str>` on the heap.
@@ -382,7 +388,7 @@ impl StackDomain {
     }
 }
 
-impl std::ops::Deref for StackDomain {
+impl Deref for StackDomain {
     type Target = str;
 
     fn deref(&self) -> &Self::Target {
@@ -396,20 +402,20 @@ impl AsRef<str> for StackDomain {
     }
 }
 
-impl std::borrow::Borrow<str> for StackDomain {
+impl Borrow<str> for StackDomain {
     fn borrow(&self) -> &str {
         self.as_str()
     }
 }
 
-impl std::fmt::Display for StackDomain {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for StackDomain {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
-impl std::fmt::Debug for StackDomain {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for StackDomain {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
@@ -422,8 +428,8 @@ impl PartialEq for StackDomain {
 
 impl Eq for StackDomain {}
 
-impl std::hash::Hash for StackDomain {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+impl Hash for StackDomain {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         self.as_str().hash(state);
     }
 }
@@ -975,7 +981,7 @@ impl<'a> WireDecoder<'a> {
             if end > self.data.len() {
                 return None;
             }
-            name.push_str(std::str::from_utf8(&self.data[start..end]).ok()?);
+            name.push_str(str::from_utf8(&self.data[start..end]).ok()?);
             pos = end;
             first_label = false;
         }
@@ -1075,7 +1081,7 @@ impl<'a> WireDecoder<'a> {
                 if rdlen != 4 {
                     return None;
                 }
-                Some(DnsRData::A(std::net::Ipv4Addr::new(
+                Some(DnsRData::A(Ipv4Addr::new(
                     self.data[start],
                     self.data[start + 1],
                     self.data[start + 2],
@@ -1088,7 +1094,7 @@ impl<'a> WireDecoder<'a> {
                 }
                 let mut b = [0u8; 16];
                 b.copy_from_slice(&self.data[start..start + 16]);
-                Some(DnsRData::AAAA(std::net::Ipv6Addr::from(b)))
+                Some(DnsRData::AAAA(Ipv6Addr::from(b)))
             }
             DnsRecordType::CNAME => Some(DnsRData::CNAME(self.decode_name()?)),
             DnsRecordType::PTR => Some(DnsRData::PTR(self.decode_name()?)),
@@ -1148,7 +1154,7 @@ impl<'a> WireDecoder<'a> {
                     if pos + 1 + len > start + rdlen {
                         break;
                     }
-                    if let Ok(s) = std::str::from_utf8(&self.data[pos + 1..pos + 1 + len]) {
+                    if let Ok(s) = str::from_utf8(&self.data[pos + 1..pos + 1 + len]) {
                         txts.push(Arc::from(s));
                     }
                     pos += 1 + len;
@@ -1313,7 +1319,7 @@ impl WireEncoder {
         for r in &msg.additionals {
             self.encode_record(r);
         }
-        std::mem::take(&mut self.buf)
+        mem::take(&mut self.buf)
     }
 
     fn encode_record(&mut self, r: &DnsRecord) {
@@ -1514,8 +1520,8 @@ mod tests {
             b"\x56\x78\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03app\x03lan\x00\x00\x01\x00\x01";
         let question = WireQuestion::parse(query_data).expect("Should parse question");
         let ips = [
-            IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 50)),
-            IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 51)),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50)),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 51)),
         ];
         let mut resp = Vec::new();
         WireResponseWriter::write_ip_response(
