@@ -1,6 +1,9 @@
 use std::fmt::Write;
+use std::fs;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+
+use tokio::time::timeout;
 
 use lanforge_core::context::{EventCounters, LanforgeContext};
 use lanforge_types::device::Origin;
@@ -36,7 +39,7 @@ async fn fetch_dns_metrics(ctx: &LanforgeContext) -> DnsMetrics {
     let ask = |req| {
         let handle = handle.clone();
         async move {
-            tokio::time::timeout(DNS_SCRAPE_TIMEOUT, handle.send_request(req))
+            timeout(DNS_SCRAPE_TIMEOUT, handle.send_request(req))
                 .await
                 .ok()
                 .and_then(Result::ok)
@@ -351,7 +354,7 @@ fn append_system_metrics(out: &mut String, status: &SystemStatus, uptime_secs: u
     let _ = writeln!(out, "lanforge_uptime_seconds {uptime_secs}");
 
     if !status.db_path.is_empty()
-        && let Ok(metadata) = std::fs::metadata(&status.db_path)
+        && let Ok(metadata) = fs::metadata(&status.db_path)
     {
         out.push_str("# HELP lanforge_db_size_bytes Size of the persistence database\n");
         out.push_str("# TYPE lanforge_db_size_bytes gauge\n");
@@ -362,7 +365,7 @@ fn append_system_metrics(out: &mut String, status: &SystemStatus, uptime_secs: u
         );
     }
     if !status.log_db_path.is_empty()
-        && let Ok(metadata) = std::fs::metadata(&status.log_db_path)
+        && let Ok(metadata) = fs::metadata(&status.log_db_path)
     {
         let _ = writeln!(
             out,
@@ -371,7 +374,7 @@ fn append_system_metrics(out: &mut String, status: &SystemStatus, uptime_secs: u
         );
     }
 
-    if let Ok(stat) = std::fs::read_to_string("/proc/self/statm") {
+    if let Ok(stat) = fs::read_to_string("/proc/self/statm") {
         let parts: Vec<&str> = stat.split_whitespace().collect();
         if let Some(rss_pages) = parts.get(1).and_then(|s| s.parse::<u64>().ok()) {
             let rss_bytes = rss_pages * 4096;
@@ -447,7 +450,7 @@ mod tests {
     async fn silent_dns_does_not_stall_the_scrape() {
         let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
         let _rx = ctx.take_dns_requests();
-        let out = tokio::time::timeout(Duration::from_secs(3), generate_metrics(&ctx, 1))
+        let out = timeout(Duration::from_secs(3), generate_metrics(&ctx, 1))
             .await
             .expect("scrape returns");
         assert!(!out.contains("lanforge_dns_queries_total"));

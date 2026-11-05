@@ -16,8 +16,9 @@ use axum::{
     Json, Router,
     http::StatusCode,
     response::{IntoResponse, Response as AxumResponse},
+    routing::post,
 };
-use lanforge_api::api::HttpErrorResponse;
+use lanforge_api::api::{HttpErrorResponse, Response};
 use lanforge_api_dispatch::ClientContext;
 
 use crate::server::AppState;
@@ -41,7 +42,7 @@ pub fn router() -> Router<AppState> {
 
     Router::new()
         .nest("/v1", v1)
-        .route("/auth/login", axum::routing::post(auth::handle_login))
+        .route("/auth/login", post(auth::handle_login))
 }
 
 #[must_use]
@@ -57,8 +58,7 @@ pub fn create_client_ctx(state: &AppState) -> ClientContext {
 /// The HTTP reply for a handler's failure `response`: 400 for a refusal, 404 for a missing item,
 /// a generic error by [`response_error_to_http`]; any other variant is not a failure here.
 #[must_use]
-pub fn failure_to_http(response: lanforge_api::api::Response) -> AxumResponse {
-    use lanforge_api::api::Response;
+pub fn failure_to_http(response: Response) -> AxumResponse {
     match response {
         Response::Rejected { error } => {
             (StatusCode::BAD_REQUEST, Json(HttpErrorResponse { error })).into_response()

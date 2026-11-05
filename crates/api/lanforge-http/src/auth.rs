@@ -7,7 +7,7 @@ use axum::{
     body::Body,
     extract::{FromRef, FromRequestParts, State},
     http::{
-        Method, Request,
+        HeaderMap, Method, Request,
         header::{AUTHORIZATION, COOKIE},
         request::Parts,
     },
@@ -168,7 +168,7 @@ impl AuthManager {
     }
 }
 
-pub fn extract_token_str(headers: &axum::http::HeaderMap) -> Option<&str> {
+pub fn extract_token_str(headers: &HeaderMap) -> Option<&str> {
     if let Some(auth_header) = headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok()) {
         if let Some(stripped) = auth_header.strip_prefix("Bearer ") {
             return Some(stripped);
@@ -193,7 +193,7 @@ pub fn extract_token_str(headers: &axum::http::HeaderMap) -> Option<&str> {
 
 /// Extract authentication token from headers (Authorization, Cookie) or query string (`token`, `access_token`).
 #[must_use]
-pub fn extract_token(headers: &axum::http::HeaderMap, query: Option<&str>) -> Option<String> {
+pub fn extract_token(headers: &HeaderMap, query: Option<&str>) -> Option<String> {
     if let Some(tok) = extract_token_str(headers) {
         return Some(tok.to_string());
     }
@@ -416,7 +416,7 @@ pub fn auth_required(
 /// session (or any API token) alone cannot take an account over or mint lasting access.
 fn check_elevation(
     user: &AuthenticatedUser,
-    headers: &axum::http::HeaderMap,
+    headers: &HeaderMap,
     auth_manager: &AuthManager,
 ) -> HttpResult<()> {
     if !matches!(user.method, AuthMethod::Jwt) {

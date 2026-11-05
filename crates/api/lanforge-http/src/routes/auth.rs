@@ -5,12 +5,12 @@ use axum::{
     Extension, Json, Router,
     extract::{Path, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header::SET_COOKIE},
-    response::IntoResponse,
+    response::{IntoResponse, Response as AxumResponse},
     routing::{delete, get, post},
 };
 use lanforge_crypto::hash_password;
 use lanforge_db_core::UserEntry;
-use lanforge_types::auth::UserRole;
+use lanforge_types::auth::{ApiScopes, UserRole};
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
@@ -134,7 +134,7 @@ async fn handle_generate_token(
     Json(payload): Json<GenerateTokenRequest>,
 ) -> impl IntoResponse {
     let parsed_scopes = payload.scopes.and_then(|s| {
-        let mut vec = lanforge_types::auth::ApiScopes::new();
+        let mut vec = ApiScopes::new();
         match s {
             ScopesPayload::List(items) => {
                 for item in items {
@@ -205,7 +205,7 @@ fn build_login_response(
     method: &str,
     ttl_secs: u64,
     auth_required: bool,
-) -> axum::response::Response {
+) -> AxumResponse {
     let cookie_header =
         format!("session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={ttl_secs}");
     let mut headers = HeaderMap::new();

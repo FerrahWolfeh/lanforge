@@ -2,7 +2,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Path, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     response::IntoResponse,
     routing::{delete, get, post, put},
 };
@@ -167,7 +167,7 @@ async fn handle_adblock_sources(State(state): State<AppState>) -> impl IntoRespo
 
 async fn handle_adblock_check(
     State(state): State<AppState>,
-    axum::extract::Query(query): axum::extract::Query<AdblockCheckQuery>,
+    Query(query): Query<AdblockCheckQuery>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(

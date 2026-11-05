@@ -14,26 +14,31 @@
 // Each test function covers a logical group of scenarios in a grid table,
 // reducing boilerplate while maximising coverage of the API contract.
 #![cfg(feature = "server")]
+use std::fs;
+use std::{sync::Arc, time::Instant};
+
 use axum::{
     Router,
     body::Body,
-    http::{Request, StatusCode, header},
+    http::{HeaderMap, Request, StatusCode, header},
 };
 use http_body_util::BodyExt;
-use lanforge_core::{
-    bus::EventBus,
-    context::{LanforgeContext, state::State as CoreState},
-    service::AsyncService,
-};
+use lanforge_core::bus::{EventBus, LanforgeEvent};
+use lanforge_core::context::{LanforgeContext, state::State as CoreState};
+use lanforge_core::service::{AsyncService, ServiceHandle};
+use lanforge_db::worker::DbWorker;
 use lanforge_db::{UserStore, config::DatabaseConfig, engine::LanforgeDb, log_engine::LogDb, redb};
+use lanforge_http::server::api_router;
 use lanforge_http::{auth::AuthManager, config::HttpConfig, server::AppState};
+use lanforge_types::build::BuildInfo;
+use lanforge_types::events::{FirewallEvent, SystemEvent, TimedEvent};
+use lanforge_types::system::ServiceId;
 use lanforge_types::{
     auth::{ApiScope, ApiScopes, UserRole},
     network::firewall::FirewallConfig,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::{sync::Arc, time::Instant};
 use tower::ServiceExt;
 
 // ---------------------------------------------------------------------------
@@ -52,7 +57,7 @@ struct TestApp {
 /// `CompressionLayer`/`CorsLayer` (not needed in tests).
 fn build_router(state: AppState) -> Router {
     Router::new()
-        .nest("/api", lanforge_http::server::api_router(&state))
+        .nest("/api", api_router(&state))
         .with_state(state)
 }
 
@@ -70,7 +75,7 @@ async fn make_state(with_auth: bool) -> AppState {
     let log_db = Arc::new(LogDb::open_in_memory());
     let ctx = LanforgeContext::new(bus, table, None);
 
-    let mut worker = lanforge_db::worker::DbWorker::new(
+    let mut worker = DbWorker::new(
         DatabaseConfig::default(),
         ctx.clone(),
         Arc::clone(&db),
@@ -78,10 +83,7 @@ async fn make_state(with_auth: bool) -> AppState {
     );
     let ctx_worker = ctx.clone();
     tokio::spawn(async move {
-        let h_worker = lanforge_core::service::ServiceHandle::new(
-            lanforge_types::system::ServiceId::Db,
-            ctx_worker.clone(),
-        );
+        let h_worker = ServiceHandle::new(ServiceId::Db, ctx_worker.clone());
         let _ = worker.serve(&ctx_worker, &h_worker).await;
     });
 
@@ -209,7 +211,7 @@ impl TestApp {
         self.call("GET", path, None, true).await
     }
 
-    async fn get_raw(&self, path: &str) -> (StatusCode, String, axum::http::HeaderMap) {
+    async fn get_raw(&self, path: &str) -> (StatusCode, String, HeaderMap) {
         let mut builder = Request::builder().method("GET").uri(path);
         if let Some(token) = &self.token {
             builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
@@ -1076,7 +1078,7 @@ async fn toml_export_is_the_config_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("lanforge.toml");
     let text = "# the admin's note\n[system]\niface = \"lan0\"\n";
-    std::fs::write(&path, text).unwrap();
+    fs::write(&path, text).unwrap();
     let state = make_state(false).await;
     state.ctx.set_config_path(&path);
     let app = TestApp {
@@ -1508,12 +1510,8 @@ async fn test_traffic_telemetry_contract() {
 #[tokio::test]
 async fn test_events_contract() {
     let state = make_state(false).await;
-    let ev1 = lanforge_types::events::TimedEvent::new(lanforge_core::bus::LanforgeEvent::System(
-        lanforge_types::events::SystemEvent::SystemReady,
-    ));
-    let ev2 = lanforge_types::events::TimedEvent::new(lanforge_core::bus::LanforgeEvent::Firewall(
-        lanforge_types::events::FirewallEvent::RulesetFlushed,
-    ));
+    let ev1 = TimedEvent::new(LanforgeEvent::System(SystemEvent::SystemReady));
+    let ev2 = TimedEvent::new(LanforgeEvent::Firewall(FirewallEvent::RulesetFlushed));
     let mut buf = Vec::new();
     state
         .log_db
@@ -2252,7 +2250,7 @@ async fn every_answer_names_the_daemon_build() {
     assert_eq!(status, StatusCode::OK);
     let token = headers[lanforge_api::BUILD_HEADER].to_str().unwrap();
     assert_eq!(
-        lanforge_types::build::BuildInfo::parse(token).map(|b| b.version),
+        BuildInfo::parse(token).map(|b| b.version),
         Some(env!("CARGO_PKG_VERSION").to_string())
     );
 

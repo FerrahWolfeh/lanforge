@@ -1,9 +1,16 @@
+use std::{io, result};
+
 #[cfg(feature = "server")]
 use axum::{
     Json,
     http::StatusCode,
+    http::header::RETRY_AFTER,
     response::{IntoResponse, Response as AxumResponse},
 };
+#[cfg(feature = "server")]
+use jsonwebtoken::errors::Error as JwtError;
+#[cfg(feature = "server")]
+use lanforge_core::error::CoreError;
 use thiserror::Error;
 
 /// Unified error type for the `lanforge-http` crate.
@@ -11,7 +18,7 @@ use thiserror::Error;
 pub enum HttpError {
     /// Standard I/O error.
     #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
+    Io(#[from] io::Error),
 
     /// JSON serialization/deserialization error.
     #[error("JSON error: {0}")]
@@ -20,12 +27,12 @@ pub enum HttpError {
     /// Core logic error from `lanforge-core`.
     #[cfg(feature = "server")]
     #[error("Core error: {0}")]
-    Core(#[from] lanforge_core::error::CoreError),
+    Core(#[from] CoreError),
 
     /// JWT error (server-side).
     #[cfg(feature = "server")]
     #[error("JWT error: {0}")]
-    Jwt(#[from] jsonwebtoken::errors::Error),
+    Jwt(#[from] JwtError),
 
     /// HTTP client error (remote-side).
     #[cfg(feature = "client")]
@@ -88,7 +95,7 @@ pub enum HttpError {
 }
 
 /// A specialized Result type for `lanforge-http`.
-pub type Result<T> = std::result::Result<T, HttpError>;
+pub type Result<T> = result::Result<T, HttpError>;
 
 #[cfg(feature = "server")]
 impl IntoResponse for HttpError {
@@ -100,7 +107,7 @@ impl IntoResponse for HttpError {
             }));
             return (
                 StatusCode::TOO_MANY_REQUESTS,
-                [(axum::http::header::RETRY_AFTER, secs.to_string())],
+                [(RETRY_AFTER, secs.to_string())],
                 body,
             )
                 .into_response();

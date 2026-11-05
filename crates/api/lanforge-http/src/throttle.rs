@@ -13,6 +13,8 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::future::ready;
 use std::net::{IpAddr, SocketAddr};
+#[cfg(test)]
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, Instant};
 
 use axum::extract::{ConnectInfo, FromRequestParts};
@@ -20,6 +22,7 @@ use axum::http::request::Parts;
 use lanforge_crypto::verify_password;
 use parking_lot::Mutex;
 use tokio::sync::Semaphore;
+use tokio::task::spawn_blocking;
 
 use crate::error::{HttpError, Result as HttpResult};
 
@@ -170,7 +173,7 @@ impl LoginThrottle {
             return false;
         };
         let (hash, password) = (hash.to_owned(), password.to_owned());
-        tokio::task::spawn_blocking(move || verify_password(&hash, &password))
+        spawn_blocking(move || verify_password(&hash, &password))
             .await
             .unwrap_or(false)
     }
@@ -198,7 +201,7 @@ mod tests {
     use super::*;
 
     const fn ip(last: u8) -> ClientIp {
-        ClientIp(Some(IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, last))))
+        ClientIp(Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, last))))
     }
 
     #[test]
@@ -259,7 +262,7 @@ mod tests {
     fn the_ledger_stays_bounded() {
         let t = LoginThrottle::default();
         for n in 0..MAX_SOURCES + 50 {
-            let addr = IpAddr::V6(std::net::Ipv6Addr::from(u128::try_from(n).unwrap()));
+            let addr = IpAddr::V6(Ipv6Addr::from(u128::try_from(n).unwrap()));
             t.record(ClientIp(Some(addr)), false);
         }
         assert!(t.ledger.lock().sources.len() <= MAX_SOURCES);

@@ -1,10 +1,11 @@
 use std::convert::Infallible;
-use std::time::Duration;
+use std::ffi::CStr;
+use std::time::{Duration, UNIX_EPOCH};
 
 use axum::{
-    Router,
+    Json, Router,
     extract::{Query, State},
-    http::header,
+    http::{HeaderMap, StatusCode, header},
     response::{
         IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
@@ -22,6 +23,7 @@ use lanforge_types::events::{
 };
 use lanforge_types::identifiers::MacAddr;
 use serde::Deserialize;
+use tokio::sync::broadcast::error::RecvError;
 
 use crate::server::AppState;
 
@@ -43,7 +45,7 @@ pub fn router() -> Router<AppState> {
 
 async fn handle_events(
     State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
+    headers: HeaderMap,
     Query(params): Query<EventsQuery>,
 ) -> Response {
     let is_sse = params.follow
@@ -91,8 +93,8 @@ fn handle_events_history_inner(state: &AppState, params: &EventsQuery) -> Respon
     let total = filtered.len();
 
     (
-        axum::http::StatusCode::OK,
-        axum::Json(HttpPaginatedResponse {
+        StatusCode::OK,
+        Json(HttpPaginatedResponse {
             data: filtered,
             meta: LogMeta {
                 total,
@@ -242,7 +244,7 @@ fn enrich_interface_info(ctx: &LanforgeContext, ifindex: u32) -> serde_json::Val
     let name_opt = if ptr.is_null() {
         None
     } else {
-        std::ffi::CStr::from_bytes_until_nul(&if_name)
+        CStr::from_bytes_until_nul(&if_name)
             .ok()
             .and_then(|name| name.to_str().ok())
             .map(String::from)
@@ -406,7 +408,7 @@ fn event_to_json_value(ctx: &LanforgeContext, event: &TimedEvent) -> Option<serd
     let ts_millis = u64::try_from(
         event
             .timestamp
-            .duration_since(std::time::UNIX_EPOCH)
+            .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis(),
     )
@@ -466,8 +468,8 @@ fn handle_events_stream(
         loop {
             let event = match rx.recv().await {
                 Ok(event) => event,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => break,
             };
 
             // Filter out DNS events (which have their own dedicated log stream)
