@@ -10,7 +10,6 @@ authors.workspace = true
 lanforge-api = { workspace = true }
 lanforge-api-dispatch = { workspace = true }
 lanforge-core = { workspace = true }
-lanforge-macros = { workspace = true }
 lanforge-types = { workspace = true }
 
 # Workspace

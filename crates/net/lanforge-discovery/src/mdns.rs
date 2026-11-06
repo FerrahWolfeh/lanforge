@@ -32,7 +32,10 @@ use serde::{Deserialize, Serialize};
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
+use lanforge_core::service::{
+    AsyncService, Condition, LanforgeService, RestartPolicy, RuntimeClass, ServiceCommand,
+    ServiceHandle, ServiceSpec,
+};
 use pnet::datalink::interfaces;
 use smallvec::SmallVec;
 use std::io::{Cursor, ErrorKind, Write};
@@ -83,18 +86,52 @@ enum MdnsCommand {
 ///
 /// Sends commands to the background worker via an `mpsc` channel.
 /// The worker manages the actual socket listeners and packet processing.
-#[lanforge_macros::lanforge_service(
-    id = "mdns",
-    name = "mDNS Prober",
-    retries = 0,
-    base_backoff = 2,
-    max_backoff = 30
-)]
 pub struct MdnsProber {
     cfg: MdnsConfig,
     tx: Sender<MdnsCommand>,
     metrics: Arc<TransportMetrics>,
     _ctx: LanforgeContext,
+}
+
+impl MdnsProber {
+    /// Static identifier for the service.
+    pub const SERVICE_ID: ServiceId = ServiceId::Mdns;
+
+    /// Creates a new `MdnsProber`.
+    #[must_use]
+    pub fn new(cfg: MdnsConfig, ctx: LanforgeContext) -> Self {
+        let (tx, _) = mpsc::channel(32);
+        Self {
+            cfg,
+            tx,
+            metrics: Arc::new(TransportMetrics::new()),
+            _ctx: ctx,
+        }
+    }
+
+    /// Requests a full mDNS broadcast probe across all interfaces.
+    pub async fn trigger_scan(&self) {
+        let _ = self.tx.send(MdnsCommand::ProbeAll).await;
+    }
+}
+
+impl LanforgeService for MdnsProber {
+    fn spec(&self) -> ServiceSpec {
+        ServiceSpec {
+            id: Self::SERVICE_ID,
+            display_name: "mDNS Prober",
+            runtime: RuntimeClass::Shared,
+            restart: RestartPolicy {
+                base_backoff: Duration::from_secs(2),
+                max_backoff: Duration::from_secs(30),
+                max_retries: 0,
+                healthy_uptime: Duration::from_secs(30),
+            },
+            shutdown_timeout: Duration::from_secs(3),
+            deps: &[],
+            condition: Condition::ALWAYS,
+        }
+    }
 }
 
 impl AsyncService for MdnsProber {
@@ -127,23 +164,6 @@ impl AsyncService for MdnsProber {
 }
 
 impl MdnsProber {
-    /// Creates a new `MdnsProber`.
-    #[must_use]
-    pub fn new(cfg: MdnsConfig, ctx: LanforgeContext) -> Self {
-        let (tx, _) = mpsc::channel(32);
-        Self {
-            cfg,
-            tx,
-            metrics: Arc::new(TransportMetrics::new()),
-            _ctx: ctx,
-        }
-    }
-
-    /// Requests a full mDNS broadcast probe across all interfaces.
-    pub async fn trigger_scan(&self) {
-        let _ = self.tx.send(MdnsCommand::ProbeAll).await;
-    }
-
     /// Sends a targeted mDNS PTR query for a specific IP address.
     pub async fn probe_ip(&self, ip: IpAddr) {
         let _ = self.tx.send(MdnsCommand::ProbeIp(ip)).await;

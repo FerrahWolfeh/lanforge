@@ -40,7 +40,7 @@ pub struct Hostname {
 
 impl Hostname {
     #[must_use]
-    pub fn new(name: String, origin: HostnameOrigin) -> Self {
+    pub const fn new(name: String, origin: HostnameOrigin) -> Self {
         Self { name, origin }
     }
 

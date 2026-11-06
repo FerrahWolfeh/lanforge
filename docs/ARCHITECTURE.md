@@ -88,7 +88,7 @@ graph TD
 | Crate | Layer | Responsibility |
 | :--- | :---: | :--- |
 | `lanforge-types` | L0 | Fundamental domain types (`Device`, `MacAddr`, `Duid`), shared events, and update protocols. No workspace dependencies. |
-| `lanforge-macros` | L0 | Procedural macros for service registration (`#[lanforge_service]`) and internal boilerplate. |
+| `lanforge-macros` | L0 | Internal procedural macros (`EnumRepr`, `Identifier`) and boilerplate. |
 | `lanforge-core` | L1 | The "Brain". Manages the `LanforgeContext`, Copy-on-Write state, the configuration store and the topic-isolated `EventBus`. |
 | `lanforge-crypto` | L1 | Foundational security: Argon2id password hashing, key derivation, token utilities and the shared TLS loader. |
 | `lanforge-transport` | L1 | Dual-stack Y-architecture transports (`UdpTransport`, `DualTcpListener`, `Icmp6Transport`), lock-free rate limiting, atomic metrics, pure DI (`InertHandle`), and Wake-on-LAN. |

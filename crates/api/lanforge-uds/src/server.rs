@@ -5,7 +5,7 @@ use std::net::{IpAddr, Ipv6Addr};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use lanforge_api::api::EventKind;
 use lanforge_api::rpc::{LanforgeRpcDispatcher, RpcRequest, RpcResponse};
@@ -13,8 +13,11 @@ use lanforge_api_dispatch::ClientContext;
 use lanforge_core::bus::{DnsEvent, LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
-use lanforge_types::system::DormantReason;
+use lanforge_core::service::{
+    AsyncService, Condition, LanforgeService, RestartPolicy, RuntimeClass, ServiceCommand,
+    ServiceHandle, ServiceSpec,
+};
+use lanforge_types::system::{DormantReason, ServiceId};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, split};
 use tokio::net::UnixListener;
 use tokio::sync::broadcast::error::RecvError;
@@ -23,14 +26,6 @@ use tracing::{debug, info, warn};
 use crate::config::ApiConfig;
 use crate::error::UdsError;
 
-#[lanforge_macros::lanforge_service(
-    id = "control",
-    name = "Control API",
-    retries = 0,
-    base_backoff = 1,
-    max_backoff = 30,
-    describe = format!("Control API at {}", self.cfg.socket_path)
-)]
 #[derive(Clone)]
 pub struct ControlService {
     cfg: Arc<ApiConfig>,
@@ -38,6 +33,9 @@ pub struct ControlService {
 }
 
 impl ControlService {
+    /// Static identifier for the service.
+    pub const SERVICE_ID: ServiceId = ServiceId::Uds;
+
     #[must_use]
     pub const fn new(cfg: Arc<ApiConfig>, ctx: LanforgeContext) -> Self {
         Self { cfg, ctx }
@@ -149,6 +147,29 @@ impl AsyncService for ControlService {
             }
         }
         Ok(())
+    }
+}
+
+impl LanforgeService for ControlService {
+    fn spec(&self) -> ServiceSpec {
+        ServiceSpec {
+            id: Self::SERVICE_ID,
+            display_name: "Control API",
+            runtime: RuntimeClass::Shared,
+            restart: RestartPolicy {
+                base_backoff: Duration::from_secs(1),
+                max_backoff: Duration::from_secs(30),
+                max_retries: 0,
+                healthy_uptime: Duration::from_secs(30),
+            },
+            shutdown_timeout: Duration::from_secs(3),
+            deps: &[],
+            condition: Condition::ALWAYS,
+        }
+    }
+
+    fn describe(&self) -> String {
+        format!("Control API at {}", self.cfg.socket_path)
     }
 }
 

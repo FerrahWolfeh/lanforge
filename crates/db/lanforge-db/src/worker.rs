@@ -17,23 +17,26 @@ use lanforge_core::bus::{
     DeviceEvent, DnsEvent, EventTopic, LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent,
     TimedEvent,
 };
-use lanforge_db_core::{DeviceStore, LogStore, PrefixStore};
-use lanforge_types::identifiers::MacAddr;
-use lanforge_types::network::QueryLogEntry;
-use lanforge_types::network::dns::{DnsRequest, DnsResponse};
-use lanforge_types::system::DegradedReason;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use lanforge_core::context::{LanforgeContext, StorageCommand, StorageHandle};
+use lanforge_core::error::CoreError;
+use lanforge_core::service::{
+    AsyncService, Condition, LanforgeService, RestartPolicy, RuntimeClass, ServiceCommand,
+    ServiceHandle, ServiceSpec,
+};
+use lanforge_db_core::{DeviceStore, LogStore, PrefixStore};
+use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::QueryLogEntry;
+use lanforge_types::network::dns::{DnsRequest, DnsResponse};
+use lanforge_types::system::{DegradedReason, ServiceId};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
 use tokio::time::{Instant, Interval, interval};
 use tracing::{debug, error, info, warn};
-
-use lanforge_core::context::{LanforgeContext, StorageCommand, StorageHandle};
-use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
 
 use crate::config::DatabaseConfig;
 use crate::engine::LanforgeDb;
@@ -54,15 +57,6 @@ pub enum PendingDeviceOp {
 }
 
 /// Background worker for database operations.
-#[lanforge_macros::lanforge_service(
-    id = "db",
-    name = "Database Worker",
-    retries = 5,
-    base_backoff = 1,
-    max_backoff = 30,
-    runtime = "dedicated",
-    describe = format!("Database Worker ({})", self.cfg.config_path)
-)]
 pub struct DbWorker {
     cfg: DatabaseConfig,
     ctx: LanforgeContext,
@@ -80,6 +74,8 @@ pub struct DbWorker {
 }
 
 impl DbWorker {
+    /// Static identifier for the service.
+    pub const SERVICE_ID: ServiceId = ServiceId::Db;
     /// Creates a new `DbWorker` for the specified databases.
     #[must_use]
     pub fn new(
@@ -540,6 +536,32 @@ impl AsyncService for DbWorker {
         let log_db = Arc::clone(&self.log_db);
         self.flush_batch(&db, &log_db).await;
         Ok(())
+    }
+}
+
+impl LanforgeService for DbWorker {
+    fn spec(&self) -> ServiceSpec {
+        ServiceSpec {
+            id: Self::SERVICE_ID,
+            display_name: "Database Worker",
+            runtime: RuntimeClass::Dedicated {
+                multi_thread: false,
+                worker_threads: None,
+            },
+            restart: RestartPolicy {
+                base_backoff: Duration::from_secs(1),
+                max_backoff: Duration::from_secs(30),
+                max_retries: 5,
+                healthy_uptime: Duration::from_secs(30),
+            },
+            shutdown_timeout: Duration::from_secs(3),
+            deps: &[],
+            condition: Condition::ALWAYS,
+        }
+    }
+
+    fn describe(&self) -> String {
+        format!("Database Worker ({})", self.cfg.config_path)
     }
 }
 
