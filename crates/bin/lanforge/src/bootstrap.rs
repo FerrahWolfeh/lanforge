@@ -1,5 +1,6 @@
 use std::fs;
 use std::mem;
+#[cfg(feature = "dhcp")]
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -44,7 +45,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::Config;
 use crate::config::boot_file::ensure_boot_config;
-#[cfg(feature = "tftp")]
+#[cfg(all(feature = "dhcp", feature = "tftp"))]
 use crate::config::toml::apply_tftp_options;
 
 macro_rules! feat_flag {
@@ -997,7 +998,7 @@ mod tests {
 
     #[cfg(feature = "dhcp")]
     use lanforge_api::config_file::DhcpSettings;
-
+    #[cfg(feature = "dhcp")]
     use crate::config::toml::load_toml;
 
     fn config_with_db(path: &Path) -> Config {

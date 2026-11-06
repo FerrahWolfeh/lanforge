@@ -41,6 +41,7 @@ use lanforge_uds::config::ApiConfig;
 pub use toml::load_toml;
 
 use clap::Parser;
+#[cfg(feature = "http")]
 use std::fs;
 use std::net::Ipv6Addr;
 use std::path::{Path, PathBuf};
@@ -50,8 +51,7 @@ use lanforge_api::config_file::ConfigFile;
 #[cfg(feature = "dhcp")]
 use lanforge_api::config_file::DhcpSettings;
 #[cfg(feature = "ra")]
-use lanforge_api::config_file::RaInputs;
-use lanforge_api::config_file::effective_ra;
+use lanforge_api::config_file::{RaInputs, effective_ra};
 #[cfg(feature = "dns")]
 use lanforge_api::config_file::{AdblockSettings, DnsSettings};
 #[cfg(feature = "pppoe")]
