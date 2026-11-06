@@ -116,9 +116,8 @@ impl ClientContext {
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_adblock_status(&self) -> Response {
         if let Some(handle) = self.ctx.dns_handle()
-            && let Ok(DnsResponse::AdblockStatus(res)) = handle
-                .send_request(DnsRequest::AdblockStatus)
-                .await
+            && let Ok(DnsResponse::AdblockStatus(res)) =
+                handle.send_request(DnsRequest::AdblockStatus).await
         {
             return Response::DnsAdblockStatus(Box::new(DnsAdblockStatusResponse {
                 enabled: res.enabled,
@@ -154,15 +153,12 @@ impl ClientContext {
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_adblock_sources(&self) -> Response {
         if let Some(handle) = self.ctx.dns_handle()
-            && let Ok(DnsResponse::AdblockSources(res)) = handle
-                .send_request(DnsRequest::AdblockSources)
-                .await
+            && let Ok(DnsResponse::AdblockSources(res)) =
+                handle.send_request(DnsRequest::AdblockSources).await
         {
             return Response::DnsAdblockSources(res);
         }
-        Response::DnsAdblockSources(
-            DnsAdblockSourcesResponse::default(),
-        )
+        Response::DnsAdblockSources(DnsAdblockSourcesResponse::default())
     }
 
     #[cfg(not(feature = "adblock"))]
@@ -184,14 +180,12 @@ impl ClientContext {
         {
             return Response::AdblockCheck(Box::new(res));
         }
-        Response::AdblockCheck(Box::new(
-            AdblockCheckResponse {
-                domain,
-                matched: false,
-                filter: None,
-                source_matches: Vec::new(),
-            },
-        ))
+        Response::AdblockCheck(Box::new(AdblockCheckResponse {
+            domain,
+            matched: false,
+            filter: None,
+            source_matches: Vec::new(),
+        }))
     }
 
     #[cfg(not(feature = "adblock"))]
@@ -221,14 +215,13 @@ impl ClientContext {
                             url.as_bytes(),
                             "src",
                         );
-                        a.sources
-                            .push(AdblockUrlEntry {
-                                id: None,
-                                name: Some(name.clone()),
-                                url: url.clone(),
-                                kind,
-                                format: format.unwrap_or_default(),
-                            });
+                        a.sources.push(AdblockUrlEntry {
+                            id: None,
+                            name: Some(name.clone()),
+                            url: url.clone(),
+                            kind,
+                            format: format.unwrap_or_default(),
+                        });
                         name
                     }
                 };

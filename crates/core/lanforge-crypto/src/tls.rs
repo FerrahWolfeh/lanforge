@@ -4,11 +4,11 @@
 use std::io::Cursor;
 use std::path::Path;
 
+use rustls::ServerConfig;
 #[cfg(all(feature = "aws-lc", not(feature = "ring")))]
 use rustls::crypto::aws_lc_rs;
 #[cfg(feature = "ring")]
 use rustls::crypto::ring;
-use rustls::ServerConfig;
 use rustls_pki_types::pem::{self, PemObject};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 

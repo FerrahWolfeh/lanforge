@@ -1386,14 +1386,9 @@ async fn owner_adblock_client(writable: bool) -> (ClientContext, TempDir) {
 
 /// `[adblock]` and the rules file as the boot reads them, plus the `lanforge.toml` text.
 #[cfg(feature = "adblock")]
-fn adblock_in_files(
-    dir: &TempDir,
-) -> (AdblockSettings, String, String) {
+fn adblock_in_files(dir: &TempDir) -> (AdblockSettings, String, String) {
     let text = fs::read_to_string(dir.path().join("lanforge.toml")).unwrap();
-    let (adblock, issues) = ConfigFile::parse(&text)
-        .unwrap()
-        .adblock
-        .to_config();
+    let (adblock, issues) = ConfigFile::parse(&text).unwrap().adblock.to_config();
     assert!(issues.is_empty(), "{issues:?}\n{text}");
     let (rules, rule_issues) = adblock.load_rules(&dir.path().join("lanforge.toml"));
     assert!(rule_issues.is_empty(), "{rule_issues:?}");

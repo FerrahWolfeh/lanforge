@@ -164,10 +164,7 @@ impl HttpService {
         #[cfg(feature = "doh")]
         {
             if cfg.doh_enabled {
-                app = app.route(
-                    "/dns-query",
-                    get(handle_dns_query).post(handle_dns_query),
-                );
+                app = app.route("/dns-query", get(handle_dns_query).post(handle_dns_query));
             }
         }
 
@@ -490,10 +487,7 @@ async fn handle_metrics(State(state): State<AppState>) -> HttpResult<impl IntoRe
 const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
 
 #[cfg(feature = "webui")]
-async fn handle_embedded_webui(
-    headers: HeaderMap,
-    uri: Uri,
-) -> impl IntoResponse {
+async fn handle_embedded_webui(headers: HeaderMap, uri: Uri) -> impl IntoResponse {
     let path = uri.path();
     match WebUiAssets::get_file_or_fallback(path) {
         Some((mime, content)) => {
@@ -507,9 +501,7 @@ async fn handle_embedded_webui(
             etag_bytes[65] = b'"';
             let etag = str::from_utf8(&etag_bytes).unwrap_or("");
 
-            if let Some(if_none_match) = headers
-                .get(IF_NONE_MATCH)
-                .and_then(|v| v.to_str().ok())
+            if let Some(if_none_match) = headers.get(IF_NONE_MATCH).and_then(|v| v.to_str().ok())
                 && if_none_match == etag
             {
                 return StatusCode::NOT_MODIFIED.into_response();
