@@ -1,6 +1,7 @@
 use std::io;
 use std::net::{SocketAddr, TcpListener as StdTcpListener};
 use std::path::Path;
+#[cfg(feature = "webui")]
 use std::str;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
