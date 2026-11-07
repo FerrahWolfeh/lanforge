@@ -4,7 +4,7 @@ use std::{
     collections::HashMap,
     fmt::Display,
     hash::{BuildHasher, Hash},
-    net::IpAddr,
+    net::{IpAddr, Ipv6Addr},
     str::FromStr,
 };
 
@@ -50,9 +50,9 @@ pub struct NetworkState {
     )]
     pub interface_ips: HashMap<u32, InterfaceState>,
     /// Fallback ULA prefix from Router Advertisement.
-    pub ra_ula_fallback: Option<std::net::Ipv6Addr>,
+    pub ra_ula_fallback: Option<Ipv6Addr>,
     /// Fallback GUA prefix from Router Advertisement.
-    pub ra_gua_fallback: Option<std::net::Ipv6Addr>,
+    pub ra_gua_fallback: Option<Ipv6Addr>,
 }
 
 impl NetworkState {

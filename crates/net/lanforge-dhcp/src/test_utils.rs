@@ -1,17 +1,20 @@
+use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 
 use dhcproto::v4::{
-    DhcpOption as Dhcpv4Option, Message as MessageV4, MessageType as MessageTypeV4,
+    DhcpOption as Dhcpv4Option, Flags as FlagsV4, Message as MessageV4,
+    MessageType as MessageTypeV4,
 };
 use dhcproto::v6::{
-    DhcpOption as Dhcpv6Option, DhcpOptions as Dhcpv6Options, IANA, Message as MessageV6,
-    MessageType as MessageTypeV6,
+    DhcpOption as Dhcpv6Option, DhcpOptions as Dhcpv6Options, IAAddr as IAAddrV6, IANA,
+    Message as MessageV6, MessageType as MessageTypeV6,
 };
 use dhcproto::{Encodable, Encoder};
 use lanforge_core::bus::EventBus;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
+use lanforge_types::device::Ipv6AddrOrSuffix;
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::update::{DeviceUpdate, InterfaceState};
@@ -100,14 +103,14 @@ pub fn create_test_v6_config() -> Dhcpv6Config {
         port: 547,
         pools: vec![Dhcpv6Pool {
             name: Some("Primary IPv6 Scope".to_string()),
-            range_start: Some(lanforge_types::device::Ipv6AddrOrSuffix::Full(start)),
-            range_end: Some(lanforge_types::device::Ipv6AddrOrSuffix::Full(end)),
+            range_start: Some(Ipv6AddrOrSuffix::Full(start)),
+            range_end: Some(Ipv6AddrOrSuffix::Full(end)),
             ..Default::default()
         }],
         dns_servers: vec![ula],
         search_domains: vec!["lan".to_string()],
         boot_file: None,
-        options: std::collections::HashMap::new(),
+        options: HashMap::new(),
         ntp_servers: Vec::new(),
     }
 }
@@ -205,7 +208,7 @@ impl Dhcpv4PacketBuilder {
             &self.mac.0,
         );
         if self.broadcast {
-            msg.set_flags(dhcproto::v4::Flags::default().set_broadcast());
+            msg.set_flags(FlagsV4::default().set_broadcast());
         }
         msg.opts_mut()
             .insert(Dhcpv4Option::MessageType(self.msg_type));
@@ -305,7 +308,7 @@ impl Dhcpv6PacketBuilder {
         if let Some((iaid, maybe_ip)) = self.ia_na {
             let mut opts = Dhcpv6Options::new();
             if let Some(ip) = maybe_ip {
-                opts.insert(Dhcpv6Option::IAAddr(dhcproto::v6::IAAddr {
+                opts.insert(Dhcpv6Option::IAAddr(IAAddrV6 {
                     addr: ip,
                     preferred_life: 0,
                     valid_life: 0,

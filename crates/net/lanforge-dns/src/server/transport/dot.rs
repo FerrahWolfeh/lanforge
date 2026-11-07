@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::task::JoinSet;
+use tokio::time::{sleep, timeout};
 use tokio_rustls::TlsAcceptor;
 use tracing::{error, info, trace};
 
@@ -47,7 +48,7 @@ pub async fn run_dot_worker(
                 // EMFILE and the like: pause, or the loop spins at 100 % CPU.
                 Err(e) => {
                     error!("DoT accept error on {addr}: {e}");
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    sleep(Duration::from_millis(100)).await;
                 }
             },
             // Reap finished connections so the set does not grow without bound.
@@ -62,7 +63,7 @@ async fn serve_tls(
     peer: SocketAddr,
     ctx: Arc<DnsContext>,
 ) {
-    match tokio::time::timeout(TCP_IDLE_TIMEOUT, acceptor.accept(stream)).await {
+    match timeout(TCP_IDLE_TIMEOUT, acceptor.accept(stream)).await {
         Ok(Ok(tls)) => serve_stream(tls, peer.ip(), &ctx, TransportProtocol::Tls).await,
         Ok(Err(e)) => trace!(%peer, "DoT handshake failed: {e}"),
         Err(_) => trace!(%peer, "DoT handshake timed out"),

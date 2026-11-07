@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 //! UDS speaks postcard, which has no field names: a field skipped on serialization shifts every
 //! byte after it and the client fails to decode (`lanforge dns upstreams` over the socket did).
 //! Each DTO is encoded with its optional fields empty, in a two-element list so a misalignment

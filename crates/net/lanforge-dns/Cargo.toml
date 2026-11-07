@@ -8,7 +8,6 @@ authors.workspace = true
 [dependencies]
 # Lanforge
 lanforge-core = { workspace = true }
-lanforge-macros = { workspace = true }
 lanforge-transport = { workspace = true }
 lanforge-types = { workspace = true }
 lanforge-dns-wire = { workspace = true }
@@ -22,14 +21,13 @@ serde = { workspace = true }
 hotpath = { workspace = true, optional = true }
 smallvec = { workspace = true }
 arc-swap = { workspace = true }
-tempfile = { workspace = true }
+tempfile = { workspace = true, optional = true }
 globset = { workspace = true }
 futures = { workspace = true }
-socket2 = { workspace = true, features = ["all"] }
 rustls = { workspace = true, optional = true }
-chrono = { workspace = true }
+chrono = { workspace = true, optional = true }
 bytes = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, optional = true }
 
 # Third party
 dashmap = { version = "6.1.0" }
@@ -54,8 +52,6 @@ hyper-rustls = { version = "0.27.9", features = [
     "webpki-roots",
 ], optional = true, default-features = false }
 http-body-util = { version = "0.1.3", optional = true }
-base64 = { workspace = true, optional = true }
-once_cell = "1.21.4"
 
 # Adblock
 memmap2 = { version = "0.9.11", optional = true }
@@ -83,10 +79,11 @@ adblock = [
     "dep:hyper-rustls",
     "dep:http-body-util",
     "dep:rustls",
-    "dep:rustls-pki-types",
-    "dep:webpki-roots",
     "dep:memmap2",
     "dep:fst",
+    "dep:chrono",
+    "dep:serde_json",
+    "dep:tempfile",
     "lanforge-core/adblock",
 ]
 dot = [
@@ -96,16 +93,12 @@ dot = [
     "dep:tokio-rustls",
     "dep:webpki-roots",
 ]
-doq = ["lanforge-crypto/tls", "dep:quinn", "dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots"]
+doq = ["lanforge-crypto/tls", "dep:quinn", "dep:rustls", "dep:webpki-roots"]
 doh-upstream = [
     "dep:hyper",
     "dep:hyper-util",
     "dep:hyper-rustls",
     "dep:http-body-util",
-    "dep:base64",
-    "dep:rustls",
-    "dep:rustls-pki-types",
-    "dep:webpki-roots",
 ]
 hotpath = ["dep:hotpath", "lanforge-core/hotpath"]
 hotpath-alloc = [
@@ -126,3 +119,6 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
     "time",
 ] }
+
+[lints]
+workspace = true

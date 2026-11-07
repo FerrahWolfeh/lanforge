@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::{env, fs, process};
 
 use color_eyre::Result;
 use color_eyre::eyre::{bail, eyre};
@@ -323,7 +324,7 @@ async fn export_config(
         // and the redb state aside).
         let rendered = client.system_config_toml().await?;
         if let Some(ref path) = output {
-            std::fs::write(path, &rendered)?;
+            fs::write(path, &rendered)?;
             printer.success(&format!("Exported system configuration to {path}"));
         } else {
             print!("{rendered}");
@@ -375,7 +376,7 @@ async fn export_config(
     let json = serde_json::to_string_pretty(&file_export)?;
 
     if let Some(ref path) = output {
-        std::fs::write(path, &json)?;
+        fs::write(path, &json)?;
         printer.success(&format!("Exported system configuration to {path}"));
     } else {
         println!("{json}");
@@ -395,7 +396,7 @@ async fn import_config(
     overwrite: bool,
     password: Option<String>,
 ) -> Result<()> {
-    let content = std::fs::read_to_string(file_path)?;
+    let content = fs::read_to_string(file_path)?;
 
     let is_json = Path::new(file_path)
         .extension()
@@ -495,7 +496,7 @@ fn render_import_results(resp: &SystemConfigImportResponse, printer: &Printer) {
 // ============================================================================
 
 fn validate_config(printer: &Printer, file_path: &str) -> Result<()> {
-    let content = std::fs::read_to_string(file_path)
+    let content = fs::read_to_string(file_path)
         .map_err(|e| eyre!("Failed to read file '{file_path}': {e}"))?;
 
     let is_json = Path::new(file_path)
@@ -614,21 +615,21 @@ async fn edit_config(
                 .map_err(|e| eyre!("Failed to render configuration: {e}"))
         })?;
         if let Some(parent) = target_path.parent() {
-            std::fs::create_dir_all(parent)?;
+            fs::create_dir_all(parent)?;
         }
-        std::fs::write(&target_path, &rendered)?;
+        fs::write(&target_path, &rendered)?;
         printer.info(&format!(
             "Created initial configuration file at '{}'",
             target_path.display()
         ));
     }
 
-    let editor = std::env::var("EDITOR")
-        .or_else(|_| std::env::var("VISUAL"))
+    let editor = env::var("EDITOR")
+        .or_else(|_| env::var("VISUAL"))
         .unwrap_or_else(|_| "nano".to_string());
 
     loop {
-        let status = std::process::Command::new(&editor)
+        let status = process::Command::new(&editor)
             .arg(&target_path)
             .status()
             .map_err(|e| eyre!("Failed to launch editor '{editor}': {e}"))?;
@@ -637,7 +638,7 @@ async fn edit_config(
             bail!("Editor exited with error status: {status}");
         }
 
-        let content = std::fs::read_to_string(&target_path).map_err(|e| {
+        let content = fs::read_to_string(&target_path).map_err(|e| {
             eyre!(
                 "Failed to read updated file '{}': {e}",
                 target_path.display()

@@ -1,5 +1,16 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 //! `apply_static_hosts`: the device table follows `[hosts]`.
 
+use std::iter;
+use std::slice;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -9,7 +20,7 @@ use lanforge_core::context::state::State;
 use lanforge_types::device::{
     HostnameOrigin, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, StaticHost,
 };
-use lanforge_types::identifiers::MacAddr;
+use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate, V6LeaseUpdate};
 
 fn ctx() -> LanforgeContext {
@@ -56,12 +67,12 @@ fn listed_hosts_are_reserved_exactly() {
 fn a_host_left_out_becomes_a_discovered_device_again() {
     let ctx = ctx();
     let solarium = host("04:d9:f5:0a:25:94", "solarium", "192.168.0.128");
-    let _ = ctx.apply_static_hosts(std::slice::from_ref(&solarium));
+    let _ = ctx.apply_static_hosts(slice::from_ref(&solarium));
     let _ = ctx.apply(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
         mac: Some(solarium.mac),
-        duid: lanforge_types::identifiers::Duid::new(vec![1, 2, 3]),
+        duid: Duid::new(vec![1, 2, 3]),
         iaid: 7,
-        ips: std::iter::once("fd97:f00d:cafe:3731::77".parse().unwrap()).collect(),
+        ips: iter::once("fd97:f00d:cafe:3731::77".parse().unwrap()).collect(),
         expires: SystemTime::now() + Duration::from_hours(1),
     })));
 
@@ -98,7 +109,7 @@ fn the_router_itself_is_not_made_a_static_host() {
             origin: Origin::System,
         }),
     });
-    let issues = ctx.apply_static_hosts(std::slice::from_ref(&router));
+    let issues = ctx.apply_static_hosts(slice::from_ref(&router));
     assert_eq!(issues.len(), 1, "{issues:?}");
     assert_eq!(ctx.get_device(&router.mac).unwrap().origin, Origin::System);
 }

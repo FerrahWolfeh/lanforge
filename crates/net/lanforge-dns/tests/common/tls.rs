@@ -3,7 +3,7 @@
 //! that need it, next to `mod common`.
 #![allow(dead_code)]
 
-use std::net::{Ipv4Addr, SocketAddr, TcpListener};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, UdpSocket};
 use std::time::Duration;
 
 use lanforge_core::context::LanforgeContext;
@@ -17,8 +17,12 @@ use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::ListenConfig;
 use lanforge_types::network::dns::DnsRecordType;
 use lanforge_types::system::ServiceId;
+#[cfg(feature = "ring")]
+use rustls::crypto::ring;
+use rustls::pki_types::CertificateDer;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use tokio::time::{sleep, timeout};
 
 use crate::common::{
     DnsPacketBuilder, init_test_context, mock_config, register_test_device, wait_for_service_online,
@@ -30,13 +34,13 @@ pub const NAS_IP: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 50);
 pub struct SelfSigned {
     pub cert_pem: String,
     pub key_pem: String,
-    pub cert_der: rustls::pki_types::CertificateDer<'static>,
+    pub cert_der: CertificateDer<'static>,
 }
 
 #[must_use]
 pub fn self_signed() -> SelfSigned {
     #[cfg(feature = "ring")]
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = ring::default_provider().install_default();
     #[cfg(all(feature = "aws-lc", not(feature = "ring")))]
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let certified = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
@@ -70,7 +74,7 @@ pub fn free_port() -> u16 {
             .and_then(|l| l.local_addr())
             .map(|a| a.port())
             .expect("ephemeral port");
-        if std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, port)).is_ok() {
+        if UdpSocket::bind((Ipv4Addr::LOCALHOST, port)).is_ok() {
             return port;
         }
     }
@@ -112,7 +116,7 @@ impl RunningDns {
         let serve = tokio::spawn(async move { service.serve(&ctx_serve, &h).await });
         wait_for_service_online(&ctx, ServiceId::Dns).await;
         // Let the listeners bind.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(100)).await;
         Self {
             ctx,
             dot,
@@ -128,7 +132,7 @@ impl RunningDns {
             .send(ServiceCommand::Stop)
             .await
             .expect("service alive");
-        tokio::time::timeout(Duration::from_secs(2), self.serve)
+        timeout(Duration::from_secs(2), self.serve)
             .await
             .expect("serve must return on Stop")
             .expect("join")

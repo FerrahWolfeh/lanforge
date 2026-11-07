@@ -14,7 +14,7 @@ pub use lanforge_types::network::dns::adblock::{
 pub use lanforge_types::network::dns::{
     AdblockCheckResponse, AdblockSourceMatch, AdblockSourceStatus, AdblockUrlEntry,
     DnsAdblockSourcesResponse, DnsAdblockStatusResponse, DnsCacheEntry, DnsCacheResponse,
-    DnsCacheStatsExtResponse, DnsStatsResponse,
+    DnsCacheStatsExtResponse, DnsStatsResponse, UpstreamMode,
 };
 use lanforge_types::network::{
     DnsRecordEntry, DnsRecordType, DnsReverseResolver, QueryResult, UpstreamHealthSnapshot,
@@ -396,7 +396,7 @@ impl HttpWrappedResponse for AdblockCheckResponse {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DnsUpstreamModeResponse {
-    pub mode: lanforge_types::network::dns::UpstreamMode,
+    pub mode: UpstreamMode,
 }
 
 impl HttpWrappedResponse for DnsUpstreamModeResponse {

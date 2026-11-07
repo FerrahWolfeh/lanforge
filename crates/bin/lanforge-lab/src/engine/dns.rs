@@ -8,6 +8,8 @@ use lanforge_types::network::dns::{
 };
 use rand::RngExt;
 use tokio::net::UdpSocket;
+use tokio::sync::Semaphore;
+use tokio::task::yield_now;
 use tokio::time::timeout;
 
 use crate::error::LabError;
@@ -147,12 +149,12 @@ impl DnsEngine {
 
         let start_time = Instant::now();
         let total_queries = (target_qps as f64 * duration.as_secs_f64()) as usize;
-        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(100));
+        let semaphore = Arc::new(Semaphore::new(100));
 
         let mut handles = Vec::with_capacity(total_queries);
 
         for i in 0..total_queries {
-            let permit = semaphore.clone().acquire_owned().await.map_err(|e| {
+            let permit = Arc::clone(&semaphore).acquire_owned().await.map_err(|e| {
                 LabError::Protocol(format!("Failed to acquire semaphore permit: {e}"))
             })?;
             let domain = domain_list[i % domain_list.len()].clone();
@@ -166,7 +168,7 @@ impl DnsEngine {
 
             // Pace requests if needed
             if i % (target_qps.max(1) / 10).max(1) == 0 {
-                tokio::task::yield_now().await;
+                yield_now().await;
             }
         }
 

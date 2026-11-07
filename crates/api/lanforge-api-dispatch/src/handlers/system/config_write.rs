@@ -1,15 +1,24 @@
+use std::collections::HashSet;
+use std::fmt;
+use std::fs;
+use std::mem;
 use std::path::{Path, PathBuf};
 
-use crate::ClientContext;
 use lanforge_api::api::Response;
 use lanforge_api::config_file::{
-    AdblockFile, AdblockSettings, ConfigFile, SectionSet, persist_sections, write_toml_atomically,
+    AdblockFile, AdblockSettings, ConfigFile, DhcpSettings, DnsFile, DnsSettings, FirewallFile,
+    NamedUpstream, RaFile, SectionSet, persist_sections, write_toml_atomically,
 };
 use lanforge_core::context::ConfigPatch;
+use lanforge_crypto::stable_id_or_hash;
+use lanforge_types::device::{Origin, StaticHost};
 use lanforge_types::identifiers::DeviceIdentifier;
 use lanforge_types::network::DnsReverseResolver;
 use lanforge_types::network::dns::adblock::{ClientSelector, RewriteAnswer};
-use lanforge_types::network::firewall::ForwardTarget;
+use lanforge_types::network::firewall::{FirewallConfig, ForwardTarget};
+use lanforge_types::network::ra::RaServerConfig;
+
+use crate::ClientContext;
 
 /// Why a configuration change was not made: nothing was written nor applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,8 +56,8 @@ impl ChangeError {
     }
 }
 
-impl std::fmt::Display for ChangeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for ChangeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.reason())
     }
 }
@@ -113,11 +122,8 @@ impl ClientContext {
 
     /// Writes `fw` to `[firewall]` (see [`Self::persist_config_sections`]). Zones are keyed by
     /// name in the file, so a zone defined twice cannot be written and is refused.
-    pub fn persist_firewall(
-        &self,
-        fw: &lanforge_types::network::firewall::FirewallConfig,
-    ) -> Result<Persisted, ChangeError> {
-        let mut seen = std::collections::HashSet::new();
+    pub fn persist_firewall(&self, fw: &FirewallConfig) -> Result<Persisted, ChangeError> {
+        let mut seen = HashSet::new();
         if let Some(dup) = fw.zones.iter().find(|z| !seen.insert(z.name.as_str())) {
             return Err(ChangeError::Rejected(format!(
                 "zone '{}' is defined twice",
@@ -125,7 +131,7 @@ impl ClientContext {
             )));
         }
         self.persist_config_sections(SectionSet::FIREWALL, |file| {
-            file.firewall = lanforge_api::config_file::FirewallFile::from_config(fw);
+            file.firewall = FirewallFile::from_config(fw);
         })
     }
 
@@ -136,10 +142,10 @@ impl ClientContext {
     /// refused: nothing written, nothing applied.
     pub fn change_dhcp(
         &self,
-        change: impl FnOnce(&mut lanforge_api::config_file::DhcpSettings),
+        change: impl FnOnce(&mut DhcpSettings),
     ) -> Result<Persisted, ChangeError> {
         let _serial = self.ctx.config_change_lock();
-        let live = lanforge_api::config_file::DhcpSettings {
+        let live = DhcpSettings {
             options: self.ctx.get_dhcp_options(),
             v4_pools: self.ctx.get_dhcp_v4_pools(),
             v6_pools: self.ctx.get_dhcp_v6_pools(),
@@ -156,7 +162,7 @@ impl ClientContext {
             f.dhcp = file.dhcp;
             f.tftp = file.tftp;
         })?;
-        let mut patch = lanforge_core::context::ConfigPatch::new();
+        let mut patch = ConfigPatch::new();
         if dhcp.options != live.options {
             patch = patch.with_dhcp_options(dhcp.options);
         }
@@ -177,7 +183,7 @@ impl ClientContext {
     /// nothing written, nothing applied.
     pub fn change_ra(
         &self,
-        change: impl FnOnce(&mut lanforge_types::network::ra::RaServerConfig),
+        change: impl FnOnce(&mut RaServerConfig),
     ) -> Result<Persisted, ChangeError> {
         let _serial = self.ctx.config_change_lock();
         let mut wanted = self.ctx.get_ra_server_config();
@@ -186,7 +192,7 @@ impl ClientContext {
         if wanted.iface.is_some() && wanted.iface == lan_iface {
             wanted.iface = None;
         }
-        let file = lanforge_api::config_file::RaFile::from_config(&wanted);
+        let file = RaFile::from_config(&wanted);
         let (mut ra, issues) = file.to_config();
         if !issues.is_empty() {
             return Err(ChangeError::Rejected(issues.join("; ")));
@@ -206,7 +212,7 @@ impl ClientContext {
     /// nothing applied.
     pub fn change_hosts(
         &self,
-        change: impl FnOnce(&mut Vec<lanforge_types::device::StaticHost>),
+        change: impl FnOnce(&mut Vec<StaticHost>),
     ) -> Result<Persisted, ChangeError> {
         let _serial = self.ctx.config_change_lock();
         let mut wanted = self.ctx.static_hosts();
@@ -214,7 +220,7 @@ impl ClientContext {
         if let Some(router) = wanted.iter().find(|h| {
             self.ctx
                 .get_device(&h.mac)
-                .is_some_and(|d| d.origin == lanforge_types::device::Origin::System)
+                .is_some_and(|d| d.origin == Origin::System)
         }) {
             return Err(ChangeError::Rejected(format!(
                 "{} is this router; not a static host",
@@ -272,10 +278,10 @@ impl ClientContext {
         let persisted = self.persist_config_sections(sections, |f| {
             f.hosts = file.hosts;
             if let Some(fw) = &firewall {
-                f.firewall = lanforge_api::config_file::FirewallFile::from_config(fw);
+                f.firewall = FirewallFile::from_config(fw);
             }
             if let Some(dns) = &dns {
-                f.dns = lanforge_api::config_file::DnsFile::from_config(dns);
+                f.dns = DnsFile::from_config(dns);
             }
             if let Some(adblock) = &adblock {
                 f.adblock = AdblockFile::from_config(adblock);
@@ -297,13 +303,11 @@ impl ClientContext {
     /// reverse resolvers are the live ones; the listener and the upstream group names are not
     /// kept in memory and come from the file (an upstream it does not name is named after the
     /// domain it forwards, else `default`).
-    pub(crate) fn live_dns_settings(&self) -> lanforge_api::config_file::DnsSettings {
-        use lanforge_api::config_file::{DnsSettings, NamedUpstream};
-
+    pub(crate) fn live_dns_settings(&self) -> DnsSettings {
         let file = self
             .ctx
             .config_path()
-            .and_then(|path| std::fs::read_to_string(path).ok())
+            .and_then(|path| fs::read_to_string(path).ok())
             .and_then(|text| ConfigFile::parse_lenient(&text).ok())
             .map(|(cfg, _)| cfg.dns.to_config().0)
             .unwrap_or_default();
@@ -338,12 +342,12 @@ impl ClientContext {
     /// nothing written, nothing applied.
     pub fn change_dns(
         &self,
-        change: impl FnOnce(&mut lanforge_api::config_file::DnsSettings),
+        change: impl FnOnce(&mut DnsSettings),
     ) -> Result<Persisted, ChangeError> {
         let _serial = self.ctx.config_change_lock();
         let mut wanted = self.live_dns_settings();
         change(&mut wanted);
-        let file = lanforge_api::config_file::DnsFile::from_config(&wanted);
+        let file = DnsFile::from_config(&wanted);
         let (dns, issues) = file.to_config();
         if !issues.is_empty() {
             return Err(ChangeError::Rejected(issues.join("; ")));
@@ -355,7 +359,7 @@ impl ClientContext {
 
     /// Applies the parts of `dns` that differ from the live settings. The listener is bound at
     /// start-up and is not changed here.
-    pub fn apply_dns_settings(&self, dns: lanforge_api::config_file::DnsSettings) {
+    pub fn apply_dns_settings(&self, dns: DnsSettings) {
         let reverse = dns.reverse.clone();
         let _ = self
             .ctx
@@ -368,7 +372,7 @@ impl ClientContext {
     pub(crate) fn dns_settings_patch(
         &self,
         mut patch: ConfigPatch,
-        dns: lanforge_api::config_file::DnsSettings,
+        dns: DnsSettings,
     ) -> ConfigPatch {
         let upstreams: Vec<_> = dns.upstreams.into_iter().map(|u| u.target).collect();
         if self.ctx.get_dns_upstreams() != upstreams {
@@ -398,7 +402,7 @@ impl ClientContext {
         let mut adblock = self
             .ctx
             .config_path()
-            .and_then(|path| std::fs::read_to_string(path).ok())
+            .and_then(|path| fs::read_to_string(path).ok())
             .and_then(|text| ConfigFile::parse_lenient(&text).ok())
             .map(|(cfg, _)| cfg.adblock.to_config().0)
             .unwrap_or_default();
@@ -408,7 +412,7 @@ impl ClientContext {
             .into_iter()
             .map(|mut s| {
                 s.id = None;
-                s.name = Some(lanforge_crypto::stable_id_or_hash(
+                s.name = Some(stable_id_or_hash(
                     s.name.as_deref(),
                     s.url.as_bytes(),
                     "src",
@@ -417,7 +421,7 @@ impl ClientContext {
             })
             .collect();
         adblock.lists = sources.iter().filter_map(|s| s.name.clone()).collect();
-        for unused in std::mem::take(&mut adblock.sources) {
+        for unused in mem::take(&mut adblock.sources) {
             if !sources
                 .iter()
                 .any(|s| s.url == unused.url || s.name == unused.name)
@@ -502,7 +506,7 @@ impl ClientContext {
                 }
                 let rules_path = adblock.rules_path(&path).unwrap_or_default();
                 if let Some(dir) = rules_path.parent() {
-                    std::fs::create_dir_all(dir).map_err(|e| {
+                    fs::create_dir_all(dir).map_err(|e| {
                         ChangeError::Failed(format!("cannot create {}: {e}", dir.display()))
                     })?;
                 }
@@ -529,7 +533,7 @@ impl ClientContext {
         let path = self
             .resolve_config_path()
             .ok_or_else(|| "no configuration file".to_string())?;
-        std::fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))
+        fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))
     }
 
     /// Resolves the candidate configuration file path for writes.
@@ -558,10 +562,7 @@ impl ClientContext {
 
 /// `(old name, new name)` of every static host whose name changed (same MAC) to one a `dev:`
 /// reference can hold.
-fn renamed_hosts(
-    before: &[lanforge_types::device::StaticHost],
-    after: &[lanforge_types::device::StaticHost],
-) -> Vec<(String, DeviceIdentifier)> {
+fn renamed_hosts(before: &[StaticHost], after: &[StaticHost]) -> Vec<(String, DeviceIdentifier)> {
     before
         .iter()
         .filter_map(|old| {

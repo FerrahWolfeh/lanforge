@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -14,7 +23,7 @@ use lanforge_core::service::{
     ServiceSpec,
 };
 use lanforge_types::system::{DegradedReason, ServiceId, ServiceState, StateDetail};
-use tokio::time::timeout;
+use tokio::time::{Instant, sleep, timeout};
 
 // ---------------------------------------------------------------------------
 // 1. Acceptance Test: ready_is_truthful
@@ -23,7 +32,7 @@ use tokio::time::timeout;
 #[tokio::test]
 async fn test_acceptance_ready_is_truthful() {
     let bus = Arc::new(EventBus::new());
-    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), State::new(), None);
 
     let services = [ServiceId::Dns, ServiceId::Dhcp4, ServiceId::Pppoe];
     let mut expected_services = HashSet::new();
@@ -32,7 +41,7 @@ async fn test_acceptance_ready_is_truthful() {
     }
 
     let mut sys_listener = bus.subscribe_system();
-    let mut tracker = ReadinessTracker::new(&ctx, expected_services, tokio::time::Instant::now());
+    let mut tracker = ReadinessTracker::new(&ctx, expected_services, Instant::now());
 
     // Simulate DNS & DHCP becoming Online
     let h_dns = ServiceHandle::new(ServiceId::Dns, ctx.clone());
@@ -81,7 +90,7 @@ async fn test_acceptance_ready_is_truthful() {
 #[tokio::test]
 async fn test_acceptance_ready_idempotent_and_reset() {
     let bus = Arc::new(EventBus::new());
-    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), State::new(), None);
     let mut sub = bus.subscribe_system();
 
     // First generation
@@ -126,20 +135,20 @@ async fn test_acceptance_ready_idempotent_and_reset() {
 #[tokio::test]
 async fn test_acceptance_clean_exit_resettable() {
     let bus = Arc::new(EventBus::new());
-    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), State::new(), None);
     let attempts = Arc::new(AtomicU32::new(0));
-    let attempts_clone = attempts.clone();
+    let attempts_clone = Arc::clone(&attempts);
 
     let mut registry = ServiceRegistry::new();
     registry.register(&ctx, move || {
-        let a = attempts_clone.clone();
+        let a = Arc::clone(&attempts_clone);
         CleanExitService { attempts: a }
     });
 
     let supervisor = registry.start(&ctx).expect("start supervisor");
 
     // Give time for clean exit
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     // Must execute once and settle in Inactive
     assert_eq!(attempts.load(Ordering::Relaxed), 1);
@@ -186,13 +195,13 @@ impl AsyncService for CleanExitService {
 #[tokio::test]
 async fn test_acceptance_retry_exhausted_keeps_daemon() {
     let bus = Arc::new(EventBus::new());
-    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), State::new(), None);
     let attempts = Arc::new(AtomicU32::new(0));
-    let attempts_clone = attempts.clone();
+    let attempts_clone = Arc::clone(&attempts);
 
     let mut registry = ServiceRegistry::new();
     registry.register(&ctx, move || {
-        let a = attempts_clone.clone();
+        let a = Arc::clone(&attempts_clone);
         FailingService { attempts: a }
     });
 
@@ -207,7 +216,7 @@ async fn test_acceptance_retry_exhausted_keeps_daemon() {
                     break;
                 }
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            sleep(Duration::from_millis(10)).await;
         }
     })
     .await

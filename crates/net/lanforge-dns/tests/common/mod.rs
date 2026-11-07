@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use lanforge_core::bus::EventBus;
 use lanforge_core::context::LanforgeContext;
@@ -27,10 +27,12 @@ use lanforge_types::network::dns::{
     DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecord, DnsRecordType, DnsResponseCode,
     TransportProtocol,
 };
-use lanforge_types::system::ServiceState;
+use lanforge_types::system::{ServiceId, ServiceState};
 use lanforge_types::update::DeviceUpdate;
 use parking_lot::{Mutex, RwLock};
 use tokio::net::UdpSocket;
+use tokio::task::JoinHandle;
+use tokio::time::sleep;
 
 /// Initializes a fresh isolated `LanforgeContext` for integration testing.
 #[must_use]
@@ -43,16 +45,13 @@ pub fn init_test_context() -> LanforgeContext {
 /// Cooperatively polls a service until its registered state is `ServiceState::Online`.
 ///
 /// Times out after 2 seconds to avoid test hangs.
-pub async fn wait_for_service_online(
-    ctx: &LanforgeContext,
-    service: lanforge_types::system::ServiceId,
-) {
-    let start = std::time::Instant::now();
+pub async fn wait_for_service_online(ctx: &LanforgeContext, service: ServiceId) {
+    let start = Instant::now();
     while start.elapsed() < Duration::from_secs(2) {
         if ctx.get_service_state(service) == ServiceState::Online {
             return;
         }
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        sleep(Duration::from_millis(5)).await;
     }
     panic!("Service '{service:?}' did not reach Online state within 2 seconds");
 }
@@ -95,14 +94,14 @@ pub async fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContex
     pipeline.push(UpstreamMiddleware::new());
 
     DnsContext {
-        cfg: cfg_arc.clone(),
+        cfg: Arc::clone(&cfg_arc),
         stats: Arc::new(DnsStats::new()),
         bus: ctx.bus(),
         ctx: ctx.clone(),
         query_log: Some(Arc::new(QueryRing::new(100))),
         pipeline,
         streams: Arc::new(lanforge_transport::TransportMetrics::new()),
-        local: LocalResolver::new(cfg_arc.clone(), ctx),
+        local: LocalResolver::new(Arc::clone(&cfg_arc), ctx),
         recursive,
         cache,
         rewrites,
@@ -310,7 +309,7 @@ pub fn extract_ptr(msg: &DnsMessage) -> Vec<String> {
 pub struct MockUpstreamServer {
     /// Socket address the mock upstream is bound to (on `127.0.0.1:0`).
     pub addr: SocketAddr,
-    task: tokio::task::JoinHandle<()>,
+    task: JoinHandle<()>,
 }
 
 impl MockUpstreamServer {
@@ -345,7 +344,7 @@ impl MockUpstreamServer {
                                     IpAddr::V4(v4) => {
                                         if q.qtype == DnsRecordType::A {
                                             resp.answers.push(DnsRecord {
-                                                name: q.name.clone(),
+                                                name: Arc::clone(&q.name),
                                                 rtype: DnsRecordType::A,
                                                 rclass: DnsClass::IN,
                                                 ttl: 300,
@@ -356,7 +355,7 @@ impl MockUpstreamServer {
                                     IpAddr::V6(v6) => {
                                         if q.qtype == DnsRecordType::AAAA {
                                             resp.answers.push(DnsRecord {
-                                                name: q.name.clone(),
+                                                name: Arc::clone(&q.name),
                                                 rtype: DnsRecordType::AAAA,
                                                 rclass: DnsClass::IN,
                                                 ttl: 300,

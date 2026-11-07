@@ -4,8 +4,10 @@ use std::sync::Arc;
 use lanforge_core::bus::{DeviceEvent, EventBus, LanforgeEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
+use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::{Ipv6Prefix, NeighborEvent};
+use lanforge_types::update::DeviceUpdate;
 use lanforge_types::utils::{ip_matches_prefix, mac_from_eui64_link_local};
-use lanforge_types::{identifiers::MacAddr, network::NeighborEvent, update::DeviceUpdate};
 use netlink_packet_core::{NetlinkHeader, NetlinkMessage, NetlinkPayload};
 use rtnetlink::packet_route::{
     AddressFamily, RouteNetlinkMessage,
@@ -13,6 +15,8 @@ use rtnetlink::packet_route::{
         NeighbourAddress, NeighbourAttribute, NeighbourHeader, NeighbourMessage, NeighbourState,
     },
 };
+use tokio::sync::{broadcast, mpsc};
+use tokio::time::{sleep, timeout};
 
 use crate::ndp::config::MonitorConfig;
 use crate::ndp::utils::{extract_neigh_info, parse_neighbor_msg};
@@ -24,7 +28,7 @@ fn create_test_discovery_service(
 ) -> DiscoveryService {
     let (conn, handle, _) = rtnetlink::new_connection().unwrap();
     tokio::spawn(conn);
-    let (_tx, messages) = tokio::sync::broadcast::channel(16);
+    let (_tx, messages) = broadcast::channel(16);
     let cfg = MonitorConfig {
         enabled: true,
         ping_enabled: false,
@@ -168,8 +172,7 @@ fn extract_neigh_info_requires_both_ip_and_mac() {
 
 #[test]
 fn to_device_update_gua_becomes_slaac_observed() {
-    let gua_prefix =
-        lanforge_types::network::Ipv6Prefix::from_addr("fd97:f00d:cafe:3731::".parse().unwrap());
+    let gua_prefix = Ipv6Prefix::from_addr("fd97:f00d:cafe:3731::".parse().unwrap());
     let slaac_ip: Ipv6Addr = "fd97:f00d:cafe:3731::abcd".parse().unwrap();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
 
@@ -189,8 +192,7 @@ fn to_device_update_gua_becomes_slaac_observed() {
 
 #[test]
 fn to_device_update_link_local_becomes_ndp_seen() {
-    let gua_prefix =
-        lanforge_types::network::Ipv6Prefix::from_addr("fd97:f00d:cafe:3731::".parse().unwrap());
+    let gua_prefix = Ipv6Prefix::from_addr("fd97:f00d:cafe:3731::".parse().unwrap());
     let link_local: Ipv6Addr = "fe80::1".parse().unwrap();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
 
@@ -517,7 +519,7 @@ async fn stop_ends_the_ping_sweep() {
 
     let (conn, handle, _) = rtnetlink::new_connection().unwrap();
     tokio::spawn(conn);
-    let (_netlink_tx, messages) = tokio::sync::broadcast::channel(16);
+    let (_netlink_tx, messages) = broadcast::channel(16);
     let cfg = MonitorConfig {
         enabled: true,
         ping_enabled: true,
@@ -529,26 +531,26 @@ async fn stop_ends_the_ping_sweep() {
     let mut service = DiscoveryService::new(cfg, handle, messages, vec![], ctx.clone())
         .with_pinger(Arc::new(pinger));
 
-    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(4);
+    let (cmd_tx, cmd_rx) = mpsc::channel(4);
     let h = ServiceHandle::with_command_channel(ServiceId::Discovery, ctx.clone(), cmd_rx);
     let ctx_serve = ctx.clone();
     let serve = tokio::spawn(async move { service.serve(&ctx_serve, &h).await });
 
     // The device goes unseen for a sweep interval, so the sweep pings it.
-    tokio::time::timeout(Duration::from_secs(3), wire.recv_reply())
+    timeout(Duration::from_secs(3), wire.recv_reply())
         .await
         .expect("the sweep pings the stale device")
         .expect("ping on the wire");
 
     cmd_tx.send(ServiceCommand::Stop).await.expect("alive");
-    tokio::time::timeout(Duration::from_secs(2), serve)
+    timeout(Duration::from_secs(2), serve)
         .await
         .expect("serve returns on Stop")
         .expect("join")
         .expect("serve ok");
     while wire.try_recv_reply().is_some() {}
 
-    tokio::time::sleep(Duration::from_millis(2500)).await;
+    sleep(Duration::from_millis(2500)).await;
     assert!(
         wire.try_recv_reply().is_none(),
         "a stopped Discovery still pings"

@@ -17,3 +17,6 @@ thiserror = { workspace = true, optional = true }
 tls = ["dep:rustls", "dep:rustls-pki-types", "dep:thiserror"]
 ring = ["rustls?/ring"]
 aws-lc = ["rustls?/aws-lc-rs"]
+
+[lints]
+workspace = true

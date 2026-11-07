@@ -1,7 +1,9 @@
 use lanforge_macros::EnumRepr;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
+use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::ops::Deref;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -9,6 +11,7 @@ use crate::device::identity::DeviceIdentity;
 
 use crate::device::state::{
     IPv4State, IPv6State, V4Lease, V6Lease, V6ObservationOrigin, V6PrefixLease,
+    system_time_to_epoch_u32,
 };
 
 use crate::events::{AdminChange, NetworkChange};
@@ -136,7 +139,7 @@ pub struct Device {
     pub status: DeviceStatus,
 }
 
-impl std::ops::Deref for Device {
+impl Deref for Device {
     type Target = DeviceIdentity;
     #[inline]
     fn deref(&self) -> &Self::Target {
@@ -200,8 +203,8 @@ impl Device {
         let now = SystemTime::now();
         let mut changed = false;
 
-        let expires_u32 = crate::device::state::system_time_to_epoch_u32(expires);
-        let now_u32 = crate::device::state::system_time_to_epoch_u32(now);
+        let expires_u32 = system_time_to_epoch_u32(expires);
+        let now_u32 = system_time_to_epoch_u32(now);
 
         match &mut self.v4 {
             IPv4State::Dynamic(lease) if lease.ip == ip && lease.expires == expires_u32 => {
@@ -389,7 +392,7 @@ impl Device {
                     let was_active = elapsed < Self::ONLINE_THRESHOLD;
 
                     if !was_active || elapsed > Self::ACTIVITY_DEBOUNCE {
-                        lease.last_seen = crate::device::state::system_time_to_epoch_u32(now);
+                        lease.last_seen = system_time_to_epoch_u32(now);
                         changed = true;
                     }
                 }
@@ -459,7 +462,7 @@ impl Device {
                         .unwrap_or(Duration::MAX);
                     let was_active = elapsed < Self::ONLINE_THRESHOLD;
                     if !was_active || elapsed > Self::ACTIVITY_DEBOUNCE {
-                        lease.last_seen = crate::device::state::system_time_to_epoch_u32(now);
+                        lease.last_seen = system_time_to_epoch_u32(now);
                         self.last_seen = self.calculate_last_seen();
                         changed = true;
                     }
@@ -600,7 +603,7 @@ impl Device {
         use crate::update::LeaseTarget;
         let mut events = Vec::new();
 
-        let now_epoch = crate::device::state::system_time_to_epoch_u32(now);
+        let now_epoch = system_time_to_epoch_u32(now);
 
         // V4
         match &self.v4 {
@@ -685,7 +688,7 @@ impl Device {
                     .unwrap_or(Duration::MAX)
                     > Self::ACTIVITY_DEBOUNCE
                 {
-                    lease.last_seen = crate::device::state::system_time_to_epoch_u32(now);
+                    lease.last_seen = system_time_to_epoch_u32(now);
                     changed = true;
                 }
             }
@@ -1116,8 +1119,8 @@ pub enum LearningMethod {
     Unknown,
 }
 
-impl std::fmt::Display for LearningMethod {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for LearningMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Static => write!(f, "Static"),
             Self::Managed => write!(f, "Managed"),

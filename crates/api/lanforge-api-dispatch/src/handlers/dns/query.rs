@@ -1,7 +1,8 @@
 use crate::ClientContext;
 use lanforge_api::api::{DnsQueryLogEntry, DnsQueryLogResponse, DnsQueryResponse, Response};
+use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::QueryResult;
-use lanforge_types::network::dns::{DnsRecordEntry, DnsRecordType};
+use lanforge_types::network::dns::{DnsRecordEntry, DnsRecordType, DnsRequest, DnsResponse};
 use std::{collections::HashMap, net::IpAddr, time::Instant};
 use tracing::debug;
 
@@ -37,13 +38,13 @@ impl ClientContext {
         };
 
         match handle
-            .send_request(lanforge_types::network::dns::DnsRequest::Query {
+            .send_request(DnsRequest::Query {
                 name: name.to_string(),
                 qtype,
             })
             .await
         {
-            Ok(lanforge_types::network::dns::DnsResponse::Query(res)) => res,
+            Ok(DnsResponse::Query(res)) => res,
             _ => Err("Invalid response from DNS service".into()),
         }
     }
@@ -79,10 +80,8 @@ impl ClientContext {
         {
             Ok((queries, total)) => {
                 let entries = self.ctx.with_state(|state| {
-                    let mut ip_cache: HashMap<
-                        IpAddr,
-                        (Option<lanforge_types::identifiers::MacAddr>, Option<String>),
-                    > = HashMap::new();
+                    let mut ip_cache: HashMap<IpAddr, (Option<MacAddr>, Option<String>)> =
+                        HashMap::new();
                     queries
                         .into_iter()
                         .map(|q| {

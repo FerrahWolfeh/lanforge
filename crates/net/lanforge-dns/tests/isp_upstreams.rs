@@ -1,8 +1,17 @@
-//! Without configured upstreams, DNS forwards to the resolvers the ISP announced over PPPoE.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
+//! Without configured upstreams, DNS forwards to the resolvers the ISP announced over `PPPoE`.
 //!
 //! They used to be learned only from the `SessionUp` event, so a DNS restart with the session
-//! already up, a lagged PPPoE topic, or removing the custom upstreams left the LAN with no
-//! upstream at all until the next PPPoE reconnect.
+//! already up, a lagged `PPPoE` topic, or removing the custom upstreams left the LAN with no
+//! upstream at all until the next `PPPoE` reconnect.
 
 #[path = "common/mod.rs"]
 mod common;
@@ -19,7 +28,7 @@ use lanforge_types::network::dns::{DnsRequest, DnsResponse};
 use lanforge_types::system::{PppoeSessionState, PppoeStatusResponse, ServiceId};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 
 const ISP_DNS: IpAddr = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 53));
 
@@ -60,7 +69,7 @@ async fn upstream_addrs(ctx: &LanforgeContext) -> Vec<SocketAddr> {
 async fn wait_upstreams(ctx: &LanforgeContext, want: &[SocketAddr]) {
     timeout(Duration::from_millis(500), async {
         while upstream_addrs(ctx).await != want {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            sleep(Duration::from_millis(10)).await;
         }
     })
     .await
@@ -71,7 +80,7 @@ fn isp() -> SocketAddr {
     SocketAddr::new(ISP_DNS, 53)
 }
 
-/// `lanforge service restart dns` (or a crash restart) while PPPoE is up gets no SessionUp.
+/// `lanforge service restart dns` (or a crash restart) while `PPPoE` is up gets no `SessionUp`.
 #[tokio::test]
 async fn dns_started_with_pppoe_up_uses_the_isp_resolvers() {
     let ctx = init_test_context();
@@ -80,7 +89,7 @@ async fn dns_started_with_pppoe_up_uses_the_isp_resolvers() {
     wait_upstreams(&ctx, &[isp()]).await;
 }
 
-/// A SessionUp lost to a lagged PPPoE topic must not leave DNS without upstreams.
+/// A `SessionUp` lost to a lagged `PPPoE` topic must not leave DNS without upstreams.
 #[tokio::test]
 async fn dns_resyncs_isp_resolvers_after_a_lagged_bus() {
     let ctx = init_test_context();

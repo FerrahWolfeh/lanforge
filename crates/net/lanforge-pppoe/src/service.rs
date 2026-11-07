@@ -1,33 +1,35 @@
 use crate::auth::authenticate;
 use crate::backoff::{ReconnectBackoff, SessionEnd};
 use crate::config::{PppoeConfig, PppoeCredentials};
-use crate::discovery::{PppoeDiscovery, send_padt};
+use crate::discovery::{DiscoveryResult, PppoeDiscovery, send_padt};
 use crate::error::PppoeError;
 use crate::host::{KernelHost, PppoeHost, resolve_parent_iface};
-use crate::ipcp::negotiate_ipcp;
+use crate::ipcp::{IpcpNegotiated, negotiate_ipcp};
 use crate::keepalive::{PadtWatch, run_keepalive};
-use crate::lcp::negotiate_lcp;
+use crate::lcp::{LcpNegotiated, negotiate_lcp};
 use crate::session::PppoeSession;
 use crate::wan_dns::follow_wan_rdnss;
 use lanforge_core::bus::{LanforgeEvent, PppoeEvent, SystemEvent};
 use lanforge_core::context::{ConfigSubscription, LanforgeContext};
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
-    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
-    ServiceCommand, ServiceHandle, ServiceSpec,
+    Activation, AsyncService, Condition, Edge, LanforgeService, LossPolicy, RestartPolicy,
+    RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
 };
 use lanforge_transport::{ArpProber, Icmp6Transport, PppoeTransport};
-use lanforge_types::config::ChangeImpact;
+use lanforge_types::config::{ChangeImpact, ConfigDomain};
+use lanforge_types::events::pppoe::PppoeSessionUp;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::system::{
     DegradedReason, DormantReason, PppoeSessionState, PppoeStatusResponse, ServiceId, ServiceState,
     StateDetail,
 };
+use std::mem;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
-use tokio::time::{Instant, sleep_until};
+use tokio::time::{Instant, interval, sleep_until};
 use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone)]
@@ -64,10 +66,7 @@ fn reconnect_jitter() -> f64 {
 /// starts sooner than this after a PADT.
 const PADT_RELEASE: Duration = Duration::from_secs(6);
 
-const PPPOE_DEPS: &[Edge] = &[Edge::requires(
-    ServiceId::Interfaces,
-    lanforge_core::service::LossPolicy::Continue,
-)];
+const PPPOE_DEPS: &[Edge] = &[Edge::requires(ServiceId::Interfaces, LossPolicy::Continue)];
 
 pub struct PppoeService<H: PppoeHost = KernelHost> {
     cfg: PppoeConfig,
@@ -285,7 +284,7 @@ impl<H: PppoeHost> PppoeService<H> {
     async fn teardown_session(&mut self, reason: String, notify_peer: bool) {
         let latest = self.config_sub.current();
         self.apply_hot_config(&latest);
-        let had_session = std::mem::take(&mut self.announced);
+        let had_session = mem::take(&mut self.announced);
         let session_meta = self.active_session.take();
         self.connected_at = None;
         if let Some(ref meta) = session_meta
@@ -339,7 +338,7 @@ impl<H: PppoeHost> PppoeService<H> {
         ifindex: u32,
         mac: MacAddr,
         transport: &PppoeTransport,
-    ) -> Result<crate::discovery::DiscoveryResult, PppoeError> {
+    ) -> Result<DiscoveryResult, PppoeError> {
         info!(wan_iface = %self.cfg.wan_iface, "Starting PPPoE discovery");
         let discovery = PppoeDiscovery::new(
             ifindex,
@@ -367,17 +366,10 @@ impl<H: PppoeHost> PppoeService<H> {
 
     async fn negotiate_session(
         &self,
-        disc_res: &crate::discovery::DiscoveryResult,
+        disc_res: &DiscoveryResult,
         mac: MacAddr,
         transport: &PppoeTransport,
-    ) -> Result<
-        (
-            PppoeSession,
-            crate::lcp::LcpNegotiated,
-            crate::ipcp::IpcpNegotiated,
-        ),
-        PppoeError,
-    > {
+    ) -> Result<(PppoeSession, LcpNegotiated, IpcpNegotiated), PppoeError> {
         let session = PppoeSession::connect(
             transport.clone(),
             &self.cfg.wan_iface,
@@ -428,9 +420,9 @@ impl<H: PppoeHost> PppoeService<H> {
     pub fn publish_connected_status(
         &mut self,
         interface_name: &str,
-        disc_res: &crate::discovery::DiscoveryResult,
-        lcp_res: &crate::lcp::LcpNegotiated,
-        ipcp_res: &crate::ipcp::IpcpNegotiated,
+        disc_res: &DiscoveryResult,
+        lcp_res: &LcpNegotiated,
+        ipcp_res: &IpcpNegotiated,
     ) {
         let (terminal_reachable, terminal_mac, terminal_rtt_us) = self
             .terminal_status
@@ -463,7 +455,7 @@ impl<H: PppoeHost> PppoeService<H> {
         self.connected_at = Some(connected_at);
         self.announced = true;
 
-        let session_up = lanforge_types::events::pppoe::PppoeSessionUp {
+        let session_up = PppoeSessionUp {
             interface: interface_name.to_string(),
             ipv4: ipcp_res.local_ip,
             ipv4_peer: ipcp_res.peer_ip,
@@ -546,7 +538,7 @@ impl<H: PppoeHost> PppoeService<H> {
         self.settle_degraded(DegradedReason::custom("no carrier on the WAN interface"));
 
         let mut bus_rx = self.ctx.bus().subscribe_system();
-        let mut check_timer = tokio::time::interval(Duration::from_secs(1));
+        let mut check_timer = interval(Duration::from_secs(1));
         let mut wait_ticks = 0u64;
 
         loop {
@@ -716,9 +708,9 @@ impl<H: PppoeHost> PppoeService<H> {
 
         let mut bus_rx = self.ctx.bus().subscribe_system();
         let poll_duration = Duration::from_secs(self.cfg.terminal_probe.poll_interval_secs.max(1));
-        let mut poll_timer = tokio::time::interval(poll_duration);
+        let mut poll_timer = interval(poll_duration);
         poll_timer.tick().await;
-        let start = tokio::time::Instant::now();
+        let start = Instant::now();
         let deadline = Duration::from_secs(self.cfg.terminal_probe.max_wait_secs);
 
         loop {
@@ -973,10 +965,7 @@ impl<H: PppoeHost> LanforgeService for PppoeService<H> {
             shutdown_timeout: Duration::from_secs(10),
             deps: PPPOE_DEPS,
             condition: Condition {
-                sections: &[
-                    lanforge_types::config::ConfigDomain::Pppoe,
-                    lanforge_types::config::ConfigDomain::Interfaces,
-                ],
+                sections: &[ConfigDomain::Pppoe, ConfigDomain::Interfaces],
                 eval: |ctx| match ctx.get_pppoe_config() {
                     Some(cfg) if cfg.enabled => ctx
                         .wan_link_wait(&cfg.wan_iface)

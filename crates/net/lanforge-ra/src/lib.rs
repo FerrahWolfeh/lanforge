@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! # Lanforge Router Advertisement Server
 //!
 //! `ICMPv6` Router Advertisement daemon for Lanforge.
@@ -55,19 +56,23 @@ pub mod packet;
 
 pub use config::*;
 use lanforge_core::context::LanforgeContext;
-use lanforge_types::config::ChangeImpact;
+use lanforge_core::service::LossPolicy;
+use lanforge_types::config::{ChangeImpact, ConfigDomain};
+use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::Ipv6Prefix;
 use lanforge_types::network::ra::{
     ICMPV6_TYPE_RS, MAX_INITIAL_RTR_ADVERT_INTERVAL, MAX_INITIAL_RTR_ADVERTISEMENTS,
     MAX_RA_DELAY_TIME_MS, MIN_DELAY_BETWEEN_RAS, PreviousLanPrefixes, RAPrefix, RaServerConfig,
 };
 use lanforge_types::system::{DormantReason, RaStatusResponse, RunResult};
+use lanforge_types::utils::mac_from_eui64_link_local;
 use parking_lot::Mutex;
+use std::fs;
 use std::sync::Arc;
 
 pub use packet::{build_ra_packet, icmpv6_checksum};
 
-use crate::error::NetworkError;
+use crate::error::RaError;
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent};
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
@@ -79,7 +84,7 @@ use rand::RngExt;
 use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, Ipv6Addr, SocketAddrV6};
-use std::time::{Duration, Instant};
+use tokio::time::{self, Duration, Instant};
 use tracing::{debug, info, warn};
 
 const ALL_NODES_MULTICAST: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 1);
@@ -308,7 +313,7 @@ impl AdvertisedPrefixes {
         }
         memory.last_gua = current_gua;
         let shared = Arc::new(Self(Mutex::new(memory)));
-        ctx.provide_shared(shared.clone());
+        ctx.provide_shared(Arc::clone(&shared));
         shared
     }
 }
@@ -386,10 +391,7 @@ impl PrefixMemory {
 use lanforge_types::system::ServiceId;
 
 const RA_DEPS: &[Edge] = &[
-    Edge::requires(
-        ServiceId::Interfaces,
-        lanforge_core::service::LossPolicy::Continue,
-    ),
+    Edge::requires(ServiceId::Interfaces, LossPolicy::Continue),
     Edge::wants(ServiceId::Wan),
 ];
 #[derive(Clone)]
@@ -438,15 +440,15 @@ impl RaService {
                     .and_then(|i| i.mac)
             })
             .or_else(|| {
-                std::fs::read_to_string(format!("/sys/class/net/{}/address", self.cfg.iface))
+                fs::read_to_string(format!("/sys/class/net/{}/address", self.cfg.iface))
                     .ok()
-                    .and_then(|s| lanforge_types::identifiers::MacAddr::parse(s.trim()))
+                    .and_then(|s| MacAddr::parse(s.trim()))
             })
             .or_else(|| {
                 self.ctx
                     .get_interface_state(iface_index)
                     .link_local
-                    .and_then(|ll| lanforge_types::utils::mac_from_eui64_link_local(&ll))
+                    .and_then(|ll| mac_from_eui64_link_local(&ll))
             })
             .map(|mac| mac.0)
             .ok_or_else(|| {
@@ -615,7 +617,7 @@ impl RaService {
                 }
 
                 // 1. Timers: due unicast answers, periodic (or solicited multicast) advertisement
-                () = tokio::time::sleep(sleep_duration) => {
+                () = time::sleep(sleep_duration) => {
                     if Self::send_due_unicasts(ctx, &current_cfg, &mut state) {
                         let status = state.build_status(&current_cfg, &self.ctx, Some(next_ra_at));
                         self.ctx.set_ra_status(Some(status));
@@ -731,10 +733,7 @@ impl LanforgeService for RaService {
             shutdown_timeout: Duration::from_secs(3),
             deps: RA_DEPS,
             condition: Condition {
-                sections: &[
-                    lanforge_types::config::ConfigDomain::RaServer,
-                    lanforge_types::config::ConfigDomain::Interfaces,
-                ],
+                sections: &[ConfigDomain::RaServer, ConfigDomain::Interfaces],
                 eval: |ctx| {
                     if !ctx.get_ra_server_config().enabled {
                         return Activation::Dormant(DormantReason::disabled("ra.enabled"));
@@ -911,11 +910,11 @@ fn send_ra_internal(
     iface_index: u32,
     unicast_dst: Option<Ipv6Addr>,
     state: &RaState,
-) -> Result<(), NetworkError> {
+) -> Result<(), RaError> {
     let if_ips = lctx.get_interface_state(iface_index);
 
     let Some(src_ll) = if_ips.link_local else {
-        return Err(NetworkError::NoLinkLocal(iface_index));
+        return Err(RaError::NoLinkLocal(iface_index));
     };
     // Only the LAN interface's own GUA (e.g. delegated by the OS DHCPv6-PD client) is
     // advertised. Never fall back to the WAN link prefix: it is not routed to the LAN, and
@@ -926,8 +925,8 @@ fn send_ra_internal(
 
     let now = Instant::now();
 
-    let gua_prefix = gua.map(lanforge_types::network::Ipv6Prefix::from_addr);
-    let ula_prefix = ula.map(lanforge_types::network::Ipv6Prefix::from_addr);
+    let gua_prefix = gua.map(Ipv6Prefix::from_addr);
+    let ula_prefix = ula.map(Ipv6Prefix::from_addr);
     let gua_pref = if if_ips.gua_preferred > 0 {
         if_ips.gua_preferred
     } else {
@@ -974,7 +973,7 @@ fn send_ra_internal(
 
     transport
         .send(&pkt, &dst_sa)
-        .map_err(|e| NetworkError::Socket(format!("ICMPv6 send: {e}")))?;
+        .map_err(|e| RaError::Socket(format!("ICMPv6 send: {e}")))?;
 
     Ok(())
 }
@@ -1078,9 +1077,7 @@ mod tests {
         assert_eq!(if_ips.gua, Some(old_gua));
 
         // First transition: last_gua becomes Some(old_gua)
-        state.prefixes.lock().last_gua = if_ips
-            .gua
-            .map(lanforge_types::network::Ipv6Prefix::from_addr);
+        state.prefixes.lock().last_gua = if_ips.gua.map(Ipv6Prefix::from_addr);
 
         // 4. Trigger rotation: change GUA in interface state
         let new_gua: Ipv6Addr = "2001:db8:abc::1".parse().unwrap();
@@ -1104,9 +1101,7 @@ mod tests {
 
         // 5. Simulate send_ra_internal transition for rotation:
         state.prefixes.lock().update_prefix_and_deprecate(
-            if_ips
-                .gua
-                .map(lanforge_types::network::Ipv6Prefix::from_addr),
+            if_ips.gua.map(Ipv6Prefix::from_addr),
             true,
             true,
         );
@@ -1114,9 +1109,9 @@ mod tests {
         // Verify that old_gua is now deprecated in state with RFC 4862 §5.5.3e valid lifetime (2 hours = 7200s)
         let prefixes = state.prefixes.lock();
         assert_eq!(prefixes.deprecated.len(), 1);
-        let expected_prefix = lanforge_types::network::Ipv6Prefix::from_addr(old_gua).to_addr();
+        let expected_prefix = Ipv6Prefix::from_addr(old_gua).to_addr();
         assert_eq!(prefixes.deprecated[0].0, expected_prefix);
-        let deprecated_list = prefixes.deprecated_list(std::time::Instant::now());
+        let deprecated_list = prefixes.deprecated_list(Instant::now());
         drop(prefixes);
         assert_eq!(deprecated_list.len(), 1);
         assert_eq!(deprecated_list[0].0, expected_prefix);

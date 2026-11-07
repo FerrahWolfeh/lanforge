@@ -1,21 +1,38 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
+use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 
-use lanforge_api::api::Response;
+use lanforge_api::api::{Response, SystemConfigExport};
+use lanforge_api::config_file::{ConfigFile, RaInputs, effective_ra};
 use lanforge_api_dispatch::ClientContext;
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::state::State;
 use lanforge_core::context::{ConfigPatch, LanforgeContext};
+use lanforge_core::service::ServiceHandle;
+use lanforge_db::config::DatabaseConfig;
+use lanforge_db::engine::LanforgeDb;
+use lanforge_db::log_engine::LogDb;
+use lanforge_db::worker::DbWorker;
 use lanforge_types::config::{ChangeImpact, ConfigSection, DomainSet};
 use lanforge_types::network::dhcp::{Dhcpv4Options, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::RAPrefix;
+use lanforge_types::system::ServiceId;
 use tokio::time::timeout;
 
 fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
     let bus = Arc::new(EventBus::new());
     let state = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), state, None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), state, None);
     (ctx, bus)
 }
 
@@ -201,26 +218,23 @@ async fn test_acceptance_reload_noop() {
 
     // Setup DB worker so storage handle is available
     let db_dir = tempfile::tempdir().unwrap();
-    let db_cfg = lanforge_db::config::DatabaseConfig {
+    let db_cfg = DatabaseConfig {
         config_path: db_dir.path().join("test.redb").display().to_string(),
         runtime_path: db_dir.path().join("test_log.jsonl").display().to_string(),
         ..Default::default()
     };
-    let db = Arc::new(lanforge_db::engine::LanforgeDb::open(&db_cfg).unwrap());
-    let log_db = Arc::new(lanforge_db::log_engine::LogDb::open(&db_cfg.runtime_path).unwrap());
-    let mut db_worker = lanforge_db::worker::DbWorker::new(db_cfg, ctx.clone(), db, log_db);
+    let db = Arc::new(LanforgeDb::open(&db_cfg).unwrap());
+    let log_db = Arc::new(LogDb::open(&db_cfg.runtime_path).unwrap());
+    let mut db_worker = DbWorker::new(db_cfg, ctx.clone(), db, log_db);
     let ctx_db = ctx.clone();
-    let ctrl = lanforge_core::service::ServiceHandle::new(
-        lanforge_types::system::ServiceId::Db,
-        ctx.clone(),
-    );
+    let ctrl = ServiceHandle::new(ServiceId::Db, ctx.clone());
     tokio::spawn(async move {
         use lanforge_core::service::AsyncService;
         let _ = db_worker.init(&ctx_db).await;
         ctrl.ready();
         let _ = db_worker.serve(&ctx_db, &ctrl).await;
     });
-    ctx.wait_for_service(lanforge_types::system::ServiceId::Db)
+    ctx.wait_for_service(ServiceId::Db)
         .await
         .expect("DB failed to become ready");
 
@@ -237,21 +251,21 @@ enabled = false
 wan_iface = "eth1"
 username = ""
 "#;
-    std::fs::write(&config_path, initial_toml).unwrap();
+    fs::write(&config_path, initial_toml).unwrap();
 
     ctx.set_config_path(&config_path);
 
     // Hydrate context to match the on-disk initial state
-    let cfg_file = lanforge_api::config_file::ConfigFile::parse(initial_toml).unwrap();
+    let cfg_file = ConfigFile::parse(initial_toml).unwrap();
     // The RA the boot runs: `[ra]` plus what the daemon derives (no LAN interface set here).
-    let ra = lanforge_api::config_file::effective_ra(
+    let ra = effective_ra(
         cfg_file.ra.to_config().0,
-        &lanforge_api::config_file::RaInputs {
+        &RaInputs {
             search_domains: cfg_file.search_domains(),
             ..Default::default()
         },
     );
-    let export = lanforge_api::api::SystemConfigExport::from(cfg_file);
+    let export = SystemConfigExport::from(cfg_file);
     let mut initial_patch = ConfigPatch::new().with_ra_server(ra);
     if let Some(pppoe) = export.pppoe_config {
         initial_patch = initial_patch.with_pppoe(*pppoe);

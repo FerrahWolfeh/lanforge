@@ -111,9 +111,9 @@ pub enum Response {
     DnsReverseResolvers(DnsReverseResolversResponse),
     /// List of transient hosts.
     TransientHosts(TransientHostsResponse),
-    /// PPPoE session status response.
+    /// `PPPoE` session status response.
     PppoeStatus(Box<PppoeStatusResponse>),
-    /// PPPoE configuration response.
+    /// `PPPoE` configuration response.
     PppoeConfig(Box<PppoeConfig>),
     /// Router Advertisement server status and metrics response.
     RaStatus(Box<RaStatusResponse>),

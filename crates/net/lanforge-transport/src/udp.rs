@@ -1,6 +1,7 @@
 use crate::inert::{InertHandle, InertPort};
 use crate::limiter::RateLimiter;
-use crate::metrics::TransportMetrics;
+use crate::metrics::{TransportMetrics, TransportStats};
+use lanforge_types::network::snapshot::TransportSnapshot;
 use std::io;
 use std::net::{
     IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, UdpSocket as StdUdpSocket,
@@ -41,7 +42,7 @@ pub struct UdpTransport {
 }
 
 impl UdpTransport {
-    /// Creates a Y-shaped dual-stack transport bound to `0.0.0.0:port` and `[::]:port` (IPV6_V6ONLY=true).
+    /// Creates a Y-shaped dual-stack transport bound to `0.0.0.0:port` and `[::]:port` (`IPV6_V6ONLY=true`).
     ///
     /// If IPv6 is not supported by the kernel, it gracefully falls back to IPv4 single-socket.
     pub fn dual_stack(port: u16) -> io::Result<Self> {
@@ -103,7 +104,7 @@ impl UdpTransport {
         Ok(Self::from_backend(UdpBackend::KernelSingle(tokio_sock)))
     }
 
-    /// Binds a UDP socket bound to a specific network interface via SO_BINDTODEVICE.
+    /// Binds a UDP socket bound to a specific network interface via `SO_BINDTODEVICE`.
     pub fn bind_device(iface: &str, port: u16) -> io::Result<Self> {
         let std_socket =
             StdUdpSocket::bind(("0.0.0.0", port)).or_else(|_| StdUdpSocket::bind(("::", port)))?;
@@ -307,8 +308,8 @@ impl UdpTransport {
     }
 }
 
-impl crate::metrics::TransportStats for UdpTransport {
-    fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
+impl TransportStats for UdpTransport {
+    fn snapshot(&self) -> TransportSnapshot {
         self.inner.metrics.snapshot()
     }
 }

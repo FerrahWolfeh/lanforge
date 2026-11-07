@@ -2,6 +2,7 @@
 
 use arc_swap::{ArcSwap, Guard};
 use lanforge_types::device::Device;
+use lanforge_types::identifiers::{DeviceIdentifier, MacAddr};
 use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::net::IpAddr;
@@ -135,7 +136,7 @@ impl LocalResolver {
             return (None, false);
         }
 
-        let parsed_mac = lanforge_types::identifiers::MacAddr::parse(hostname);
+        let parsed_mac = MacAddr::parse(hostname);
         let resolved_mac = self.ctx.with_state(|state| {
             if let Some(ref mac) = parsed_mac
                 && state.devices.contains_key(mac)
@@ -188,20 +189,18 @@ impl LocalResolver {
     #[must_use]
     pub fn resolve_device(
         &self,
-        id: &lanforge_types::identifiers::DeviceIdentifier,
+        id: &DeviceIdentifier,
         qtype: DnsRecordType,
     ) -> Option<SmallVec<[IpAddr; 8]>> {
         match id {
-            lanforge_types::identifiers::DeviceIdentifier::Mac(mac) => {
+            DeviceIdentifier::Mac(mac) => {
                 if let Some(device) = self.ctx.get_device(mac) {
                     self.collect_device_ips_filtered(&device, qtype)
                 } else {
                     None
                 }
             }
-            lanforge_types::identifiers::DeviceIdentifier::Name(name) => {
-                self.resolve_ip(name, qtype)
-            }
+            DeviceIdentifier::Name(name) => self.resolve_ip(name, qtype),
         }
     }
 
@@ -294,7 +293,7 @@ impl LocalResolver {
             match ip {
                 IpAddr::V4(v4) if matches!(qtype, DnsRecordType::A | DnsRecordType::ANY) => {
                     records.push(DnsRecord {
-                        name: qname_arc.clone(),
+                        name: Arc::clone(&qname_arc),
                         rtype: DnsRecordType::A,
                         rclass: DnsClass::IN,
                         ttl: self.cfg.ttl,
@@ -303,7 +302,7 @@ impl LocalResolver {
                 }
                 IpAddr::V6(v6) if matches!(qtype, DnsRecordType::AAAA | DnsRecordType::ANY) => {
                     records.push(DnsRecord {
-                        name: qname_arc.clone(),
+                        name: Arc::clone(&qname_arc),
                         rtype: DnsRecordType::AAAA,
                         rclass: DnsClass::IN,
                         ttl: self.cfg.ttl,
@@ -342,7 +341,7 @@ impl LocalResolver {
     /// the LAN knows answers its addresses, or NODATA for any other type; a host it does not
     /// know, or a deeper name, is NXDOMAIN; the domain itself is NODATA (an NXDOMAIN there
     /// would deny every name under it, RFC 8020). A dotless name is looked up as a LAN host and
-    /// never forwarded either (dnsmasq's `domain-needed`) — an IoT device looping on `:0` is
+    /// never forwarded either (dnsmasq's `domain-needed`) — an `IoT` device looping on `:0` is
     /// answered here — except the root and TLD delegation lookups (NS/SOA/DS/DNSKEY of a name
     /// that is not a LAN host, e.g. `. NS`, `com. DS`). Reverse names (PTR) of LAN addresses
     /// are answered when known, else forwarded.

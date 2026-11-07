@@ -13,7 +13,7 @@ use lanforge_types::device::{
     TransientHost, TransientOrigin, V6ObservationOrigin, classify_ipv6,
 };
 use lanforge_types::identifiers::{Duid, MacAddr};
-use lanforge_types::network::Ipv6AddrOrSuffix;
+use lanforge_types::network::{Ipv6AddrOrSuffix, Ipv6Prefix};
 use lanforge_types::update::V6LeaseUpdate;
 
 type ProcessedNeighbor = (
@@ -336,18 +336,10 @@ impl State {
         }
 
         let old_state = self.interfaces.interface_ips.get(&ifindex);
-        let old_gua_prefix = old_state
-            .and_then(|s| s.gua)
-            .map(lanforge_types::network::Ipv6Prefix::from_addr);
-        let old_ula_prefix = old_state
-            .and_then(|s| s.ula)
-            .map(lanforge_types::network::Ipv6Prefix::from_addr);
-        let new_gua_prefix = merged
-            .gua
-            .map(lanforge_types::network::Ipv6Prefix::from_addr);
-        let new_ula_prefix = merged
-            .ula
-            .map(lanforge_types::network::Ipv6Prefix::from_addr);
+        let old_gua_prefix = old_state.and_then(|s| s.gua).map(Ipv6Prefix::from_addr);
+        let old_ula_prefix = old_state.and_then(|s| s.ula).map(Ipv6Prefix::from_addr);
+        let new_gua_prefix = merged.gua.map(Ipv6Prefix::from_addr);
+        let new_ula_prefix = merged.ula.map(Ipv6Prefix::from_addr);
 
         let prefix_changed = old_gua_prefix != new_gua_prefix || old_ula_prefix != new_ula_prefix;
 

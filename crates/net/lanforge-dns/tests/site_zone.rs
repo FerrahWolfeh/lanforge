@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 //! Names under the site's domains (`.lan`) are the router's, whatever the query type.
 //!
 //! Owner box, 2026-11-03: `archie` answered every type locally, but `archie.lan` HTTPS/TXT/MX

@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Core data structures and shared types for Lanforge.
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 pub mod auth;

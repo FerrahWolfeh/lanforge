@@ -1,16 +1,25 @@
-use lanforge::event_loop::ReadinessTracker;
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
+use lanforge::event_loop::{ReadinessTracker, SYSTEMD_READY_DEADLINE};
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_types::system::{ServiceId, ServiceState};
 use std::collections::HashSet;
 use std::sync::Arc;
-use tokio::time::{Duration, timeout};
+use tokio::time::{Duration, Instant, timeout};
 
 #[tokio::test]
 async fn test_event_loop_pre_seeded_readiness_reconciliation() {
     let bus = Arc::new(EventBus::new());
-    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), State::new(), None);
 
     // Simulate 5 services that have already transitioned to Online in Context
     // BEFORE the event loop even starts.
@@ -29,7 +38,7 @@ async fn test_event_loop_pre_seeded_readiness_reconciliation() {
     let mut sys_listener = bus.subscribe_system();
 
     // 1. Initialize tracker: pre-seeded services reconcile immediately
-    let mut tracker = ReadinessTracker::new(&ctx, expected_services, tokio::time::Instant::now());
+    let mut tracker = ReadinessTracker::new(&ctx, expected_services, Instant::now());
 
     // Verify that SystemReady is immediately published
     let event = timeout(Duration::from_millis(500), sys_listener.recv())
@@ -51,7 +60,7 @@ async fn test_event_loop_pre_seeded_readiness_reconciliation() {
 #[tokio::test]
 async fn test_event_loop_concurrent_broadcast_readiness() {
     let bus = Arc::new(EventBus::new());
-    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), State::new(), None);
 
     let services = [
         ServiceId::Uds,
@@ -66,7 +75,7 @@ async fn test_event_loop_concurrent_broadcast_readiness() {
     }
 
     let mut sys_listener = bus.subscribe_system();
-    let mut tracker = ReadinessTracker::new(&ctx, expected_services, tokio::time::Instant::now());
+    let mut tracker = ReadinessTracker::new(&ctx, expected_services, Instant::now());
 
     // Progressively report services ready
     for id in &services[..services.len() - 1] {
@@ -92,21 +101,17 @@ async fn test_event_loop_concurrent_broadcast_readiness() {
     );
 }
 
-/// A ServiceReady lost to a lagged bus (15 services starting at once) was never recovered: the
+/// A `ServiceReady` lost to a lagged bus (15 services starting at once) was never recovered: the
 /// periodic check only re-logged "still waiting", READY=1 never reached systemd and its start
 /// timeout killed the whole daemon. The periodic check must re-read the services' real state.
 #[tokio::test]
 async fn test_periodic_check_recovers_a_lost_service_ready() {
     let bus = Arc::new(EventBus::new());
-    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), State::new(), None);
     ctx.set_service_state(ServiceId::Dns, ServiceState::Starting);
     let mut sys_listener = bus.subscribe_system();
 
-    let mut tracker = ReadinessTracker::new(
-        &ctx,
-        HashSet::from([ServiceId::Dns]),
-        tokio::time::Instant::now(),
-    );
+    let mut tracker = ReadinessTracker::new(&ctx, HashSet::from([ServiceId::Dns]), Instant::now());
     assert!(sys_listener.try_recv().is_err(), "not ready yet");
 
     // The service settles, but its ServiceReady never reaches the tracker.
@@ -124,11 +129,11 @@ async fn test_periodic_check_recovers_a_lost_service_ready() {
 }
 
 /// One service stuck starting must not get the daemon killed by systemd's start timeout: past the
-/// deadline READY=1 goes out, while SystemReady still waits for every service.
+/// deadline READY=1 goes out, while `SystemReady` still waits for every service.
 #[tokio::test]
 async fn test_systemd_ready_is_not_held_hostage_by_one_service() {
     let bus = Arc::new(EventBus::new());
-    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), State::new(), None);
     ctx.set_service_state(ServiceId::Dns, ServiceState::Online);
     ctx.set_service_state(ServiceId::Pppoe, ServiceState::Starting);
     let mut sys_listener = bus.subscribe_system();
@@ -136,14 +141,14 @@ async fn test_systemd_ready_is_not_held_hostage_by_one_service() {
     let mut tracker = ReadinessTracker::new(
         &ctx,
         HashSet::from([ServiceId::Dns, ServiceId::Pppoe]),
-        tokio::time::Instant::now(),
+        Instant::now(),
     );
-    let start = tokio::time::Instant::now();
+    let start = Instant::now();
 
     tracker.check_pending_at(start + Duration::from_secs(5));
     assert!(!tracker.systemd_ready_sent(), "too early");
 
-    tracker.check_pending_at(start + lanforge::event_loop::SYSTEMD_READY_DEADLINE);
+    tracker.check_pending_at(start + SYSTEMD_READY_DEADLINE);
     assert!(
         tracker.systemd_ready_sent(),
         "deadline passed: READY=1 must go out"
@@ -166,19 +171,19 @@ async fn test_systemd_ready_is_not_held_hostage_by_one_service() {
 
 /// systemd's start timeout runs from exec, so the readiness deadline does too: a slow bootstrap
 /// (12 s here) leaves only 3 s before READY=1, it does not push the deadline 12 s further
-/// (that, plus the 10 s status tick, could reach the unit's 30 s TimeoutStartSec and get the
-/// daemon — and the LAN — killed while PPPoE waits on a slow ISP).
+/// (that, plus the 10 s status tick, could reach the unit's 30 s `TimeoutStartSec` and get the
+/// daemon — and the LAN — killed while `PPPoE` waits on a slow ISP).
 #[tokio::test]
 async fn test_readiness_deadline_counts_from_process_start() {
     let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
     ctx.set_service_state(ServiceId::Pppoe, ServiceState::Starting);
-    let now = tokio::time::Instant::now();
+    let now = Instant::now();
     let process_start = now - Duration::from_secs(12);
 
     let mut tracker = ReadinessTracker::new(&ctx, HashSet::from([ServiceId::Pppoe]), process_start);
     assert_eq!(
         tracker.ready_deadline(),
-        process_start + lanforge::event_loop::SYSTEMD_READY_DEADLINE
+        process_start + SYSTEMD_READY_DEADLINE
     );
 
     tracker.check_pending_at(now + Duration::from_secs(2));
@@ -208,7 +213,7 @@ async fn test_only_the_wan_link_wait_holds_readiness() {
         ctx.set_service_detail(id, Some(StateDetail::Dormant(reason)));
     }
     let mut sys_listener = ctx.bus().subscribe_system();
-    let start = tokio::time::Instant::now();
+    let start = Instant::now();
     let mut tracker = ReadinessTracker::new(
         &ctx,
         HashSet::from([ServiceId::Pppoe, ServiceId::Dhcp4]),

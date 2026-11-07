@@ -1,13 +1,21 @@
-use crate::ClientContext;
+use std::fs;
+use std::fs::metadata;
+use std::sync::atomic::Ordering;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use lanforge_api::api::{
     Capabilities, Compression, DbStatus, DevicesStats, Encoding, NetworkStatus, ResourcesStatus,
     Response, ServiceBannersResponse, StatusResponse,
 };
 use lanforge_types::device::Origin;
 use lanforge_types::network::firewall::{FirewallPolicy, FirewallStatus};
-use lanforge_types::system::ServiceId;
-use std::fs::metadata;
-use std::time::{SystemTime, UNIX_EPOCH};
+use lanforge_types::network::traffic::TrafficTelemetryResponse;
+use lanforge_types::system::{
+    PppoeSessionState, PppoeStatusResponse, RaStatusResponse, ServerCapabilities, ServiceId,
+    TrafficStatusResponse,
+};
+
+use crate::ClientContext;
 
 impl ClientContext {
     /// Generates a full `StatusResponse` by gathering data from the configuration
@@ -65,13 +73,13 @@ impl ClientContext {
         let pppoe_status = self.ctx.pppoe_status();
         let mut status = pppoe_status.map_or_else(
             || {
-                Box::new(lanforge_types::system::PppoeStatusResponse {
+                Box::new(PppoeStatusResponse {
                     enabled: self
                         .ctx
                         .get_status()
                         .map(|s| s.pppoe_enabled)
                         .unwrap_or(false),
-                    state: lanforge_types::system::PppoeSessionState::Disconnected,
+                    state: PppoeSessionState::Disconnected,
                     ..Default::default()
                 })
             },
@@ -82,7 +90,7 @@ impl ClientContext {
         }
 
         // The session's own age: the service stays up (degraded) across reconnects.
-        if status.state == lanforge_types::system::PppoeSessionState::Connected {
+        if status.state == PppoeSessionState::Connected {
             status.uptime_secs = status.connected_at.map(|t| t.elapsed().as_secs());
         }
 
@@ -96,7 +104,7 @@ impl ClientContext {
                 let target_ifindex = self.ctx.target_ifindex().unwrap_or(0);
                 let if_ips = self.ctx.get_interface_state(target_ifindex);
                 let cfg = self.ctx.get_ra_server_config();
-                Box::new(lanforge_types::system::RaStatusResponse {
+                Box::new(RaStatusResponse {
                     enabled: self.ctx.get_status().map(|s| s.ra_enabled).unwrap_or(false),
                     interface: cfg.iface.clone(),
                     link_local: if_ips.link_local,
@@ -130,7 +138,7 @@ impl ClientContext {
             || {
                 let cfg = self.ctx.get_traffic_config().unwrap_or_default();
                 let service_state = self.ctx.get_service_state(ServiceId::Traffic);
-                Box::new(lanforge_types::system::TrafficStatusResponse {
+                Box::new(TrafficStatusResponse {
                     service_state,
                     tuning_applied: false,
                     tuned_interfaces: cfg.tuning.interfaces.clone(),
@@ -166,9 +174,9 @@ impl ClientContext {
                 let wan_iface =
                     fallback_wan.or_else(|| self.ctx.get_pppoe_config().map(|p| p.wan_iface));
 
-                lanforge_types::network::traffic::TrafficTelemetryResponse {
-                    timestamp: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
+                TrafficTelemetryResponse {
+                    timestamp: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_secs(),
                     wan_interface: wan_iface,
@@ -243,11 +251,7 @@ impl ClientContext {
         {
             db.size_bytes = meta.len();
         }
-        let last_flush_ts = self
-            .ctx
-            .db_metrics()
-            .last_flush_ts
-            .load(std::sync::atomic::Ordering::Relaxed);
+        let last_flush_ts = self.ctx.db_metrics().last_flush_ts.load(Ordering::Relaxed);
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -263,7 +267,7 @@ impl ClientContext {
     #[must_use]
     pub fn gather_resource_status() -> ResourcesStatus {
         let mut res = ResourcesStatus::default();
-        if let Ok(statm) = std::fs::read_to_string("/proc/self/statm") {
+        if let Ok(statm) = fs::read_to_string("/proc/self/statm") {
             let mut parts = statm.split_whitespace();
             if let (Some(vms_pages), Some(rss_pages)) = (parts.next(), parts.next()) {
                 let page_size = 4096;
@@ -311,7 +315,7 @@ impl ClientContext {
     }
 
     #[must_use]
-    pub fn server_capabilities(&self) -> lanforge_types::system::ServerCapabilities {
+    pub fn server_capabilities(&self) -> ServerCapabilities {
         self.ctx.server_capabilities()
     }
 }

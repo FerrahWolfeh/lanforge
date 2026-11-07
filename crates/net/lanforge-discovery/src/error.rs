@@ -1,11 +1,11 @@
-//! Network error types for `lanforge-ndp`.
+//! Discovery error types for `lanforge-discovery`.
 
 use std::io;
 use thiserror::Error;
 
-/// Errors that can occur in the Lanforge neighbor monitoring subsystem.
+/// Errors that can occur in the Lanforge neighbor monitoring and discovery subsystem.
 #[derive(Debug, Error)]
-pub enum NetworkError {
+pub enum DiscoveryError {
     /// Standard I/O error.
     #[error("I/O failure: {0}")]
     Io(#[from] io::Error),

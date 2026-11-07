@@ -4,6 +4,7 @@ use crate::session::PppoeSession;
 use lanforge_types::identifiers::MacAddr;
 use smallvec::SmallVec;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::ops::Deref;
 use std::time::Duration;
 use tokio::time::{Instant, timeout};
 use tracing::{debug, info, warn};
@@ -62,7 +63,7 @@ impl<const N: usize> Default for PacketBuf<N> {
     }
 }
 
-impl<const N: usize> std::ops::Deref for PacketBuf<N> {
+impl<const N: usize> Deref for PacketBuf<N> {
     type Target = [u8];
     #[inline]
     fn deref(&self) -> &[u8] {

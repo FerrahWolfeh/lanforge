@@ -30,14 +30,16 @@ fn test_runtime_db_survives_a_daemon_crash() {
     use lanforge_types::device::Device;
     use lanforge_types::events::{LanforgeEvent, SystemEvent, TimedEvent};
     use lanforge_types::identifiers::MacAddr;
-    use std::process::Command;
+    use std::env;
+    use std::path::Path;
+    use std::process::{self, Command};
     use std::sync::Arc;
 
     const CHILD: &str = "LANFORGE_TEST_RUNTIME_DB_CHILD";
     const CHILD_EXIT: i32 = 42;
-    if let Ok(path) = std::env::var(CHILD) {
+    if let Ok(path) = env::var(CHILD) {
         let log_db = LogDb::open(&path).unwrap();
-        assert_eq!(log_db.path(), Some(std::path::Path::new(&path)));
+        assert_eq!(log_db.path(), Some(Path::new(&path)));
         log_db
             .record_log(&TimedEvent::new(LanforgeEvent::System(
                 SystemEvent::SystemReady,
@@ -47,12 +49,12 @@ fn test_runtime_db_survives_a_daemon_crash() {
         log_db
             .sync_runtime_devices(&[Arc::new(device)], &[])
             .unwrap();
-        std::process::exit(CHILD_EXIT);
+        process::exit(CHILD_EXIT);
     }
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("runtime.redb");
-    let status = Command::new(std::env::current_exe().unwrap())
+    let status = Command::new(env::current_exe().unwrap())
         .args([
             "--exact",
             "tests::test_runtime_db_survives_a_daemon_crash",
@@ -71,7 +73,7 @@ fn test_runtime_db_survives_a_daemon_crash() {
     let log_db = LogDb::open(path).unwrap();
     assert_eq!(
         log_db.path(),
-        Some(std::path::Path::new(path)),
+        Some(Path::new(path)),
         "reopened the same file"
     );
     assert_eq!(log_db.schema_version().unwrap(), 1);

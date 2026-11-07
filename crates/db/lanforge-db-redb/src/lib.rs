@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! `lanforge-db-redb` — Embedded pure-Rust database backend for Lanforge using `redb`.
 
 pub mod device;
@@ -9,28 +10,37 @@ pub mod user;
 use lanforge_db_core::DbError;
 pub use redb;
 use redb::{Database, ReadableDatabase, ReadableTable, WriteTransaction};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::fmt;
+use std::fs;
+use std::mem;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU64};
-use tables::*;
+use tables::{
+    TABLE_ADBLOCK_RULES, TABLE_ADBLOCK_URLS, TABLE_API_TOKENS, TABLE_CONFIG, TABLE_DEVICES,
+    TABLE_DNS_ALLOWLIST, TABLE_DNS_BLOCKED, TABLE_DNS_QUERIES, TABLE_DNS_REWRITES,
+    TABLE_DNS_STATS_HOURLY, TABLE_DNS_TELEMETRY, TABLE_DNS_UPSTREAMS, TABLE_LOG_EVENTS, TABLE_META,
+    TABLE_RUNTIME_DEVICES, TABLE_STATIC_HOSTS, TABLE_USERS,
+};
 
 pub use self::DbWriteTx as WriteTx;
 pub use log::BlockedQueryEntry;
 
 const VALUE_CODEC_VERSION: u8 = 1;
 
-pub(crate) fn encode<T: serde::Serialize + ?Sized>(value: &T) -> Result<Vec<u8>, DbError> {
+pub(crate) fn encode<T: Serialize + ?Sized>(value: &T) -> Result<Vec<u8>, DbError> {
     let mut bytes = Vec::with_capacity(128);
     encode_into(value, &mut bytes)?;
     Ok(bytes)
 }
 
-pub(crate) fn encode_into<T: serde::Serialize + ?Sized>(
+pub(crate) fn encode_into<T: Serialize + ?Sized>(
     value: &T,
     bytes: &mut Vec<u8>,
 ) -> Result<(), DbError> {
-    let scratch = std::mem::take(bytes);
+    let scratch = mem::take(bytes);
     let mut scratch = scratch;
     scratch.clear();
     scratch.push(VALUE_CODEC_VERSION);
@@ -38,7 +48,7 @@ pub(crate) fn encode_into<T: serde::Serialize + ?Sized>(
     Ok(())
 }
 
-pub(crate) fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, DbError> {
+pub(crate) fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, DbError> {
     let Some((&version, payload)) = bytes.split_first() else {
         return Err(DbError::Validation("empty encoded database value".into()));
     };
@@ -57,7 +67,7 @@ pub struct DbWriteTx<'a> {
 
 impl DbWriteTx<'_> {
     /// Stores one typed configuration value under its stable database key.
-    pub fn set_config<T: serde::Serialize + ?Sized>(
+    pub fn set_config<T: Serialize + ?Sized>(
         &mut self,
         key: &str,
         value: &T,
@@ -69,8 +79,8 @@ impl DbWriteTx<'_> {
         Ok(())
     }
 
-    /// Stores one typed configuration value under a typed ConfigKey.
-    pub fn set<T: serde::Serialize + ?Sized>(
+    /// Stores one typed configuration value under a typed `ConfigKey`.
+    pub fn set<T: Serialize + ?Sized>(
         &mut self,
         key: lanforge_db_core::ConfigKey<T>,
         value: &T,
@@ -86,7 +96,7 @@ impl DbWriteTx<'_> {
         Ok(())
     }
 
-    /// Removes one configuration value for a typed ConfigKey within this transaction.
+    /// Removes one configuration value for a typed `ConfigKey` within this transaction.
     pub fn remove<T>(&mut self, key: lanforge_db_core::ConfigKey<T>) -> Result<(), DbError> {
         self.remove_config(key.name())
     }
@@ -131,7 +141,7 @@ impl RedbDatabase {
 
     fn open_file(p: &Path, volatile: bool) -> Result<Self, DbError> {
         if let Some(parent) = p.parent().filter(|p| !p.as_os_str().is_empty()) {
-            std::fs::create_dir_all(parent)?;
+            fs::create_dir_all(parent)?;
         }
         let mut builder = Database::builder();
         if volatile {
@@ -236,8 +246,8 @@ impl RedbDatabase {
         Ok(result)
     }
 
-    /// Retrieves a typed configuration value by its ConfigKey.
-    pub fn get<T: serde::de::DeserializeOwned>(
+    /// Retrieves a typed configuration value by its `ConfigKey`.
+    pub fn get<T: DeserializeOwned>(
         &self,
         key: lanforge_db_core::ConfigKey<T>,
     ) -> Result<Option<T>, DbError> {
@@ -248,8 +258,8 @@ impl RedbDatabase {
         .map(|opt| opt.flatten())
     }
 
-    /// Stores a typed configuration value by its ConfigKey.
-    pub fn put<T: serde::Serialize>(
+    /// Stores a typed configuration value by its `ConfigKey`.
+    pub fn put<T: Serialize>(
         &self,
         key: lanforge_db_core::ConfigKey<T>,
         val: &T,
@@ -258,7 +268,7 @@ impl RedbDatabase {
     }
 
     /// Stores a typed configuration value only if it does not already exist.
-    pub fn put_if_absent<T: serde::Serialize + serde::de::DeserializeOwned>(
+    pub fn put_if_absent<T: Serialize + DeserializeOwned>(
         &self,
         key: lanforge_db_core::ConfigKey<T>,
         val: &T,
@@ -424,7 +434,7 @@ impl RedbDatabase {
         for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
             let (key, _) = item.map_err(|e| DbError::Backend(e.to_string()))?;
             let key = key.value();
-            if key != lanforge_db_core::config_keys::LAST_GUA_PREFIX.name() {
+            if key != lanforge_db_core::LAST_GUA_PREFIX.name() {
                 names.push(key.to_string());
             }
         }
@@ -646,10 +656,11 @@ mod tests {
         use lanforge_db_core::LogStore;
         use lanforge_types::network::dns::{DnsRecordType, TransportProtocol};
         use lanforge_types::network::{QueryLogEntry, QueryResult};
+        use std::time::{SystemTime, UNIX_EPOCH};
 
         let db = RedbDatabase::open_in_memory();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
         let entry = QueryLogEntry {
@@ -675,7 +686,7 @@ mod tests {
         );
         let txn = db.db.begin_write().unwrap();
         {
-            let mut table = txn.open_table(crate::tables::TABLE_DNS_QUERIES).unwrap();
+            let mut table = txn.open_table(TABLE_DNS_QUERIES).unwrap();
             table.insert((now, 0), old_row.as_slice()).unwrap();
         }
         txn.commit().unwrap();
@@ -705,10 +716,11 @@ mod tests {
         use lanforge_types::network::dns::{DnsRecordType, TransportProtocol};
         use lanforge_types::network::{QueryLogEntry, QueryResult};
         use std::sync::Arc;
+        use std::time::{SystemTime, UNIX_EPOCH};
 
         let db = RedbDatabase::open_in_memory();
-        let now_secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
         // Anchor to the start of the current 15-minute bucket to avoid flaky boundary crossing
@@ -756,7 +768,7 @@ mod tests {
             coalesce_id: None,
             repeats: 1,
         };
-        db.record_dns_queries_batch(&[std::sync::Arc::new(query1), std::sync::Arc::new(query2)])
+        db.record_dns_queries_batch(&[Arc::new(query1), Arc::new(query2)])
             .unwrap();
 
         let (queries, total) = db
@@ -812,7 +824,11 @@ mod tests {
         let initial_lifetime = db.load_dns_lifetime_stats().unwrap();
         assert_eq!(initial_lifetime.total_requests, 0);
 
-        let test_stats = lanforge_types::network::dns::DnsLifetimeStats {
+        use lanforge_types::network::TrafficHistorySample;
+        use lanforge_types::network::dns::DnsLifetimeStats;
+        use lanforge_types::network::traffic::InterfaceThroughputPoint;
+
+        let test_stats = DnsLifetimeStats {
             total_requests: 1250,
             blocked_queries: 180,
             resolved_total: 1070,
@@ -830,9 +846,9 @@ mod tests {
         let initial_traffic = db.load_traffic_history().unwrap();
         assert!(initial_traffic.is_empty());
 
-        let test_traffic = vec![lanforge_types::network::TrafficHistorySample {
+        let test_traffic = vec![TrafficHistorySample {
             timestamp: 1_700_000_000,
-            interfaces: vec![lanforge_types::network::traffic::InterfaceThroughputPoint {
+            interfaces: vec![InterfaceThroughputPoint {
                 interface: "ppp0".to_string(),
                 rx_rate_bps: 10_000_000,
                 tx_rate_bps: 2_000_000,
@@ -923,13 +939,12 @@ mod tests {
     #[test]
     fn legacy_config_keys_are_listed_except_the_prefix_state() {
         use lanforge_db_core::{ConfigKey, PrefixStore};
+        use lanforge_types::network::Ipv6Prefix;
 
         let db = RedbDatabase::open_temp().unwrap();
         assert!(db.legacy_config_keys().unwrap().is_empty());
-        db.save_last_gua_prefix(Some(lanforge_types::network::Ipv6Prefix::from_addr(
-            "2001:db8::".parse().unwrap(),
-        )))
-        .unwrap();
+        db.save_last_gua_prefix(Some(Ipv6Prefix::from_addr("2001:db8::".parse().unwrap())))
+            .unwrap();
         assert!(db.legacy_config_keys().unwrap().is_empty());
         db.put(ConfigKey::<u32>::new("dhcp_options"), &1).unwrap();
         assert_eq!(db.legacy_config_keys().unwrap(), vec!["dhcp_options"]);

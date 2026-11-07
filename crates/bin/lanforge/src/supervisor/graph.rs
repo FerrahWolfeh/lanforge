@@ -3,6 +3,7 @@
 use lanforge_core::service::{Edge, ServiceSpec};
 use lanforge_types::system::ServiceId;
 use std::collections::{HashMap, VecDeque};
+use std::error::Error;
 use std::fmt;
 
 /// Graph validation errors.
@@ -28,7 +29,7 @@ impl fmt::Display for GraphError {
     }
 }
 
-impl std::error::Error for GraphError {}
+impl Error for GraphError {}
 
 /// Service dependency graph representing the system architecture.
 #[derive(Debug)]

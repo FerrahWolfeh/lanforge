@@ -1,13 +1,20 @@
 use crate::identifiers::MacAddr;
+use crate::network::dns::AdblockUrlEntry;
+use crate::network::dns::upstream::UpstreamTarget;
+use crate::network::pppoe::AuthMethod;
+use crate::network::snapshot::TransportSnapshot;
+use crate::network::traffic::{SqmDiffserv, SqmOverhead};
 use crate::network::{
     FirewallMode, Ipv6Prefix,
-    dns::upstream::UpstreamTarget,
     ra::{DnsslConfig, RAPrefix, RdnssConfig, RouterPriority},
 };
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::borrow::Cow;
+use std::fmt::{self, Display, Formatter};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::str::FromStr;
+use std::time::Instant;
 
 /// Global system status and runtime configuration snapshot.
 ///
@@ -70,8 +77,8 @@ impl StorageMode {
     }
 }
 
-impl std::fmt::Display for StorageMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for StorageMode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
@@ -203,8 +210,8 @@ impl ServiceId {
     ];
 }
 
-impl std::fmt::Display for ServiceId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for ServiceId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
@@ -215,7 +222,7 @@ impl AsRef<str> for ServiceId {
     }
 }
 
-impl std::str::FromStr for ServiceId {
+impl FromStr for ServiceId {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -305,8 +312,8 @@ impl AsRef<str> for ServiceState {
     }
 }
 
-impl std::fmt::Display for ServiceState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for ServiceState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
@@ -336,8 +343,8 @@ impl DormantReason {
     }
 }
 
-impl std::fmt::Display for DormantReason {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for DormantReason {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Disabled(k) => write!(f, "disabled ({k})"),
             Self::NotApplicable(r) => write!(f, "not applicable ({r})"),
@@ -364,8 +371,8 @@ impl DegradedReason {
     }
 }
 
-impl std::fmt::Display for DegradedReason {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for DegradedReason {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::UpstreamUnreachable => write!(f, "upstream unreachable"),
             Self::InterfaceFlapping => write!(f, "interface flapping"),
@@ -398,8 +405,8 @@ impl StateDetail {
     }
 }
 
-impl std::fmt::Display for StateDetail {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for StateDetail {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::WaitingFor(id) => write!(f, "waiting for {id}"),
             Self::Dormant(reason) => write!(f, "dormant: {reason}"),
@@ -433,7 +440,7 @@ pub struct ServiceBanner {
     #[serde(default)]
     pub detail: Option<StateDetail>,
     #[serde(default)]
-    pub transport: Option<crate::network::snapshot::TransportSnapshot>,
+    pub transport: Option<TransportSnapshot>,
 }
 
 /// Actions that can be performed on a service.
@@ -498,14 +505,14 @@ pub struct PppoeStatusResponse {
     pub uptime_secs: Option<u64>,
     pub reconnect_attempts: u32,
     pub last_error: Option<String>,
-    pub auth: Option<crate::network::pppoe::AuthMethod>,
+    pub auth: Option<AuthMethod>,
     pub terminal_reachable: Option<bool>,
     pub terminal_mac: Option<MacAddr>,
     pub terminal_rtt_us: Option<u32>,
     /// When the session came up, on the monotonic clock (an SBC without RTC brings `PPPoE` up
     /// before NTP fixes the wall clock). In-process only: the API turns it into `uptime_secs`.
     #[serde(skip)]
-    pub connected_at: Option<std::time::Instant>,
+    pub connected_at: Option<Instant>,
 }
 
 /// Status response payload for Network Traffic & SQM.
@@ -520,8 +527,8 @@ pub struct TrafficStatusResponse {
     pub ingress_device: Option<String>,
     pub download_mbps: u32,
     pub upload_mbps: u32,
-    pub overhead: crate::network::traffic::SqmOverhead,
-    pub diffserv: crate::network::traffic::SqmDiffserv,
+    pub overhead: SqmOverhead,
+    pub diffserv: SqmDiffserv,
     pub flow_offload_suppressed: bool,
 }
 
@@ -661,7 +668,7 @@ pub struct SetupPayload {
     pub dhcp_v6_pool_range: Option<String>,
     pub adblock_enabled: bool,
     #[serde(default)]
-    pub adblock_sources: Vec<crate::network::dns::AdblockUrlEntry>,
+    pub adblock_sources: Vec<AdblockUrlEntry>,
     #[serde(default)]
     pub upstream_dns: Vec<String>,
     #[serde(default)]

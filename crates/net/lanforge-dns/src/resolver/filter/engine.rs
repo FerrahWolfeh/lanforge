@@ -1,5 +1,5 @@
-use std::fs::File;
-use std::io::BufWriter;
+use std::fs::{self, File};
+use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use fst::raw::{Fst, Output};
@@ -195,7 +195,7 @@ pub fn build_fst_map(
 
     let parent = target_path.parent().unwrap_or_else(|| Path::new("."));
     if !parent.as_os_str().is_empty() {
-        let _ = std::fs::create_dir_all(parent);
+        let _ = fs::create_dir_all(parent);
     }
 
     let tmp_file = tempfile::Builder::new()
@@ -240,7 +240,8 @@ pub fn build_fst_map(
         .finish()
         .map_err(|e| DnsError::Generic(format!("MapBuilder finish failed: {e}")))?;
 
-    std::io::Write::flush(&mut writer)
+    writer
+        .flush()
         .map_err(|e| DnsError::Generic(format!("MapBuilder flush failed: {e}")))?;
 
     let tmp_file = writer

@@ -1,5 +1,6 @@
 [package]
 name = "lanforge-pppoe"
+autotests = false
 version.workspace = true
 license.workspace = true
 edition.workspace = true
@@ -8,7 +9,6 @@ authors.workspace = true
 [dependencies]
 # Lanforge
 lanforge-core = { workspace = true }
-lanforge-macros = { workspace = true }
 lanforge-types = { workspace = true }
 lanforge-transport = { workspace = true }
 
@@ -22,12 +22,10 @@ tokio = { workspace = true, features = [
     "sync",
     "process",
 ] }
-serde = { workspace = true }
 tracing = { workspace = true }
 libc = { workspace = true }
 rtnetlink = { workspace = true }
 rand = { workspace = true }
-futures = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 # Third party protocol / low level
@@ -46,4 +44,14 @@ default = []
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
-serde_json = { workspace = true }
+
+[[test]]
+name = "service_lifecycle"
+path = "tests/service_lifecycle.rs"
+
+[[test]]
+name = "auth_handshake"
+path = "tests/auth_handshake.rs"
+
+[lints]
+workspace = true

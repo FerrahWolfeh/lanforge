@@ -1,4 +1,6 @@
 use crate::v4::raw::RawSender;
+use dhcproto::error::DecodeError;
+use dhcproto::v4::Message;
 use dhcproto::{Decodable, Decoder};
 use lanforge_core::error::CoreError;
 use lanforge_transport::{TransportMetrics, TransportSnapshot, TransportStats};
@@ -9,6 +11,8 @@ use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
 use std::sync::Arc;
 use tokio::net::UdpSocket as TokioUdpSocket;
+use tokio::sync::Mutex as TokioMutex;
+use tokio::sync::mpsc::{Receiver, Sender, channel};
 
 /// A captured `DHCPv4` reply dispatched by `Dhcpv4Transport` in inert mode.
 #[derive(Debug, Clone)]
@@ -28,36 +32,32 @@ impl Dhcpv4InertReply {
     /// # Errors
     ///
     /// Returns a decoding error if the packet is malformed.
-    pub fn message(&self) -> Result<dhcproto::v4::Message, dhcproto::error::DecodeError> {
-        dhcproto::v4::Message::decode(&mut Decoder::new(&self.packet))
+    pub fn message(&self) -> Result<Message, DecodeError> {
+        Message::decode(&mut Decoder::new(&self.packet))
     }
 }
 
-pub type Dhcpv4InertInRx =
-    Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<(Vec<u8>, SocketAddr)>>>;
+pub type Dhcpv4InertInRx = Arc<TokioMutex<Receiver<(Vec<u8>, SocketAddr)>>>;
 
 #[derive(Clone)]
 pub struct Dhcpv4InertChannels {
     pub in_rx: Dhcpv4InertInRx,
-    pub out_tx: tokio::sync::mpsc::Sender<Dhcpv4InertReply>,
+    pub out_tx: Sender<Dhcpv4InertReply>,
 }
 
 /// Test handle for injecting synthetic `DHCPv4` packets and receiving outgoing replies without raw sockets or root.
 #[derive(Clone)]
 pub struct Dhcpv4InertHandle {
-    in_tx: tokio::sync::mpsc::Sender<(Vec<u8>, SocketAddr)>,
-    out_rx: Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<Dhcpv4InertReply>>>,
+    in_tx: Sender<(Vec<u8>, SocketAddr)>,
+    out_rx: Arc<TokioMutex<Receiver<Dhcpv4InertReply>>>,
 }
 
 impl Dhcpv4InertHandle {
     #[must_use]
-    pub fn new(
-        in_tx: tokio::sync::mpsc::Sender<(Vec<u8>, SocketAddr)>,
-        out_rx: tokio::sync::mpsc::Receiver<Dhcpv4InertReply>,
-    ) -> Self {
+    pub fn new(in_tx: Sender<(Vec<u8>, SocketAddr)>, out_rx: Receiver<Dhcpv4InertReply>) -> Self {
         Self {
             in_tx,
-            out_rx: Arc::new(tokio::sync::Mutex::new(out_rx)),
+            out_rx: Arc::new(TokioMutex::new(out_rx)),
         }
     }
 
@@ -112,11 +112,11 @@ impl Dhcpv4Transport {
     /// Creates an in-memory inert transport for rootless testing and simulation.
     #[must_use]
     pub fn inert() -> (Dhcpv4InertHandle, Self) {
-        let (in_tx, in_rx) = tokio::sync::mpsc::channel(64);
-        let (out_tx, out_rx) = tokio::sync::mpsc::channel(64);
+        let (in_tx, in_rx) = channel(64);
+        let (out_tx, out_rx) = channel(64);
         let handle = Dhcpv4InertHandle::new(in_tx, out_rx);
         let channels = Dhcpv4InertChannels {
-            in_rx: Arc::new(tokio::sync::Mutex::new(in_rx)),
+            in_rx: Arc::new(TokioMutex::new(in_rx)),
             out_tx,
         };
         (
@@ -264,7 +264,7 @@ fn bind_dhcp_socket_async(iface: &str, port: u16) -> Result<TokioUdpSocket, Core
 mod tests {
     use super::*;
     use crate::test_utils::Dhcpv4PacketBuilder;
-    use dhcproto::v4::MessageType;
+    use dhcproto::v4::{DhcpOption, MessageType, OptionCode};
     use tokio::time::{Duration, timeout};
 
     #[test]
@@ -329,8 +329,8 @@ mod tests {
 
         let decoded = reply.message().expect("Failed to decode reply message");
         assert_eq!(
-            decoded.opts().get(dhcproto::v4::OptionCode::MessageType),
-            Some(&dhcproto::v4::DhcpOption::MessageType(MessageType::Request))
+            decoded.opts().get(OptionCode::MessageType),
+            Some(&DhcpOption::MessageType(MessageType::Request))
         );
     }
 

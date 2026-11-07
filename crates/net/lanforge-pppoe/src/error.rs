@@ -1,3 +1,6 @@
+use nix::errno::Errno;
+use std::io;
+use std::net::Ipv4Addr;
 use std::os::fd::OwnedFd;
 
 use thiserror::Error;
@@ -59,13 +62,13 @@ pub enum PppoeError {
     CarrierDown(String),
 
     #[error("Terminal {0} unreachable on {1}")]
-    TerminalUnreachable(std::net::Ipv4Addr, String),
+    TerminalUnreachable(Ipv4Addr, String),
 
     #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
+    Io(#[from] io::Error),
 
     #[error("Nix error: {0}")]
-    Nix(#[from] nix::errno::Errno),
+    Nix(#[from] Errno),
 
     #[error("AsyncFd registration error: {0}")]
     Fd(#[from] AsyncFdRegisterError<OwnedFd>),

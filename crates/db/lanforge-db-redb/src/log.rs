@@ -1,4 +1,4 @@
-//! LogStore implementation for `RedbDatabase`.
+//! `LogStore` implementation for `RedbDatabase`.
 
 use crate::tables::{
     TABLE_CONFIG, TABLE_DNS_BLOCKED, TABLE_DNS_QUERIES, TABLE_DNS_STATS_HOURLY,
@@ -14,8 +14,12 @@ use lanforge_types::network::dns::{
 };
 use lanforge_types::network::{QueryLogEntry, QueryResult, TrafficHistorySample};
 use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata};
-use std::collections::BTreeMap;
+use std::cmp::Reverse;
+use std::collections::hash_map::Entry;
+use std::collections::{BTreeMap, HashMap};
 use std::net::IpAddr;
+use std::slice;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -75,7 +79,7 @@ fn bump_capped_qtype(map: &mut BTreeMap<u16, u64>, key: u16, n: u64, other: &mut
 struct QueryLogEntryV1 {
     timestamp: u64,
     src_ip: IpAddr,
-    domain: std::sync::Arc<str>,
+    domain: Arc<str>,
     upstream_us: u32,
     qtype: DnsRecordType,
     result: QueryResult,
@@ -186,7 +190,7 @@ impl RedbDatabase {
 
     pub fn sync_runtime_devices(
         &self,
-        upserts: &[std::sync::Arc<Device>],
+        upserts: &[Arc<Device>],
         deletes: &[MacAddr],
     ) -> Result<(), DbError> {
         if upserts.is_empty() && deletes.is_empty() {
@@ -211,10 +215,7 @@ impl RedbDatabase {
         Ok(())
     }
 
-    pub fn replace_runtime_devices(
-        &self,
-        upserts: &[std::sync::Arc<Device>],
-    ) -> Result<(), DbError> {
+    pub fn replace_runtime_devices(&self, upserts: &[Arc<Device>]) -> Result<(), DbError> {
         let txn = self.begin_write()?;
         let mut table = txn.open_table(TABLE_RUNTIME_DEVICES)?;
         let keys: Vec<[u8; 6]> = table
@@ -292,19 +293,19 @@ impl LogStore for RedbDatabase {
 
     fn sync_runtime_devices(
         &self,
-        upserts: &[std::sync::Arc<Device>],
+        upserts: &[Arc<Device>],
         deletes: &[MacAddr],
     ) -> Result<(), DbError> {
         RedbDatabase::sync_runtime_devices(self, upserts, deletes)
     }
 
-    fn replace_runtime_devices(&self, upserts: &[std::sync::Arc<Device>]) -> Result<(), DbError> {
+    fn replace_runtime_devices(&self, upserts: &[Arc<Device>]) -> Result<(), DbError> {
         RedbDatabase::replace_runtime_devices(self, upserts)
     }
 
     fn record_log(&self, timed_event: &TimedEvent) -> Result<(), DbError> {
         let mut buf = Vec::with_capacity(256);
-        self.record_logs_batch(std::slice::from_ref(timed_event), &mut buf)
+        self.record_logs_batch(slice::from_ref(timed_event), &mut buf)
     }
 
     fn record_logs_batch(
@@ -399,10 +400,7 @@ impl LogStore for RedbDatabase {
         Ok(())
     }
 
-    fn record_dns_queries_batch(
-        &self,
-        entries: &[std::sync::Arc<QueryLogEntry>],
-    ) -> Result<(), DbError> {
+    fn record_dns_queries_batch(&self, entries: &[Arc<QueryLogEntry>]) -> Result<(), DbError> {
         if entries.is_empty() {
             return Ok(());
         }
@@ -429,8 +427,8 @@ impl LogStore for RedbDatabase {
 
             // Pre-aggregate telemetry buckets (15-minute / 900s buckets)
             if let Ok(mut table_telemetry) = write_txn.open_table(TABLE_DNS_TELEMETRY) {
-                let mut cached_buckets: std::collections::HashMap<u64, DnsQueryRateBucket> =
-                    std::collections::HashMap::with_capacity(2);
+                let mut cached_buckets: HashMap<u64, DnsQueryRateBucket> =
+                    HashMap::with_capacity(2);
 
                 for entry in entries {
                     let bucket_ts = (entry.timestamp / 900) * 900;
@@ -471,13 +469,12 @@ impl LogStore for RedbDatabase {
             let mut hourly = write_txn
                 .open_table(TABLE_DNS_STATS_HOURLY)
                 .map_err(|e| DbError::Backend(e.to_string()))?;
-            let mut buckets: std::collections::HashMap<u64, HourlyDnsStats> =
-                std::collections::HashMap::with_capacity(2);
+            let mut buckets: HashMap<u64, HourlyDnsStats> = HashMap::with_capacity(2);
             for entry in entries {
                 let hour_ts = (entry.timestamp / 3600) * 3600;
                 let stats = match buckets.entry(hour_ts) {
-                    std::collections::hash_map::Entry::Occupied(row) => row.into_mut(),
-                    std::collections::hash_map::Entry::Vacant(row) => {
+                    Entry::Occupied(row) => row.into_mut(),
+                    Entry::Vacant(row) => {
                         let existing = hourly
                             .get(hour_ts)
                             .map_err(|e| DbError::Backend(e.to_string()))?
@@ -564,7 +561,7 @@ impl LogStore for RedbDatabase {
     }
 
     fn record_dns_query(&self, entry: &QueryLogEntry) -> Result<(), DbError> {
-        self.record_dns_queries_batch(&[std::sync::Arc::new(entry.clone())])
+        self.record_dns_queries_batch(&[Arc::new(entry.clone())])
     }
 
     fn clear_logs(&self) -> Result<(), DbError> {
@@ -957,7 +954,7 @@ impl LogStore for RedbDatabase {
         let client_ip: Option<IpAddr> = client.parse().ok();
         let client_mac: Option<MacAddr> = client.parse().ok();
 
-        let mut counts: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+        let mut counts: HashMap<String, u64> = HashMap::new();
         for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
             let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
             let entry = decode_query(val.value())?;
@@ -980,7 +977,7 @@ impl LogStore for RedbDatabase {
         }
 
         let mut vec: Vec<(String, u64)> = counts.into_iter().collect();
-        vec.sort_by_key(|b| std::cmp::Reverse(b.1));
+        vec.sort_by_key(|b| Reverse(b.1));
         vec.truncate(limit);
         Ok(vec)
     }
@@ -1006,7 +1003,7 @@ impl LogStore for RedbDatabase {
             Err(e) => return Err(DbError::Backend(e.to_string())),
         };
 
-        let mut buckets: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
+        let mut buckets: HashMap<u64, u64> = HashMap::new();
         for item in table
             .range((since_secs, 0)..)
             .map_err(|e| DbError::Backend(e.to_string()))?
@@ -1055,8 +1052,7 @@ impl LogStore for RedbDatabase {
                 if bsize == 900 {
                     return Ok(buckets);
                 }
-                let mut reaggregated: std::collections::BTreeMap<u64, DnsQueryRateBucket> =
-                    std::collections::BTreeMap::new();
+                let mut reaggregated: BTreeMap<u64, DnsQueryRateBucket> = BTreeMap::new();
                 for b in buckets {
                     let target_ts = (b.timestamp / bsize) * bsize;
                     let target =
@@ -1094,8 +1090,7 @@ impl LogStore for RedbDatabase {
         };
 
         let bsize = if bucket_secs == 0 { 30 } else { bucket_secs };
-        let mut buckets: std::collections::HashMap<u64, DnsQueryRateBucket> =
-            std::collections::HashMap::new();
+        let mut buckets: HashMap<u64, DnsQueryRateBucket> = HashMap::new();
         for item in table
             .range((since_secs, 0)..)
             .map_err(|e| DbError::Backend(e.to_string()))?

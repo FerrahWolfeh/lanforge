@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! # Lanforge Discovery Service
 //!
 //! Unified neighbor discovery, mDNS prober, and active ICMP ping engine.

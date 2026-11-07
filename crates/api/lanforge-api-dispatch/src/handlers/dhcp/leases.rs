@@ -5,7 +5,7 @@ use lanforge_api::api::{
 };
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent};
 use lanforge_types::{
-    device::{IPv4State, IPv6State},
+    device::{IPv4State, IPv6State, state::system_time_to_epoch_u32},
     identifiers::MacAddr,
     update::LeaseTarget,
 };
@@ -77,7 +77,7 @@ impl ClientContext {
 
     pub async fn handle_leases(&self, _count: bool) -> Response {
         let now = SystemTime::now();
-        let now_epoch = lanforge_types::device::state::system_time_to_epoch_u32(now);
+        let now_epoch = system_time_to_epoch_u32(now);
         let leases = self.ctx.with_state(|state| {
             let mut list = Vec::new();
             for dev in state.devices.values() {

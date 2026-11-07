@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 //! `DoT` listener (RFC 7858): answers, owns its connections, closes silent clients.
 //!
 //! Regressions: connections ran as detached tasks (they outlived a stop of the service), the

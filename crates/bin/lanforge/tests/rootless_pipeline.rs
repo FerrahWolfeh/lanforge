@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,22 +26,23 @@ use lanforge_types::events::pppoe::{PppoeEvent, PppoeSessionUp};
 use lanforge_types::events::traffic::TrafficEvent;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::Dhcpv4Pool;
+use lanforge_types::network::firewall::{FirewallConfig, FirewallMode};
 use lanforge_types::network::ra::{
     PrefixLifetime, PrefixSource, RAPrefix, RaServerConfig, RouterPriority,
 };
 use lanforge_types::network::traffic::{NicTuningConfig, SqmConfig, SqmDiffserv, TrafficConfig};
 use lanforge_types::system::{ServiceId, ServiceState};
 use lanforge_types::update::{DeviceUpdate, InterfaceState};
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 
 fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
     let bus = Arc::new(EventBus::new());
     let state = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), state, Some(2));
+    let ctx = LanforgeContext::new(Arc::clone(&bus), state, Some(2));
 
-    ctx.update_firewall_config(lanforge_types::network::firewall::FirewallConfig {
+    ctx.update_firewall_config(FirewallConfig {
         enabled: true,
-        mode: lanforge_types::network::firewall::FirewallMode::Full,
+        mode: FirewallMode::Full,
         ..Default::default()
     });
     ctx.set_target_interface_name("lan0".to_string());
@@ -41,9 +51,7 @@ fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
         ifindex: 2,
         state: Box::new(InterfaceState {
             link_local: Some("fe80::1".parse().unwrap()),
-            mac: Some(lanforge_types::identifiers::MacAddr([
-                0x02, 0, 0, 0, 0, 0x01,
-            ])),
+            mac: Some(MacAddr([0x02, 0, 0, 0, 0, 0x01])),
             ..InterfaceState::default()
         }),
     });
@@ -211,7 +219,7 @@ async fn test_rootless_pipeline_e2e() {
     });
 
     // Allow services to initialize and subscribe to domain events
-    tokio::time::sleep(Duration::from_millis(60)).await;
+    sleep(Duration::from_millis(60)).await;
 
     // Verify all active services transitioned to Online
     assert_eq!(ctx.get_service_state(ServiceId::Nft), ServiceState::Online);

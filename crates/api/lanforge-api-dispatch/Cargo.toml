@@ -8,18 +8,14 @@ authors.workspace = true
 lanforge-types = { workspace = true }
 lanforge-core = { workspace = true }
 lanforge-api = { workspace = true }
-lanforge-macros = { workspace = true }
 lanforge-crypto = { workspace = true }
 lanforge-transport = { workspace = true }
 lanforge-db-core = { workspace = true, default-features = false }
-toml = { workspace = true }
 
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
-serde = { workspace = true }
 tracing = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
-futures = { workspace = true }
 rand = { workspace = true }
 hex = { workspace = true }
 pnet = { workspace = true }
@@ -40,3 +36,6 @@ lanforge-dhcp = { workspace = true }
 lanforge-db = { workspace = true }
 tempfile = { workspace = true }
 
+
+[lints]
+workspace = true

@@ -1,4 +1,5 @@
 use lanforge_types::device::Ipv6AddrOrSuffix;
+use lanforge_types::network::dns::DnsResponseCode;
 use std::array::from_fn;
 use std::borrow::Cow;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -177,7 +178,7 @@ pub fn fast_lowercase(s: &str) -> Cow<'_, str> {
     }
 }
 
-/// Formats an IpAddr to its reverse ARPA DNS name (e.g. "2.1.64.100.in-addr.arpa.").
+/// Formats an `IpAddr` to its reverse ARPA DNS name (e.g. "2.1.64.100.in-addr.arpa.").
 #[must_use]
 pub fn ip_to_arpa(ip: IpAddr) -> String {
     match ip {
@@ -214,10 +215,7 @@ pub fn extract_first_answer_summary(resp: &[u8], question_len: usize) -> Option<
     if ancount == 0 {
         let rcode = resp[3] & 0x0F;
         if rcode != 0 {
-            return Some(format!(
-                "{:?}",
-                lanforge_types::network::dns::DnsResponseCode::from(rcode)
-            ));
+            return Some(format!("{:?}", DnsResponseCode::from(rcode)));
         }
         return None;
     }

@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 #![cfg(feature = "adblock")]
 
 mod common;
@@ -16,22 +25,24 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
+use tokio::time::{Instant, sleep};
 
 const RULES: &str = "||ads.example.com^\n";
 
 /// Answers 503 until `online` is set: stands in for a list host that cannot be resolved yet.
 async fn spawn_list_server(online: Arc<AtomicBool>) -> (u16, Arc<AtomicUsize>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let hits = Arc::new(AtomicUsize::new(0));
-    let counter = hits.clone();
+    let counter = Arc::clone(&hits);
     tokio::spawn(async move {
         loop {
             let Ok((mut socket, _)) = listener.accept().await else {
                 continue;
             };
-            let counter = counter.clone();
-            let online = online.clone();
+            let counter = Arc::clone(&counter);
+            let online = Arc::clone(&online);
             tokio::spawn(async move {
                 let mut buf = [0u8; 2048];
                 let _ = socket.read(&mut buf).await;
@@ -52,13 +63,13 @@ async fn spawn_list_server(online: Arc<AtomicBool>) -> (u16, Arc<AtomicUsize>) {
     (port, hits)
 }
 
-/// Owner's boot log: the stale-list refresh ran before PPPoE was up, failed to resolve the list
+/// Owner's boot log: the stale-list refresh ran before `PPPoE` was up, failed to resolve the list
 /// host and slept a 5 min backoff although upstreams appeared seconds later. A failed pass must
 /// retry as soon as the DNS server gets upstreams.
 #[tokio::test(flavor = "multi_thread")]
 async fn adblock_failed_refresh_retries_when_upstreams_appear() {
     let online = Arc::new(AtomicBool::new(false));
-    let (port, hits) = spawn_list_server(online.clone()).await;
+    let (port, hits) = spawn_list_server(Arc::clone(&online)).await;
     let temp_dir = tempfile::tempdir().unwrap();
 
     let bus = Arc::new(EventBus::new());
@@ -83,13 +94,13 @@ async fn adblock_failed_refresh_retries_when_upstreams_appear() {
     let dns_ctx = Arc::new(mock_dns_context(ctx, cfg).await);
     assert!(dns_ctx.recursive.is_empty(), "boot: no upstreams yet");
     let filter = dns_ctx.filter.clone().expect("adblock filter");
-    let manager = spawn_adblock_manager(dns_ctx.clone());
+    let manager = spawn_adblock_manager(Arc::clone(&dns_ctx));
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while hits.load(Ordering::SeqCst) == 0 && tokio::time::Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(50)).await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while hits.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
+        sleep(Duration::from_millis(50)).await;
     }
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
     assert_eq!(
         hits.load(Ordering::SeqCst),
         1,
@@ -100,14 +111,14 @@ async fn adblock_failed_refresh_retries_when_upstreams_appear() {
     // PPPoE comes up: the list host resolves now, and the DNS service installs upstreams.
     online.store(true, Ordering::SeqCst);
     let upstream = MockUpstreamServer::spawn(HashMap::new()).await;
-    let mgr = UpstreamManager::new(&upstream.target(), dns_ctx.cache.clone())
+    let mgr = UpstreamManager::new(&upstream.target(), Arc::clone(&dns_ctx.cache))
         .await
         .expect("upstream manager");
     dns_ctx.recursive.replace_upstreams(vec![mgr]);
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while filter.blocklist_size() == 0 && tokio::time::Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(50)).await;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while filter.blocklist_size() == 0 && Instant::now() < deadline {
+        sleep(Duration::from_millis(50)).await;
     }
     assert!(
         filter.blocklist_size() > 0,

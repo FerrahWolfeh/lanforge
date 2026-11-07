@@ -7,10 +7,14 @@ use lanforge_types::device::Device;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::{DnsLifetimeStats, DnsRecordType};
 use lanforge_types::network::{QueryLogEntry, QueryResult, TrafficHistorySample};
+use std::env;
+use std::ffi::CString;
+use std::io::Error as IoError;
+use std::mem::MaybeUninit;
 use std::net::IpAddr;
 use std::ops::Deref;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Compatibility alias for log database error.
 pub type LogBufError = DbError;
@@ -47,7 +51,7 @@ impl LogDb {
             requested.clone(),
             PathBuf::from("/run/lanforge/runtime.redb"),
         ];
-        if let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR") {
+        if let Some(xdg) = env::var_os("XDG_RUNTIME_DIR") {
             candidates.push(PathBuf::from(xdg).join("lanforge/runtime.redb"));
         }
         candidates.push(PathBuf::from("/tmp/lanforge/runtime.redb"));
@@ -97,7 +101,7 @@ impl LogDb {
         self.inner.path()
     }
 
-    /// Direct access to inner RedbDatabase.
+    /// Direct access to inner `RedbDatabase`.
     #[must_use]
     pub fn inner(&self) -> &RedbDatabase {
         &self.inner
@@ -106,17 +110,17 @@ impl LogDb {
 
 fn warn_if_runtime_filesystem_is_persistent(directory: &Path) {
     use std::os::unix::ffi::OsStrExt;
-    let Ok(path) = std::ffi::CString::new(directory.as_os_str().as_bytes()) else {
+    let Ok(path) = CString::new(directory.as_os_str().as_bytes()) else {
         return;
     };
     // Linux TMPFS_MAGIC and RAMFS_MAGIC values from linux/magic.h.
     const TMPFS_MAGIC: libc::c_long = 0x0102_1994;
     const RAMFS_MAGIC: libc::c_long = 0x8584_58f6u32 as libc::c_long;
-    let mut stats = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    let mut stats = MaybeUninit::<libc::statfs>::uninit();
     // SAFETY: `path` is a NUL-terminated pathname and `stats` points to writable storage.
     let result = unsafe { libc::statfs(path.as_ptr(), stats.as_mut_ptr()) };
     if result != 0 {
-        tracing::warn!(path = %directory.display(), error = %std::io::Error::last_os_error(), "Could not inspect runtime database filesystem; flash wear is possible");
+        tracing::warn!(path = %directory.display(), error = %IoError::last_os_error(), "Could not inspect runtime database filesystem; flash wear is possible");
         return;
     }
     // SAFETY: statfs initialized stats after returning success.
@@ -141,13 +145,13 @@ impl LogStore for LogDb {
 
     fn sync_runtime_devices(
         &self,
-        upserts: &[std::sync::Arc<Device>],
+        upserts: &[Arc<Device>],
         deletes: &[MacAddr],
     ) -> Result<(), DbError> {
         self.inner.sync_runtime_devices(upserts, deletes)
     }
 
-    fn replace_runtime_devices(&self, upserts: &[std::sync::Arc<Device>]) -> Result<(), DbError> {
+    fn replace_runtime_devices(&self, upserts: &[Arc<Device>]) -> Result<(), DbError> {
         self.inner.replace_runtime_devices(upserts)
     }
 
@@ -174,10 +178,7 @@ impl LogStore for LogDb {
             .record_dns_block(timed_event, src_ip, domain, src_mac)
     }
 
-    fn record_dns_queries_batch(
-        &self,
-        entries: &[std::sync::Arc<QueryLogEntry>],
-    ) -> Result<(), DbError> {
+    fn record_dns_queries_batch(&self, entries: &[Arc<QueryLogEntry>]) -> Result<(), DbError> {
         self.inner.record_dns_queries_batch(entries)
     }
 

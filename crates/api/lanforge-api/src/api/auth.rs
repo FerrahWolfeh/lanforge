@@ -1,4 +1,4 @@
-use lanforge_types::auth::ApiScopes;
+use lanforge_types::auth::{ApiScopes, UserInfo};
 
 use super::common::{HttpDataResponse, HttpWrappedResponse};
 use serde::{Deserialize, Serialize};
@@ -64,12 +64,12 @@ pub struct CreateUserPayload {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UserResponse {
-    pub user: lanforge_types::auth::UserInfo,
+    pub user: UserInfo,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UserListResponse {
-    pub users: Vec<lanforge_types::auth::UserInfo>,
+    pub users: Vec<UserInfo>,
 }
 
 impl HttpWrappedResponse for UserResponse {

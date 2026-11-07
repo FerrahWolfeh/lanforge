@@ -35,6 +35,7 @@ pub mod config;
 pub mod tests;
 pub mod utils;
 
+use crate::interface::refresh_interface;
 use crate::ndp::config::MonitorConfig;
 use crate::ndp::utils::{extract_neigh_info, get_ipv4_neighbors, get_ipv6_neighbors};
 use crate::ping::IcmpPinger;
@@ -42,26 +43,29 @@ use lanforge_core::bus::{DeviceEvent, LanforgeEvent, NetworkChange, NetworkEvent
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
-    AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass, ServiceCommand,
-    ServiceHandle, ServiceSpec,
+    AsyncService, Condition, Edge, LanforgeService, LossPolicy, RestartPolicy, RuntimeClass,
+    ServiceCommand, ServiceHandle, ServiceSpec,
 };
 use lanforge_transport::{ArpProber, TransportMetrics, sys};
 use lanforge_types::device::{IPv4State, IPv6State, Origin};
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::network::NeighborEvent;
+use lanforge_types::network::{Ipv6Prefix, NeighborEvent};
 use lanforge_types::system::DormantReason;
 use lanforge_types::update::DeviceUpdate;
 use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
 use netlink_sys::SocketAddr;
 use parking_lot::Mutex;
+use pnet::datalink;
 use rtnetlink::Handle;
 use rtnetlink::packet_route::RouteNetlinkMessage;
 use smallvec::SmallVec;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+use std::mem;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
-use tokio::sync::broadcast;
+use tokio::sync::broadcast::{self, error::RecvError};
 use tokio::task::JoinSet;
 use tokio::time::{interval, sleep};
 use tracing::{debug, error, info, warn};
@@ -74,20 +78,20 @@ type NetlinkMessageStream = broadcast::Receiver<(NetlinkMessage<RouteNetlinkMess
 
 #[derive(Default)]
 pub(crate) struct IfNameCache {
-    pub(crate) cache: std::collections::HashMap<u32, String>,
+    pub(crate) cache: HashMap<u32, String>,
 }
 
 impl IfNameCache {
     pub(crate) fn new() -> Self {
         Self {
-            cache: std::collections::HashMap::new(),
+            cache: HashMap::new(),
         }
     }
 
     pub(crate) fn get(&mut self, ifindex: u32) -> Option<&str> {
         match self.cache.entry(ifindex) {
-            std::collections::hash_map::Entry::Occupied(e) => Some(e.into_mut().as_str()),
-            std::collections::hash_map::Entry::Vacant(e) => {
+            Entry::Occupied(e) => Some(e.into_mut().as_str()),
+            Entry::Vacant(e) => {
                 let name = sys::if_index_to_name(ifindex)?;
                 Some(e.insert(name).as_str())
             }
@@ -98,10 +102,7 @@ impl IfNameCache {
 use lanforge_types::system::ServiceId;
 
 const MONITOR_DEPS: &[Edge] = &[
-    Edge::requires(
-        ServiceId::Interfaces,
-        lanforge_core::service::LossPolicy::Degrade,
-    ),
+    Edge::requires(ServiceId::Interfaces, LossPolicy::Degrade),
     Edge::after(ServiceId::Db),
 ];
 
@@ -195,8 +196,8 @@ impl DiscoveryService {
         ifname_cache: &mut IfNameCache,
         ctx: &LanforgeContext,
         pending_batch: &mut Vec<(MacAddr, IpAddr, bool)>,
-        current_gua: Option<&lanforge_types::network::Ipv6Prefix>,
-        current_ula: Option<&lanforge_types::network::Ipv6Prefix>,
+        current_gua: Option<&Ipv6Prefix>,
+        current_ula: Option<&Ipv6Prefix>,
     ) {
         if let NeighborEvent::Added {
             mac,
@@ -221,12 +222,12 @@ impl DiscoveryService {
             }
             pending_batch.push((mac, ip, is_active));
             if pending_batch.len() >= 50 {
-                let batch = std::mem::replace(pending_batch, Vec::with_capacity(50));
+                let batch = mem::replace(pending_batch, Vec::with_capacity(50));
                 self.flush_neighbor_batch(batch);
             }
         } else {
             if !pending_batch.is_empty() {
-                let batch = std::mem::take(pending_batch);
+                let batch = mem::take(pending_batch);
                 self.flush_neighbor_batch(batch);
             }
             if let Some(update) = event.to_device_update(current_gua, current_ula) {
@@ -243,7 +244,7 @@ impl LanforgeService for DiscoveryService {
             display_name: "Discovery Service",
             runtime: RuntimeClass::Shared,
             restart: RestartPolicy::default(),
-            shutdown_timeout: std::time::Duration::from_secs(5),
+            shutdown_timeout: Duration::from_secs(5),
             deps: MONITOR_DEPS,
             condition: Condition::ALWAYS,
         }
@@ -257,12 +258,8 @@ impl AsyncService for DiscoveryService {
         }
         let primary_ifindex = self.target_ifindexes.first().copied().unwrap_or(0);
         let if_state = ctx.get_interface_state(primary_ifindex);
-        let current_gua = if_state
-            .gua
-            .map(lanforge_types::network::Ipv6Prefix::from_addr);
-        let current_ula = if_state
-            .ula
-            .map(lanforge_types::network::Ipv6Prefix::from_addr);
+        let current_gua = if_state.gua.map(Ipv6Prefix::from_addr);
+        let current_ula = if_state.ula.map(Ipv6Prefix::from_addr);
 
         debug!("Performing initial neighbor bootstrap...");
         let mut bootstrap_events = Vec::new();
@@ -319,11 +316,11 @@ impl AsyncService for DiscoveryService {
                     vec![pinger.metrics_handle(), Arc::clone(&arp_metrics)],
                 );
                 probes.spawn(sweep_pings(
-                    pinger.clone(),
+                    Arc::clone(pinger),
                     ctx.clone(),
                     self.cfg.ping_interval_secs,
                 ));
-                probes.spawn(verify_offline(pinger.clone(), arp_metrics, ctx.clone()));
+                probes.spawn(verify_offline(Arc::clone(pinger), arp_metrics, ctx.clone()));
             } else {
                 warn!("Failed to initialize ICMP ping probe");
             }
@@ -334,12 +331,8 @@ impl AsyncService for DiscoveryService {
 
         let primary_ifindex = self.target_ifindexes.first().copied().unwrap_or(0);
         let if_state = ctx.get_interface_state(primary_ifindex);
-        let mut current_gua: Option<lanforge_types::network::Ipv6Prefix> = if_state
-            .gua
-            .map(lanforge_types::network::Ipv6Prefix::from_addr);
-        let mut current_ula: Option<lanforge_types::network::Ipv6Prefix> = if_state
-            .ula
-            .map(lanforge_types::network::Ipv6Prefix::from_addr);
+        let mut current_gua: Option<Ipv6Prefix> = if_state.gua.map(Ipv6Prefix::from_addr);
+        let mut current_ula: Option<Ipv6Prefix> = if_state.ula.map(Ipv6Prefix::from_addr);
 
         let mut pending_batch = Vec::with_capacity(50);
         let mut flush_timer = interval(Duration::from_millis(self.cfg.batch_interval_ms));
@@ -362,7 +355,7 @@ impl AsyncService for DiscoveryService {
                 }
                 res = self.messages.recv() => {
                     let Ok((msg, _addr)) = res else {
-                        if let Err(broadcast::error::RecvError::Lagged(n)) = res {
+                        if let Err(RecvError::Lagged(n)) = res {
                             warn!(service = "DiscoveryService", lost = n, "Netlink broadcast lagged");
                             continue;
                         }
@@ -377,7 +370,7 @@ impl AsyncService for DiscoveryService {
                         debug!(
                             "Address event on ifindex {event_ifindex}, refreshing interface..."
                         );
-                        if let Err(e) = crate::interface::refresh_interface(
+                        if let Err(e) = refresh_interface(
                             &self.handle,
                             event_ifindex,
                             ctx,
@@ -406,7 +399,7 @@ impl AsyncService for DiscoveryService {
 
                 _ = flush_timer.tick() => {
                     if !pending_batch.is_empty() {
-                        let batch = std::mem::replace(&mut pending_batch, Vec::with_capacity(50));
+                        let batch = mem::replace(&mut pending_batch, Vec::with_capacity(50));
                         self.flush_neighbor_batch(batch);
                     }
                 }
@@ -496,7 +489,7 @@ async fn sweep_pings(pinger: Arc<IcmpPinger>, ctx: LanforgeContext, ping_interva
 
         for ip in ips {
             seq_counter = seq_counter.wrapping_add(1);
-            let pinger_c = pinger.clone();
+            let pinger_c = Arc::clone(&pinger);
             let ctx_c = ctx.clone();
             pings.spawn(async move {
                 if matches!(pinger_c.ping(ip, seq_counter).await, Ok(true))
@@ -534,7 +527,7 @@ fn get_or_create_arp_prober(
         }
     }
 
-    let ifaces = pnet::datalink::interfaces();
+    let ifaces = datalink::interfaces();
     for iface in ifaces {
         if iface.name == iface_name
             && let Some(mac) = iface.mac
@@ -571,9 +564,9 @@ async fn verify_offline(
                     && let NetworkChange::IpOffline { ip } = &**change
                 {
                     seq_counter = seq_counter.wrapping_add(1);
-                    let pinger_c = pinger.clone();
+                    let pinger_c = Arc::clone(&pinger);
                     let ctx_c = ctx.clone();
-                    let probers_c = prober_cache.clone();
+                    let probers_c = Arc::clone(&prober_cache);
                     let arp_metrics_c = Arc::clone(&arp_metrics);
                     let target_ip = *ip;
                     checks.spawn(async move {
@@ -631,7 +624,7 @@ async fn verify_offline(
                     });
                 }
             }
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+            Err(RecvError::Lagged(n)) => {
                 warn!(
                     service = "DiscoveryServicePinger",
                     lost = n,

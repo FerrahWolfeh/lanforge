@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 
 use super::common::{HttpDataResponse, HttpWrappedResponse};
 use lanforge_types::identifiers::MacAddr;
@@ -148,7 +148,7 @@ pub struct DhcpReconcileResponse {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct InvalidatedLeaseInfo {
     pub mac: MacAddr,
-    pub ip: std::net::Ipv4Addr,
+    pub ip: Ipv4Addr,
     pub hostname: Option<String>,
     pub reason: String,
 }

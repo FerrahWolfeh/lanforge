@@ -1,4 +1,6 @@
+use lanforge_types::network::dns::upstream::UpstreamProtocol;
 pub use lanforge_types::network::dns::{UpstreamHealthSnapshot, UpstreamStatus};
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -136,8 +138,8 @@ impl UpstreamHealth {
 
     pub fn snapshot(
         &self,
-        target: std::net::SocketAddr,
-        protocol: lanforge_types::network::dns::upstream::UpstreamProtocol,
+        target: SocketAddr,
+        protocol: UpstreamProtocol,
         domain: Option<String>,
     ) -> UpstreamHealthSnapshot {
         UpstreamHealthSnapshot {

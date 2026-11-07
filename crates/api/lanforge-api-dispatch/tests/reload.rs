@@ -1,7 +1,23 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 //! `lanforge reload` (`handle_reload`): the file-owned sections apply as the boot applies them.
 
+use std::fs;
+use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
+
+use std::time::Duration;
+use tokio::task::yield_now;
+use tokio::time::timeout;
 
 use lanforge_api::api::Response;
 use lanforge_api_dispatch::ClientContext;
@@ -12,11 +28,18 @@ use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_db::config::DatabaseConfig;
 use lanforge_db::engine::LanforgeDb;
 use lanforge_db::log_engine::LogDb;
+use lanforge_db::worker::DbWorker;
+use lanforge_types::device::{Origin, StaticHost};
+use lanforge_types::identifiers::{DeviceIdentifier, MacAddr};
+use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::firewall::{FirewallConfig, L4Protocol, PortForwardRule};
 use lanforge_types::network::pppoe::PppoeConfig;
+use lanforge_types::network::ra::PrefixLifetime;
+use lanforge_types::system::ServiceId;
+use tempfile::TempDir;
 
 /// A client with in-memory storage whose config file holds `text`.
-fn with_file(text: &str) -> (ClientContext, tempfile::TempDir, std::path::PathBuf) {
+fn with_file(text: &str) -> (ClientContext, TempDir, PathBuf) {
     let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
     let db = Arc::new(
         LanforgeDb::open(&DatabaseConfig {
@@ -26,17 +49,16 @@ fn with_file(text: &str) -> (ClientContext, tempfile::TempDir, std::path::PathBu
         .unwrap(),
     );
     let log_db = Arc::new(LogDb::open_in_memory());
-    let mut worker =
-        lanforge_db::worker::DbWorker::new(DatabaseConfig::default(), ctx.clone(), db, log_db);
+    let mut worker = DbWorker::new(DatabaseConfig::default(), ctx.clone(), db, log_db);
     let ctx_worker = ctx.clone();
     tokio::spawn(async move {
-        let h = ServiceHandle::new(lanforge_types::system::ServiceId::Db, ctx_worker.clone());
+        let h = ServiceHandle::new(ServiceId::Db, ctx_worker.clone());
         let _ = worker.serve(&ctx_worker, &h).await;
     });
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("lanforge.toml");
-    std::fs::write(&path, text).unwrap();
+    fs::write(&path, text).unwrap();
     ctx.set_config_path(&path);
     ctx.set_config_writable(true);
     let client = ClientContext {
@@ -51,7 +73,7 @@ fn with_file(text: &str) -> (ClientContext, tempfile::TempDir, std::path::PathBu
 async fn reload(client: &ClientContext) {
     // The storage worker starts on the runtime.
     while client.ctx.storage_handle().is_none() {
-        tokio::task::yield_now().await;
+        yield_now().await;
     }
     let res = client.handle_reload().await;
     assert!(matches!(res, Response::Success(_)), "{res:?}");
@@ -177,7 +199,7 @@ async fn reload_keeps_the_admins_firewall_and_runs_the_effective_one() {
     };
     assert!(status.flow_offload_suspended, "suspended by SQM");
     assert!(!status.flow_offload_active);
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    assert_eq!(fs::read_to_string(&path).unwrap(), text);
 }
 
 /// A `[firewall]` that does not parse keeps the running firewall (its default would drop
@@ -225,10 +247,7 @@ async fn reload_applies_an_ra_edit_and_leaves_out_a_wrong_prefix() {
     assert_eq!(ra.mtu, Some(1492));
     assert_eq!(ra.iface.as_deref(), Some("lan0"));
     assert_eq!(ra.prefixes.len(), 1);
-    assert_eq!(
-        ra.prefixes[0].valid_lifetime,
-        lanforge_types::network::ra::PrefixLifetime::Infinity
-    );
+    assert_eq!(ra.prefixes[0].valid_lifetime, PrefixLifetime::Infinity);
     assert_eq!(ra.dnssl[0].domains, vec!["lan".to_string()], "derived");
     let issues = client.ctx.config_issues();
     assert_eq!(issues.len(), 1, "{issues:?}");
@@ -249,9 +268,9 @@ async fn an_unchanged_ra_reload_keeps_the_derived_lists() {
     assert_eq!(client.ctx.get_ra_server_config(), first);
 }
 
-fn static_host(mac: &str, name: &str) -> lanforge_types::device::StaticHost {
-    lanforge_types::device::StaticHost {
-        mac: lanforge_types::identifiers::MacAddr::parse(mac).unwrap(),
+fn static_host(mac: &str, name: &str) -> StaticHost {
+    StaticHost {
+        mac: MacAddr::parse(mac).unwrap(),
         hostname: name.into(),
         v4: None,
         v6: None,
@@ -277,7 +296,7 @@ async fn reload_demotes_a_host_taken_out_of_the_file() {
         .ctx
         .get_device(&solarium.mac)
         .expect("the device stays");
-    assert_eq!(dev.origin, lanforge_types::device::Origin::Dynamic);
+    assert_eq!(dev.origin, Origin::Dynamic);
 }
 
 /// An unreadable `[hosts]` keeps every static host as it is (its default, no hosts, would
@@ -318,11 +337,7 @@ async fn reload_applies_a_dns_edit_and_leaves_out_a_wrong_answer() {
     let issues = ctx.config_issues();
     assert_eq!(issues.len(), 1, "{issues:?}");
     assert!(issues[0].contains("\"bad.lan\""), "{issues:?}");
-    assert_eq!(
-        std::fs::read_to_string(&path).unwrap(),
-        text,
-        "file untouched"
-    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), text, "file untouched");
 }
 
 /// `[dns] listen` and `enabled` apply on reload only when they changed (the DNS service alone
@@ -337,7 +352,7 @@ async fn reload_applies_the_dns_listener_only_when_it_changed() {
 listen = \"127.0.0.1:5353\"\n",
     );
     let ctx = &client.ctx;
-    let dot: std::net::SocketAddr = "[::]:853".parse().unwrap();
+    let dot: SocketAddr = "[::]:853".parse().unwrap();
     ctx.update_dns_listen(DnsListenConfig {
         dot_listen: Some(dot),
         dot_enabled: true,
@@ -353,13 +368,13 @@ listen = \"127.0.0.1:5353\"\n",
     let mut sub = ctx.config_subscription::<DnsListenConfig>();
     reload(&client).await;
     assert!(
-        tokio::time::timeout(Duration::from_millis(50), sub.next())
+        timeout(Duration::from_millis(50), sub.next())
             .await
             .is_err(),
         "an unchanged listener must not restart DNS"
     );
 
-    std::fs::write(
+    fs::write(
         &path,
         "[dns]\nenabled = false\nlisten = \"127.0.0.1:5353\"\n",
     )
@@ -372,8 +387,7 @@ listen = \"127.0.0.1:5353\"\n",
 #[tokio::test]
 async fn an_unreadable_dns_section_keeps_the_running_dns() {
     let (client, _dir, _) = with_file("[dns]\nupstreams = 7\n");
-    let running: Vec<lanforge_types::network::dns::upstream::UpstreamTarget> =
-        vec!["udp://1.1.1.1:53".parse().unwrap()];
+    let running: Vec<UpstreamTarget> = vec!["udp://1.1.1.1:53".parse().unwrap()];
     client.ctx.update_dns_upstreams(running.clone());
     reload(&client).await;
     assert_eq!(client.ctx.get_dns_upstreams(), running);
@@ -388,8 +402,8 @@ async fn reload_applies_adblock_and_keeps_rules_it_cannot_read() {
     let file = "[adblock]\nenabled = true\nlists = [\"l\"]\nrules = \"adblock/global.rules\"\n\n\
                 [adblock.sources.l]\nurl = \"https://example.com/l\"\n";
     let (client, dir, _path) = with_file(file);
-    std::fs::create_dir(dir.path().join("adblock")).unwrap();
-    std::fs::write(
+    fs::create_dir(dir.path().join("adblock")).unwrap();
+    fs::write(
         dir.path().join("adblock/global.rules"),
         "@@||bank.example^\n",
     )
@@ -402,8 +416,8 @@ async fn reload_applies_adblock_and_keeps_rules_it_cannot_read() {
     assert_eq!(urls[0].url, "https://example.com/l");
     assert_eq!(client.ctx.get_dns_adblock_rules(), "@@||bank.example^\n");
 
-    std::fs::remove_file(dir.path().join("adblock/global.rules")).unwrap();
-    std::fs::create_dir(dir.path().join("adblock/global.rules")).unwrap();
+    fs::remove_file(dir.path().join("adblock/global.rules")).unwrap();
+    fs::create_dir(dir.path().join("adblock/global.rules")).unwrap();
     let _ = client.handle_reload().await;
     assert_eq!(
         client.ctx.get_dns_adblock_rules(),
@@ -430,7 +444,7 @@ async fn reload_applies_the_site_search_domains() {
     assert_eq!(client.ctx.get_site_domains().0, ["home.arpa", "lan"]);
 }
 
-/// The WebUI loads the firewall, edits it and sends it back to be written to the file: the GET
+/// The `WebUI` loads the firewall, edits it and sends it back to be written to the file: the GET
 /// must not fill an empty `external` zone with the WAN interface (the ruleset binds the active
 /// WAN itself), or `wan0`/`ppp0` lands in the file as if the admin had written it.
 #[tokio::test]
@@ -464,9 +478,7 @@ async fn reload_applies_all_changed_sections_as_one_change() {
     reload(&client).await;
 
     let mut changes = Vec::new();
-    while let Ok(Ok(ev)) =
-        tokio::time::timeout(std::time::Duration::from_millis(100), sys.recv()).await
-    {
+    while let Ok(Ok(ev)) = timeout(Duration::from_millis(100), sys.recv()).await {
         if let LanforgeEvent::System(SystemEvent::ConfigChanged { sections }) = ev.event {
             changes.push(sections);
         }
@@ -503,7 +515,7 @@ async fn renaming_a_host_moves_its_dev_references() {
         .change_hosts(|hosts| hosts[0].hostname = "storage".to_string())
         .expect("renamed");
 
-    let written = std::fs::read_to_string(&path).unwrap();
+    let written = fs::read_to_string(&path).unwrap();
     assert!(!written.contains("dev:nas"), "{written}");
     assert_eq!(written.matches("dev:storage").count(), 3, "{written}");
     assert!(
@@ -511,7 +523,7 @@ async fn renaming_a_host_moves_its_dev_references() {
         "other selectors kept: {written}"
     );
 
-    let storage: lanforge_types::identifiers::DeviceIdentifier = "storage".parse().unwrap();
+    let storage: DeviceIdentifier = "storage".parse().unwrap();
     let fw = client.ctx.get_firewall_config().expect("firewall");
     assert_eq!(
         fw.port_forwards[0].internal_ip,

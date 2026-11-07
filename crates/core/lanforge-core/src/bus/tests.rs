@@ -6,7 +6,9 @@ use crate::bus::{
 };
 use crate::context::LanforgeContext;
 use crate::context::state::State;
+use lanforge_types::config::DomainSet;
 use lanforge_types::device::Origin;
+use lanforge_types::events::PppoeSessionUp;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::firewall::L4Protocol;
 use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate};
@@ -54,7 +56,7 @@ async fn new_device_publishes_discovered_and_updated() {
 #[tokio::test]
 async fn known_device_does_not_publish_discovered() {
     let bus = make_bus();
-    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), State::new(), None);
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let expires = SystemTime::now() + Duration::from_hours(1);
 
@@ -89,7 +91,7 @@ async fn known_device_does_not_publish_discovered() {
 #[tokio::test]
 async fn ndp_seen_publishes_nothing() {
     let bus = make_bus();
-    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), State::new(), None);
     let mut rx = bus.subscribe();
 
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
@@ -114,7 +116,7 @@ async fn ndp_seen_publishes_nothing() {
 #[tokio::test]
 async fn cli_host_update_publishes_events() {
     let bus = make_bus();
-    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), State::new(), None);
     let mut rx = bus.subscribe();
 
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
@@ -252,8 +254,7 @@ async fn topic_routing_matrix() {
     // 1. ConfigChanged -> system only: config is read through subscriptions, so a change wakes
     // no network/device/dns worker.
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::ConfigChanged {
-        sections: lanforge_types::config::DomainSet::DHCP_V4_POOLS
-            | lanforge_types::config::DomainSet::RA_SERVER,
+        sections: DomainSet::DHCP_V4_POOLS | DomainSet::RA_SERVER,
     }));
     assert!(matches!(
         sys_rx.try_recv().unwrap().event,
@@ -264,7 +265,7 @@ async fn topic_routing_matrix() {
     assert!(dns_rx.try_recv().is_err());
 
     // 3. PPPoE SessionUp -> pppoe AND dns (for upstream resolver updates)
-    let pppoe_details = lanforge_types::events::PppoeSessionUp {
+    let pppoe_details = PppoeSessionUp {
         interface: "ppp0".to_string(),
         ac_mac: None,
         ac_name: None,

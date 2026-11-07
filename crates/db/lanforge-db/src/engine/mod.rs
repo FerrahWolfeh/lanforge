@@ -1,10 +1,13 @@
 //! `LanforgeDb` facade wrapping `lanforge-db-redb`.
 
+use std::ops::Deref;
 use std::path::Path;
+use std::sync::Arc;
 
+use crate::config::DatabaseConfig;
 use lanforge_core::context::PersistenceSnapshot;
 use lanforge_core::context::state::State;
-use lanforge_db_core::{DbError, DeviceStore};
+use lanforge_db_core::{DbError, DeviceStore, LogStore, Stores};
 use lanforge_db_redb::RedbDatabase;
 pub use lanforge_db_redb::WriteTx;
 use lanforge_types::device::{Device, DeviceStatus};
@@ -34,7 +37,7 @@ impl LanforgeDb {
     /// A persistent database that cannot be opened is an error, never a silent fallback to
     /// another file: an empty stand-in would look like a first run. The caller decides
     /// whether to continue in recovery mode.
-    pub fn open(cfg: &crate::config::DatabaseConfig) -> Result<Self, DbError> {
+    pub fn open(cfg: &DatabaseConfig) -> Result<Self, DbError> {
         if cfg.is_in_memory() {
             let db = RedbDatabase::open_temp()?;
             return Ok(Self { inner: db });
@@ -98,7 +101,7 @@ impl LanforgeDb {
         self.inner.legacy_config_keys()
     }
 
-    /// Returns a reference to the inner RedbDatabase.
+    /// Returns a reference to the inner `RedbDatabase`.
     #[must_use]
     pub fn redb(&self) -> &RedbDatabase {
         &self.inner
@@ -117,27 +120,24 @@ impl LanforgeDb {
 
     /// Flushes all devices in the current State to disk in a single transaction.
     pub fn save_table(&self, table: &State) -> Result<(), DbError> {
-        let devices: Vec<std::sync::Arc<Device>> = table.devices().collect();
+        let devices: Vec<Arc<Device>> = table.devices().collect();
         self.inner.batch_sync_devices(&devices, &[], &[])
     }
 
     /// Flushes a persistence snapshot to disk in a single transaction.
     pub fn save_snapshot(&self, snapshot: &PersistenceSnapshot) -> Result<(), DbError> {
-        let devices: Vec<std::sync::Arc<Device>> = snapshot.devices.values().cloned().collect();
+        let devices: Vec<Arc<Device>> = snapshot.devices.values().cloned().collect();
         self.inner.batch_sync_devices(&devices, &[], &[])
     }
 
     /// Creates a composite `Stores` instance for closure execution.
     #[must_use]
-    pub fn stores(
-        &self,
-        log: std::sync::Arc<dyn lanforge_db_core::LogStore>,
-    ) -> lanforge_db_core::Stores {
-        lanforge_db_core::Stores::new(std::sync::Arc::new(self.inner.clone()), log)
+    pub fn stores(&self, log: Arc<dyn LogStore>) -> Stores {
+        Stores::new(Arc::new(self.inner.clone()), log)
     }
 }
 
-impl std::ops::Deref for LanforgeDb {
+impl Deref for LanforgeDb {
     type Target = RedbDatabase;
 
     fn deref(&self) -> &Self::Target {

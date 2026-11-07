@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::hash::{BuildHasher, Hash};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use tracing::warn;
@@ -52,7 +53,7 @@ pub fn iter_custom_options<'a, K, S: BuildHasher>(
     protected: &'static [K],
 ) -> impl Iterator<Item = (K, Vec<u8>)> + 'a
 where
-    K: Copy + Eq + Hash + std::fmt::Display + 'static,
+    K: Copy + Eq + Hash + Display + 'static,
 {
     options.iter().filter_map(move |(&code, val)| {
         if protected.contains(&code) {

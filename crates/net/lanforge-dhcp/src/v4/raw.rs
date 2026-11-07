@@ -4,7 +4,7 @@
 //! not yet configured on the client (when the client has an IP but the
 //! server's ARP table lacks the entry). This avoids L3 broadcast for unicast packets.
 
-use crate::error::NetworkError;
+use crate::error::DhcpError;
 use pnet::datalink::{self, Channel, Config, MacAddr as PnetMac};
 use pnet::packet::MutablePacket;
 use pnet::packet::ethernet::{EtherTypes, MutableEthernetPacket};
@@ -38,25 +38,25 @@ impl RawSender {
     /// # Arguments
     ///
     /// * `iface_name` — network interface name (e.g., `"eth0"`)
-    pub fn new(iface_name: &str) -> Result<Self, NetworkError> {
+    pub fn new(iface_name: &str) -> Result<Self, DhcpError> {
         let interface = datalink::interfaces()
             .into_iter()
             .find(|iface| iface.name == iface_name)
-            .ok_or_else(|| NetworkError::InterfaceNotFound(iface_name.to_string()))?;
+            .ok_or_else(|| DhcpError::InterfaceNotFound(iface_name.to_string()))?;
 
         let src_mac = interface.mac.ok_or_else(|| {
-            NetworkError::InvalidMac(format!("Interface '{iface_name}' has no MAC addr"))
+            DhcpError::InvalidMac(format!("Interface '{iface_name}' has no MAC addr"))
         })?;
 
         let (tx, _) = match datalink::channel(&interface, Config::default()) {
             Ok(Channel::Ethernet(tx, rx)) => (tx, rx),
             Ok(_) => {
-                return Err(NetworkError::RawSocket(
+                return Err(DhcpError::RawSocket(
                     "Unsupported AF_PACKET channel type".to_string(),
                 ));
             }
             Err(e) => {
-                return Err(NetworkError::RawSocket(format!(
+                return Err(DhcpError::RawSocket(format!(
                     "Failed to open AF_PACKET channel: {e}"
                 )));
             }
@@ -73,7 +73,7 @@ impl RawSender {
         src_ip: Ipv4Addr,
         dst_ip: Ipv4Addr,
         dst_mac_raw: [u8; 6],
-    ) -> Result<(), NetworkError> {
+    ) -> Result<(), DhcpError> {
         let dst_mac = PnetMac::new(
             dst_mac_raw[0],
             dst_mac_raw[1],
@@ -88,7 +88,7 @@ impl RawSender {
         let eth_len = 14 + ipv4_len;
 
         if eth_len > 1514 {
-            return Err(NetworkError::RawSocket(
+            return Err(DhcpError::RawSocket(
                 "DHCP packet exceeds Ethernet frame size (1514 bytes)".to_string(),
             ));
         }
@@ -132,10 +132,10 @@ impl RawSender {
         // 4. Inject Packet (Layer 2)
         match self.tx.send_to(frame_buf, None) {
             Some(Ok(())) => Ok(()),
-            Some(Err(e)) => Err(NetworkError::RawSocket(format!(
+            Some(Err(e)) => Err(DhcpError::RawSocket(format!(
                 "AF_PACKET injection failed: {e}"
             ))),
-            None => Err(NetworkError::RawSocket(
+            None => Err(DhcpError::RawSocket(
                 "AF_PACKET Tx buffer full/error".to_string(),
             )),
         }

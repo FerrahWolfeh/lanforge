@@ -7,7 +7,6 @@ authors.workspace = true
 
 [dependencies]
 # Lanforge
-lanforge-macros = { workspace = true }
 lanforge-types = { workspace = true }
 
 # Workspace
@@ -29,3 +28,6 @@ adblock = ["lanforge-types/adblock"]
 hotpath = ["dep:hotpath"]
 hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc"]
 default = []
+
+[lints]
+workspace = true

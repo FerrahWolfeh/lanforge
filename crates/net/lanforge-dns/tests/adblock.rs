@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 #![cfg(feature = "adblock")]
 
 #[path = "common/mod.rs"]
@@ -5,21 +14,25 @@ mod common;
 
 use common::{DnsPacketBuilder, init_test_context, parse_response, wait_for_service_online};
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
-use lanforge_core::service::AsyncService;
+use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_dns::config::DnsConfig;
 use lanforge_dns::server::service::DnsService;
-use lanforge_types::network::dns::adblock::AdblockUrlKind;
+use lanforge_types::network::dns::AdblockUrlEntry;
+use lanforge_types::network::dns::adblock::{
+    AdblockDbConfig, AdblockSourceFormat, AdblockUrlKind, BlockingMode,
+};
 use lanforge_types::network::dns::{DnsRecordType, DnsResponseCode};
+use lanforge_types::system::ServiceId;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
+use tokio::time::sleep;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_adblock_service_lifecycle_and_rebuild() {
     // 1. Spawn a mock HTTP server to host our blocklist
-    use lanforge_types::network::dns::AdblockUrlEntry;
-    use lanforge_types::network::dns::adblock::{AdblockDbConfig, BlockingMode};
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
 
     // Spawn task to handle HTTP requests
@@ -54,17 +67,14 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
     let ctx_service = ctx.clone();
 
     tokio::spawn(async move {
-        let h = lanforge_core::service::ServiceHandle::new(
-            lanforge_types::system::ServiceId::Dns,
-            ctx_service.clone(),
-        );
+        let h = ServiceHandle::new(ServiceId::Dns, ctx_service.clone());
         service
             .serve(&ctx_service, &h)
             .await
             .expect("Service failed");
     });
 
-    wait_for_service_online(&ctx, lanforge_types::system::ServiceId::Dns).await;
+    wait_for_service_online(&ctx, ServiceId::Dns).await;
 
     let client_addr: SocketAddr = "192.168.1.100:54326".parse().unwrap();
     let query_bytes = DnsPacketBuilder::query("ads.example.com", DnsRecordType::A)
@@ -89,7 +99,7 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
         name: None,
         url: url.clone(),
         kind: AdblockUrlKind::Blocklist,
-        format: lanforge_types::network::dns::adblock::AdblockSourceFormat::Auto,
+        format: AdblockSourceFormat::Auto,
     }]);
 
     ctx.update_dns_adblock(AdblockDbConfig {
@@ -118,7 +128,7 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
             fst_built = true;
             break;
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        sleep(Duration::from_millis(50)).await;
     }
     assert!(
         fst_built,
@@ -126,7 +136,7 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
     );
 
     // Give it a brief moment to update memory blocker with new FST
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(100)).await;
 
     // 6. Test: Query should now be blocked!
     handle.inject(query_bytes.clone(), client_addr).await;
@@ -143,7 +153,7 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
         ..Default::default()
     });
     let _ = ctx.bus().publish(LanforgeEvent::Dns(DnsEvent::CacheFlush));
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(100)).await;
 
     // Query again, should be Refused
     handle.inject(query_bytes.clone(), client_addr).await;
@@ -163,7 +173,7 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
             duration_secs: None,
         }));
     let _ = ctx.bus().publish(LanforgeEvent::Dns(DnsEvent::CacheFlush));
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(100)).await;
 
     // Query should not be blocked anymore
     handle.inject(query_bytes, client_addr).await;
@@ -174,7 +184,7 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
     ctx.terminate();
 }
 
-/// The status carries the configured refresh time: the WebUI settings dialog reads it there
+/// The status carries the configured refresh time: the `WebUI` settings dialog reads it there
 /// (it used to export the whole system configuration for it).
 #[tokio::test(flavor = "multi_thread")]
 async fn adblock_status_reports_the_refresh_time() {
@@ -198,16 +208,13 @@ async fn adblock_status_reports_the_refresh_time() {
     let (_handle, mut service) = DnsService::inert(cfg, ctx.clone());
     let ctx_service = ctx.clone();
     tokio::spawn(async move {
-        let h = lanforge_core::service::ServiceHandle::new(
-            lanforge_types::system::ServiceId::Dns,
-            ctx_service.clone(),
-        );
+        let h = ServiceHandle::new(ServiceId::Dns, ctx_service.clone());
         service
             .serve(&ctx_service, &h)
             .await
             .expect("Service failed");
     });
-    wait_for_service_online(&ctx, lanforge_types::system::ServiceId::Dns).await;
+    wait_for_service_online(&ctx, ServiceId::Dns).await;
 
     let reply = ctx
         .dns_handle()

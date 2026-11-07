@@ -15,7 +15,6 @@ lanforge-macros = { workspace = true }
 tokio = { workspace = true, features = ["io-util"] }
 serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true }
-chrono = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
@@ -23,7 +22,6 @@ toml_edit = { workspace = true }
 bitflags = { workspace = true }
 
 postcard.workspace = true
-futures.workspace = true
 
 [features]
 default = []
@@ -31,3 +29,6 @@ adblock = []
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[lints]
+workspace = true

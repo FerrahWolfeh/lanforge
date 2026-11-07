@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 #[path = "common/mod.rs"]
 mod common;
 
@@ -6,20 +15,23 @@ use common::{
     parse_response, wait_for_service_online,
 };
 use lanforge_core::context::ConfigPatch;
-use lanforge_core::service::AsyncService;
+use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_dns::config::DnsConfig;
 use lanforge_dns::server::service::DnsService;
 use lanforge_dns_wire::{WireDecoder, WireEncoder};
 use lanforge_types::network::dns::adblock::{RewriteAnswer, RewriteRule};
 use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::dns::{
-    DnsClass, DnsMessage, DnsRData, DnsRecordType, DnsResponseCode,
+    DnsClass, DnsMessage, DnsRData, DnsRecord, DnsRecordType, DnsResponseCode,
 };
 use lanforge_types::network::dns::{DnsRequest, DnsResponse};
+use lanforge_types::system::ServiceId;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket as TokioUdpSocket;
+use tokio::time::sleep;
 
 #[tokio::test]
 async fn dns_reload_causes_full_cache_refresh_if_enabled() {
@@ -46,17 +58,14 @@ async fn dns_reload_causes_full_cache_refresh_if_enabled() {
     let ctx_service = ctx.clone();
 
     tokio::spawn(async move {
-        let h = lanforge_core::service::ServiceHandle::new(
-            lanforge_types::system::ServiceId::Dns,
-            ctx_service.clone(),
-        );
+        let h = ServiceHandle::new(ServiceId::Dns, ctx_service.clone());
         service
             .serve(&ctx_service, &h)
             .await
             .expect("Service failed");
     });
 
-    wait_for_service_online(&ctx, lanforge_types::system::ServiceId::Dns).await;
+    wait_for_service_online(&ctx, ServiceId::Dns).await;
 
     // 3. Query once to populate the cache
     let client_addr: SocketAddr = "192.168.1.100:54327".parse().unwrap();
@@ -104,7 +113,7 @@ async fn dns_reload_causes_full_cache_refresh_if_enabled() {
     ctx.update_dns_upstreams(vec![new_target.clone()]);
 
     // Wait a brief moment for cache invalidation to process
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     // 5. Verify cache has been completely invalidated/flushed
     let cache_dump_after = dns_handle
@@ -142,17 +151,14 @@ async fn dns_reload_rewrites_on_the_fly() {
     let ctx_service = ctx.clone();
 
     tokio::spawn(async move {
-        let h = lanforge_core::service::ServiceHandle::new(
-            lanforge_types::system::ServiceId::Dns,
-            ctx_service.clone(),
-        );
+        let h = ServiceHandle::new(ServiceId::Dns, ctx_service.clone());
         service
             .serve(&ctx_service, &h)
             .await
             .expect("Service failed");
     });
 
-    wait_for_service_online(&ctx, lanforge_types::system::ServiceId::Dns).await;
+    wait_for_service_online(&ctx, ServiceId::Dns).await;
 
     let client_addr: SocketAddr = "192.168.1.100:54328".parse().unwrap();
     let query_bytes = DnsPacketBuilder::query("my-site.lan", DnsRecordType::A)
@@ -174,7 +180,7 @@ async fn dns_reload_rewrites_on_the_fly() {
         answer: RewriteAnswer::A(Ipv4Addr::new(1, 2, 3, 4)),
     }]));
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     // 3. Query again (should now return 1.2.3.4 via rewrite)
     handle.inject(query_bytes, client_addr).await;
@@ -209,8 +215,8 @@ async fn dns_conditional_split_upstream_routing() {
                 resp.header.rcode = DnsResponseCode::NoError;
                 resp.questions = req.questions.clone();
                 if let Some(q) = req.questions.first() {
-                    resp.answers.push(lanforge_types::network::dns::DnsRecord {
-                        name: q.name.clone(),
+                    resp.answers.push(DnsRecord {
+                        name: Arc::clone(&q.name),
                         rtype: DnsRecordType::A,
                         rclass: DnsClass::IN,
                         ttl: 300,
@@ -238,8 +244,8 @@ async fn dns_conditional_split_upstream_routing() {
                 resp.header.rcode = DnsResponseCode::NoError;
                 resp.questions = req.questions.clone();
                 if let Some(q) = req.questions.first() {
-                    resp.answers.push(lanforge_types::network::dns::DnsRecord {
-                        name: q.name.clone(),
+                    resp.answers.push(DnsRecord {
+                        name: Arc::clone(&q.name),
                         rtype: DnsRecordType::A,
                         rclass: DnsClass::IN,
                         ttl: 300,
@@ -270,17 +276,14 @@ async fn dns_conditional_split_upstream_routing() {
     let ctx_service = ctx.clone();
 
     tokio::spawn(async move {
-        let h = lanforge_core::service::ServiceHandle::new(
-            lanforge_types::system::ServiceId::Dns,
-            ctx_service.clone(),
-        );
+        let h = ServiceHandle::new(ServiceId::Dns, ctx_service.clone());
         service
             .serve(&ctx_service, &h)
             .await
             .expect("DNS Service failed");
     });
 
-    wait_for_service_online(&ctx, lanforge_types::system::ServiceId::Dns).await;
+    wait_for_service_online(&ctx, ServiceId::Dns).await;
 
     let client_addr: SocketAddr = "192.168.1.100:54329".parse().unwrap();
 
@@ -328,6 +331,8 @@ async fn site_domains_change_applies_in_place() {
     use lanforge_types::config::SiteDomains;
     use lanforge_types::identifiers::MacAddr;
     use lanforge_types::system::ServiceId;
+    use tokio::sync::mpsc;
+    use tokio::time::{sleep, timeout};
 
     let ctx = init_test_context();
     register_test_device(
@@ -343,7 +348,7 @@ async fn site_domains_change_applies_in_place() {
         },
         ctx.clone(),
     );
-    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(4);
+    let (cmd_tx, cmd_rx) = mpsc::channel(4);
     let h = ServiceHandle::with_command_channel(ServiceId::Dns, ctx.clone(), cmd_rx);
     let ctx_serve = ctx.clone();
     let serve = tokio::spawn(async move { service.serve(&ctx_serve, &h).await });
@@ -355,7 +360,7 @@ async fn site_domains_change_applies_in_place() {
         async move {
             let query = DnsPacketBuilder::query(name, DnsRecordType::A).build_bytes();
             handle.inject(query, client).await;
-            let (reply, _) = tokio::time::timeout(Duration::from_secs(2), handle.recv_reply())
+            let (reply, _) = timeout(Duration::from_secs(2), handle.recv_reply())
                 .await
                 .expect("answered")
                 .expect("reply");
@@ -370,7 +375,7 @@ async fn site_domains_change_applies_in_place() {
         "home.arpa".to_string(),
         "lan".to_string(),
     ])));
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     let after = ask("printer.home.arpa").await;
     assert_eq!(extract_a(&after), vec![Ipv4Addr::new(192, 168, 1, 9)]);
@@ -381,5 +386,5 @@ async fn site_domains_change_applies_in_place() {
     );
     assert!(!serve.is_finished(), "applied in place, no restart");
     cmd_tx.send(ServiceCommand::Stop).await.expect("alive");
-    let _ = tokio::time::timeout(Duration::from_secs(2), serve).await;
+    let _ = timeout(Duration::from_secs(2), serve).await;
 }

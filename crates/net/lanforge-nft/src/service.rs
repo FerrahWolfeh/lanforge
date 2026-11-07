@@ -3,21 +3,25 @@
 //! Subscribes to dynamic port registrations, `PPPoE` session events, and configuration
 //! updates to atomically compile and apply `table inet lanforge` via `nftables-rs`.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::io::ErrorKind;
+use std::time::Duration;
 
 #[cfg(any(test, feature = "inert"))]
 use crate::applier::RecordingNft;
 use crate::applier::{KernelNft, NftApplier};
 
 use tokio::sync::broadcast::error::RecvError;
+use tokio::task;
 
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
-    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
-    ServiceCommand, ServiceHandle, ServiceSpec,
+    Activation, AsyncService, Condition, Edge, LanforgeService, LossPolicy, RestartPolicy,
+    RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
 };
+use lanforge_types::config::ConfigDomain;
 use lanforge_types::events::LanforgeEvent;
 use lanforge_types::events::device::DeviceEvent;
 use lanforge_types::events::firewall::{FirewallAppliedSummary, FirewallEvent};
@@ -31,17 +35,17 @@ use lanforge_types::network::firewall::{
     ForwardTarget,
 };
 use lanforge_types::network::pppoe::PppoeConfig;
-use lanforge_types::system::{DormantReason, ServiceId};
-use std::collections::HashMap;
+use lanforge_types::system::{DormantReason, ServiceId, ServiceState};
+use nftables::batch::Batch;
+use nftables::helper::NftablesError;
+use nftables::schema::{NfListObject, Table};
+use nftables::types::NfFamily;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::ruleset::RulesetBuilder;
 
 const FIREWALL_DEPS: &[Edge] = &[
-    Edge::requires(
-        ServiceId::Interfaces,
-        lanforge_core::service::LossPolicy::Continue,
-    ),
+    Edge::requires(ServiceId::Interfaces, LossPolicy::Continue),
     Edge::wants(ServiceId::Wan),
 ];
 
@@ -142,7 +146,7 @@ impl<A: NftApplier> NftService<A> {
             trace!(payload = %serde_json::to_string_pretty(&ruleset).unwrap_or_default(), "Applying lockdown ruleset payload");
         }
         let applier = self.applier.clone();
-        let res = tokio::task::spawn_blocking(move || applier.apply(&ruleset)).await;
+        let res = task::spawn_blocking(move || applier.apply(&ruleset)).await;
         match res {
             Ok(Ok(())) => {}
             Ok(Err(e)) => {
@@ -269,10 +273,7 @@ impl<A: NftApplier> NftService<A> {
     ) {
         if !cfg.enabled || cfg.mode == FirewallMode::Disabled {
             info!(reason, table = %cfg.table_name, "Firewall disabled; removing nftables table");
-            ctx.set_service_state(
-                Self::SERVICE_ID,
-                lanforge_types::system::ServiceState::Inactive,
-            );
+            ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
             self.remove_table(&cfg.table_name).await;
             ctx.set_firewall_left(Some(FirewallStopAction::Remove));
             return;
@@ -302,7 +303,7 @@ impl<A: NftApplier> NftService<A> {
         let rules_count = (cfg.port_forwards.len() + dynamic_ports.len()) as u32;
 
         let applier = self.applier.clone();
-        let res = tokio::task::spawn_blocking(move || {
+        let res = task::spawn_blocking(move || {
             applier.apply(&ruleset).map_err(|e| {
                 let payload = if json_payload.is_empty() {
                     serde_json::to_string_pretty(&ruleset).unwrap_or_default()
@@ -331,10 +332,7 @@ impl<A: NftApplier> NftService<A> {
             Ok(()) => {
                 self.applied = true;
                 ctx.set_firewall_left(None);
-                ctx.set_service_state(
-                    Self::SERVICE_ID,
-                    lanforge_types::system::ServiceState::Online,
-                );
+                ctx.set_service_state(Self::SERVICE_ID, ServiceState::Online);
                 Self::publish_ruleset_applied(
                     ctx,
                     reason,
@@ -374,26 +372,24 @@ async fn delete_table<A: NftApplier>(applier: A, table_name: &str) {
         if t.is_empty() { "lanforge" } else { t }
     };
 
-    let mut batch = nftables::batch::Batch::new();
-    batch.delete(nftables::schema::NfListObject::Table(
-        nftables::schema::Table {
-            family: nftables::types::NfFamily::INet,
-            name: table.to_string().into(),
-            handle: None,
-        },
-    ));
+    let mut batch = Batch::new();
+    batch.delete(NfListObject::Table(Table {
+        family: NfFamily::INet,
+        name: table.to_string().into(),
+        handle: None,
+    }));
     let ruleset = batch.to_nftables();
 
     let table_owned = table.to_string();
-    let result = tokio::task::spawn_blocking(move || applier.apply(&ruleset)).await;
+    let result = task::spawn_blocking(move || applier.apply(&ruleset)).await;
     match result {
         Ok(Ok(())) => {
             info!(table = table_owned, "Flushed and removed firewall table");
         }
-        Ok(Err(nftables::helper::NftablesError::NftFailed { .. })) => {
+        Ok(Err(NftablesError::NftFailed { .. })) => {
             // Table may not exist or was already removed; ignore silently.
         }
-        Ok(Err(nftables::helper::NftablesError::NftExecution { inner, .. }))
+        Ok(Err(NftablesError::NftExecution { inner, .. }))
             if inner.kind() == ErrorKind::NotFound => {}
         Ok(Err(e)) => {
             warn!(table = table_owned, error = %e, "Failed to delete firewall table");
@@ -417,15 +413,15 @@ impl<A: NftApplier> LanforgeService for NftService<A> {
             display_name: "Firewall & NAT Orchestrator",
             runtime: RuntimeClass::Shared,
             restart: RestartPolicy {
-                base_backoff: std::time::Duration::from_secs(5),
-                max_backoff: std::time::Duration::from_secs(10),
+                base_backoff: Duration::from_secs(5),
+                max_backoff: Duration::from_secs(10),
                 max_retries: 0,
-                healthy_uptime: std::time::Duration::from_secs(30),
+                healthy_uptime: Duration::from_secs(30),
             },
-            shutdown_timeout: std::time::Duration::from_secs(5),
+            shutdown_timeout: Duration::from_secs(5),
             deps: FIREWALL_DEPS,
             condition: Condition {
-                sections: &[lanforge_types::config::ConfigDomain::Firewall],
+                sections: &[ConfigDomain::Firewall],
                 eval: |ctx| {
                     if ctx.get_firewall_config().is_none_or(|c| c.enabled) {
                         Activation::Active
@@ -666,10 +662,7 @@ impl<A: NftApplier> AsyncService for NftService<A> {
     ) -> impl Future<Output = Result<(), CoreError>> + Send {
         let ctx = ctx.clone();
         async move {
-            ctx.set_service_state(
-                Self::SERVICE_ID,
-                lanforge_types::system::ServiceState::Inactive,
-            );
+            ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
             self.stop_firewall(&ctx).await;
             Ok(())
         }

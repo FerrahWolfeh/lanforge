@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 #![cfg(feature = "adblock")]
 //! The manual rules file decides what the old database allowlist and rules decided (the
 //! expected table below passed on the engine before item f2a; the file is what the config

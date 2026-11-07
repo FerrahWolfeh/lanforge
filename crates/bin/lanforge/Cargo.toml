@@ -180,7 +180,6 @@ smallvec = { workspace = true }
 
 # === L1 (Core APIs & Logic) ===
 lanforge-core = { workspace = true }
-lanforge-crypto = { workspace = true }
 lanforge-api = { workspace = true }
 
 # === L2 (Specialized Services - Required) ===
@@ -247,3 +246,6 @@ lanforge-api-dispatch = { workspace = true }
 lanforge-api = { workspace = true }
 lanforge-transport = { workspace = true }
 dhcproto = "0.15.0"
+
+[lints]
+workspace = true

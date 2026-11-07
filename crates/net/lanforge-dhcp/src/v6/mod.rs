@@ -77,10 +77,15 @@ use dhcproto::{Decodable, Decoder};
 
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
-    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
-    ServiceCommand, ServiceHandle, ServiceSpec,
+    Activation, AsyncService, Condition, Edge, LanforgeService, LossPolicy, RestartPolicy,
+    RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
 };
+use lanforge_types::config::ConfigDomain;
 use lanforge_types::system::{DormantReason, ServiceId};
+use pnet::datalink;
+use std::fs;
+use std::mem;
+use tokio::time::interval;
 
 /// `DHCPv6` service wrapper — manages `IA_NA` and `IA_PD` address assignment.
 ///
@@ -90,10 +95,7 @@ use lanforge_types::system::{DormantReason, ServiceId};
 /// - `PrefixChanged` (`GUA` updates: pools and static reservations follow the new prefix;
 ///   clients move on their next Renew, no Reconfigure is sent)
 const DHCPV6_DEPS: &[Edge] = &[
-    Edge::requires(
-        ServiceId::Interfaces,
-        lanforge_core::service::LossPolicy::Continue,
-    ),
+    Edge::requires(ServiceId::Interfaces, LossPolicy::Continue),
     Edge::wants(ServiceId::Wan),
 ];
 
@@ -147,10 +149,7 @@ impl LanforgeService for Dhcpv6Service {
             shutdown_timeout: Duration::from_secs(3),
             deps: DHCPV6_DEPS,
             condition: Condition {
-                sections: &[
-                    lanforge_types::config::ConfigDomain::DhcpV6Options,
-                    lanforge_types::config::ConfigDomain::Interfaces,
-                ],
+                sections: &[ConfigDomain::DhcpV6Options, ConfigDomain::Interfaces],
                 eval: |ctx| {
                     if !ctx.get_dhcp_options().v6.enabled {
                         return Activation::Dormant(DormantReason::disabled("dhcp.v6.enabled"));
@@ -256,7 +255,7 @@ impl Dhcpv6Service {
                     .and_then(|i| i.mac)
             })
             .or_else(|| {
-                std::fs::read_to_string(format!("/sys/class/net/{iface}/address"))
+                fs::read_to_string(format!("/sys/class/net/{iface}/address"))
                     .ok()
                     .and_then(|s| MacAddr::parse(s.trim()))
             })
@@ -267,7 +266,7 @@ impl Dhcpv6Service {
                     .and_then(|ll| mac_from_eui64_link_local(&ll))
             })
             .or_else(|| {
-                pnet::datalink::interfaces()
+                datalink::interfaces()
                     .into_iter()
                     .find(|i| i.index == target_ifindex || i.name == iface)
                     .and_then(|i| i.mac)
@@ -375,7 +374,7 @@ impl Dhcpv6Service {
         let mut device_events = self.ctx.service_handle_device();
         let mut pools_sub = self.ctx.config_subscription::<Vec<Dhcpv6Pool>>();
         let mut options_sub = self.ctx.config_subscription::<Dhcpv6Options>();
-        let mut stats_timer = tokio::time::interval(Duration::from_mins(1));
+        let mut stats_timer = interval(Duration::from_mins(1));
 
         info!(
             iface = %current_cfg.iface,
@@ -420,7 +419,7 @@ impl Dhcpv6Service {
                                 if !delta.new.enabled {
                                     return Ok(RunResult::ConfigChanged);
                                 }
-                                let pools = std::mem::take(&mut current_cfg.pools);
+                                let pools = mem::take(&mut current_cfg.pools);
                                 current_cfg = self.config.with_options(&delta.new);
                                 current_cfg.pools = pools;
                                 server.cfg = current_cfg.clone();
@@ -464,7 +463,7 @@ impl Dhcpv6Service {
     /// Index of the interface this server serves: the configured one if it exists, else the
     /// LAN (`target_ifindex`). Its GUA is the prefix the pools are built on.
     fn served_ifindex(&self, iface: &str) -> Option<u32> {
-        pnet::datalink::interfaces()
+        datalink::interfaces()
             .iter()
             .find(|i| i.name == iface)
             .map(|i| i.index)

@@ -1,4 +1,5 @@
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::time::{Duration, Instant};
 
 use axum::{
     Json, Router,
@@ -8,6 +9,9 @@ use axum::{
 };
 use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamProtocol};
 use serde::Deserialize;
+use serde::de::Error as DeError;
+use tokio::net::{TcpStream, UdpSocket};
+use tokio::time::timeout;
 
 use crate::routes::create_client_ctx;
 use crate::server::AppState;
@@ -21,18 +25,16 @@ where
     if let Ok(sa) = trimmed.parse::<SocketAddr>() {
         return Ok(sa);
     }
-    if let Ok(ip) = trimmed.parse::<std::net::IpAddr>() {
+    if let Ok(ip) = trimmed.parse::<IpAddr>() {
         return Ok(SocketAddr::new(ip, 53));
     }
     if trimmed.starts_with('[') && trimmed.ends_with(']') {
         let inside = &trimmed[1..trimmed.len() - 1];
-        if let Ok(ip) = inside.parse::<std::net::IpAddr>() {
+        if let Ok(ip) = inside.parse::<IpAddr>() {
             return Ok(SocketAddr::new(ip, 53));
         }
     }
-    trimmed
-        .parse::<SocketAddr>()
-        .map_err(serde::de::Error::custom)
+    trimmed.parse::<SocketAddr>().map_err(DeError::custom)
 }
 
 #[derive(Debug, Deserialize)]
@@ -218,7 +220,7 @@ async fn test_upstream_reachability(
     addr: SocketAddr,
     proto: UpstreamProtocol,
 ) -> UpstreamTestResponse {
-    let start = std::time::Instant::now();
+    let start = Instant::now();
     let query_bytes: &[u8] = &[
         0x12, 0x34, // ID
         0x01, 0x00, // Flags: standard query, recursion desired
@@ -239,7 +241,7 @@ async fn test_upstream_reachability(
             } else {
                 "0.0.0.0:0"
             };
-            let sock = match tokio::net::UdpSocket::bind(bind_addr).await {
+            let sock = match UdpSocket::bind(bind_addr).await {
                 Ok(s) => s,
                 Err(e) => {
                     return UpstreamTestResponse {
@@ -257,12 +259,7 @@ async fn test_upstream_reachability(
                 };
             }
             let mut buf = [0u8; 512];
-            match tokio::time::timeout(
-                std::time::Duration::from_millis(2500),
-                sock.recv_from(&mut buf),
-            )
-            .await
-            {
+            match timeout(Duration::from_millis(2500), sock.recv_from(&mut buf)).await {
                 Ok(Ok((len, _))) if len >= 12 => {
                     let rcode = buf[3] & 0x0F;
                     UpstreamTestResponse {
@@ -293,12 +290,7 @@ async fn test_upstream_reachability(
             }
         }
         UpstreamProtocol::Tls | UpstreamProtocol::Https | UpstreamProtocol::Quic => {
-            match tokio::time::timeout(
-                std::time::Duration::from_millis(2500),
-                tokio::net::TcpStream::connect(addr),
-            )
-            .await
-            {
+            match timeout(Duration::from_millis(2500), TcpStream::connect(addr)).await {
                 Ok(Ok(_stream)) => UpstreamTestResponse {
                     ok: true,
                     latency_ms: u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),

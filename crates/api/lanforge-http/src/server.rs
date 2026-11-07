@@ -1,35 +1,48 @@
-use std::net::SocketAddr;
+use std::io;
+use std::net::{SocketAddr, TcpListener as StdTcpListener};
 use std::path::Path;
+#[cfg(feature = "webui")]
+use std::str;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "webui")]
 use axum::handler::Handler;
 #[cfg(feature = "webui")]
-use axum::http::StatusCode;
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH};
+#[cfg(feature = "webui")]
+use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::{
     Router,
     body::Body,
     extract::{FromRef, State},
     http::{HeaderName, HeaderValue},
     middleware::from_fn_with_state,
-    response::IntoResponse,
+    response::{IntoResponse, Response as AxumResponse},
     routing::get,
 };
 use axum_server::{Handle, tls_rustls::RustlsConfig};
+use futures::future::join_all;
 use lanforge_api::BUILD_HEADER;
 use lanforge_core::{
     bus::{LanforgeEvent, SystemEvent},
     context::LanforgeContext,
     error::CoreError,
-    service::{AsyncService, LanforgeService, ServiceCommand, ServiceHandle},
+    service::{
+        Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
+        ServiceCommand, ServiceHandle, ServiceSpec,
+    },
 };
 use lanforge_crypto::tls as tls_utils;
 use lanforge_db_core::{DatabaseStore, LogStore};
-use lanforge_types::system::DormantReason;
+use lanforge_types::config::ConfigDomain;
+use lanforge_types::system::{DormantReason, ServiceId};
 #[cfg(feature = "webui")]
 use lanforge_webui::WebUiAssets;
+use rustls::ServerConfig;
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use tokio::net::TcpListener;
+use tokio::sync::watch;
 use tower_http::{
     compression::CompressionLayer,
     cors::CorsLayer,
@@ -38,9 +51,12 @@ use tower_http::{
 };
 use tracing::{error, info, warn};
 
-use crate::auth::AuthManager;
+use crate::auth::{AuthManager, middleware as auth_middleware};
 use crate::config::HttpConfig;
+#[cfg(feature = "doh")]
+use crate::doh::handle_dns_query;
 use crate::error::{HttpError, Result as HttpResult};
+use crate::metrics::generate_metrics;
 use crate::routes;
 
 /// State shared across Axum handlers.
@@ -61,7 +77,7 @@ pub fn api_router(state: &AppState) -> Router<AppState> {
         .unwrap_or_else(|_| HeaderValue::from_static("unknown"));
     routes::router()
         .layer(CompressionLayer::new())
-        .layer(from_fn_with_state(state.clone(), crate::auth::middleware))
+        .layer(from_fn_with_state(state.clone(), auth_middleware))
         .layer(CorsLayer::permissive())
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static(BUILD_HEADER),
@@ -77,13 +93,13 @@ impl FromRef<AppState> for AuthManager {
 
 impl FromRef<AppState> for Arc<HttpConfig> {
     fn from_ref(state: &AppState) -> Self {
-        state.cfg.clone()
+        Self::clone(&state.cfg)
     }
 }
 
 impl FromRef<AppState> for Arc<dyn DatabaseStore> {
     fn from_ref(state: &AppState) -> Self {
-        state.db.clone()
+        Self::clone(&state.db)
     }
 }
 
@@ -93,12 +109,9 @@ impl FromRef<AppState> for LanforgeContext {
     }
 }
 
-use lanforge_types::system::ServiceId;
-
 // `After` only: the DB is never a hard dependency (D-4). With the DB down, auth fails
 // closed with 503 while in-memory sessions stay valid (D-11).
-const HTTP_DEPS: &[lanforge_core::service::Edge] =
-    &[lanforge_core::service::Edge::after(ServiceId::Db)];
+const HTTP_DEPS: &[Edge] = &[Edge::after(ServiceId::Db)];
 
 #[derive(Clone)]
 pub struct HttpService {
@@ -152,10 +165,7 @@ impl HttpService {
         #[cfg(feature = "doh")]
         {
             if cfg.doh_enabled {
-                app = app.route(
-                    "/dns-query",
-                    get(crate::doh::handle_dns_query).post(crate::doh::handle_dns_query),
-                );
+                app = app.route("/dns-query", get(handle_dns_query).post(handle_dns_query));
             }
         }
 
@@ -188,7 +198,7 @@ impl HttpService {
         }
     }
 
-    fn spawn_shutdown_listener(ctx: &LanforgeContext, shutdown_tx: tokio::sync::watch::Sender<()>) {
+    fn spawn_shutdown_listener(ctx: &LanforgeContext, shutdown_tx: watch::Sender<()>) {
         let ctx_shutdown = ctx.clone();
         tokio::spawn(async move {
             let mut rx = ctx_shutdown.bus().subscribe_system();
@@ -207,8 +217,8 @@ impl HttpService {
     async fn serve_https(
         app: Router,
         addrs: &[SocketAddr],
-        config: Arc<rustls::ServerConfig>,
-        shutdown_tx: &tokio::sync::watch::Sender<()>,
+        config: Arc<ServerConfig>,
+        shutdown_tx: &watch::Sender<()>,
     ) -> Result<(), CoreError> {
         let mut server_tasks = Vec::new();
 
@@ -241,7 +251,7 @@ impl HttpService {
             }
         }
 
-        for res in futures::future::join_all(server_tasks).await {
+        for res in join_all(server_tasks).await {
             match res {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => return Err(e),
@@ -254,7 +264,7 @@ impl HttpService {
     async fn serve_plaintext(
         app: Router,
         addrs: &[SocketAddr],
-        shutdown_tx: &tokio::sync::watch::Sender<()>,
+        shutdown_tx: &watch::Sender<()>,
     ) -> Result<(), CoreError> {
         let mut server_tasks = Vec::new();
 
@@ -282,7 +292,7 @@ impl HttpService {
             }
         }
 
-        for res in futures::future::join_all(server_tasks).await {
+        for res in join_all(server_tasks).await {
             match res {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => return Err(e),
@@ -294,25 +304,25 @@ impl HttpService {
 }
 
 impl LanforgeService for HttpService {
-    fn spec(&self) -> lanforge_core::service::ServiceSpec {
-        lanforge_core::service::ServiceSpec {
+    fn spec(&self) -> ServiceSpec {
+        ServiceSpec {
             id: Self::SERVICE_ID,
             display_name: "HTTP API",
-            runtime: lanforge_core::service::RuntimeClass::Dedicated {
+            runtime: RuntimeClass::Dedicated {
                 multi_thread: true,
                 worker_threads: None,
             },
-            restart: lanforge_core::service::RestartPolicy {
-                base_backoff: std::time::Duration::from_secs(5),
-                max_backoff: std::time::Duration::from_secs(60),
+            restart: RestartPolicy {
+                base_backoff: Duration::from_secs(5),
+                max_backoff: Duration::from_secs(60),
                 max_retries: 3,
-                healthy_uptime: std::time::Duration::from_secs(30),
+                healthy_uptime: Duration::from_secs(30),
             },
-            shutdown_timeout: std::time::Duration::from_secs(3),
+            shutdown_timeout: Duration::from_secs(3),
             deps: HTTP_DEPS,
-            condition: lanforge_core::service::Condition {
-                sections: &[lanforge_types::config::ConfigDomain::Http],
-                eval: |_| lanforge_core::service::Activation::Active,
+            condition: Condition {
+                sections: &[ConfigDomain::Http],
+                eval: |_| Activation::Active,
             },
         }
     }
@@ -324,7 +334,7 @@ impl LanforgeService for HttpService {
 
 impl AsyncService for HttpService {
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
-        let cfg = self.cfg.clone();
+        let cfg = Arc::clone(&self.cfg);
         if !cfg.enabled {
             info!("Service disabled in configuration.");
             h.dormant(DormantReason::disabled("http.enabled"));
@@ -332,10 +342,10 @@ impl AsyncService for HttpService {
         }
 
         let state = AppState {
-            cfg: cfg.clone(),
+            cfg: Arc::clone(&cfg),
             ctx: self.ctx.clone(),
-            db: self.db.clone(),
-            log_db: self.log_db.clone(),
+            db: Arc::clone(&self.db),
+            log_db: Arc::clone(&self.log_db),
             auth: Arc::new(AuthManager::new()),
             start_time: Instant::now(),
         };
@@ -350,7 +360,7 @@ impl AsyncService for HttpService {
             return Err(CoreError::Generic(msg.to_string()));
         }
 
-        let (shutdown_tx, _) = tokio::sync::watch::channel(());
+        let (shutdown_tx, _) = watch::channel(());
         Self::spawn_shutdown_listener(ctx, shutdown_tx.clone());
 
         let h_clone = h.clone();
@@ -388,7 +398,7 @@ impl AsyncService for HttpService {
     }
 }
 
-fn bind_tcp_dual_stack(addr: SocketAddr) -> Result<Vec<std::net::TcpListener>, CoreError> {
+fn bind_tcp_dual_stack(addr: SocketAddr) -> Result<Vec<StdTcpListener>, CoreError> {
     match addr {
         SocketAddr::V6(v6) if v6.ip().is_unspecified() => {
             let port = v6.port();
@@ -396,15 +406,11 @@ fn bind_tcp_dual_stack(addr: SocketAddr) -> Result<Vec<std::net::TcpListener>, C
             let mut listeners = Vec::new();
 
             // 1. Native IPv4 listener
-            let v4_res = (|| -> std::io::Result<socket2::Socket> {
-                let s = socket2::Socket::new(
-                    socket2::Domain::IPV4,
-                    socket2::Type::STREAM,
-                    Some(socket2::Protocol::TCP),
-                )?;
+            let v4_res = (|| -> io::Result<Socket> {
+                let s = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))?;
                 s.set_reuse_address(true)?;
                 s.set_nonblocking(true)?;
-                s.bind(&socket2::SockAddr::from(v4_addr))?;
+                s.bind(&SockAddr::from(v4_addr))?;
                 s.listen(1024)?;
                 Ok(s)
             })();
@@ -414,16 +420,12 @@ fn bind_tcp_dual_stack(addr: SocketAddr) -> Result<Vec<std::net::TcpListener>, C
             }
 
             // 2. Native IPv6 listener (IPV6_V6ONLY = true)
-            let v6_res = (|| -> std::io::Result<socket2::Socket> {
-                let s = socket2::Socket::new(
-                    socket2::Domain::IPV6,
-                    socket2::Type::STREAM,
-                    Some(socket2::Protocol::TCP),
-                )?;
+            let v6_res = (|| -> io::Result<Socket> {
+                let s = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP))?;
                 s.set_only_v6(true)?;
                 s.set_reuse_address(true)?;
                 s.set_nonblocking(true)?;
-                s.bind(&socket2::SockAddr::from(addr))?;
+                s.bind(&SockAddr::from(addr))?;
                 s.listen(1024)?;
                 Ok(s)
             })();
@@ -447,31 +449,21 @@ fn bind_tcp_dual_stack(addr: SocketAddr) -> Result<Vec<std::net::TcpListener>, C
             Ok(listeners)
         }
         SocketAddr::V6(_) => {
-            let s = socket2::Socket::new(
-                socket2::Domain::IPV6,
-                socket2::Type::STREAM,
-                Some(socket2::Protocol::TCP),
-            )
-            .map_err(CoreError::Io)?;
+            let s = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP))
+                .map_err(CoreError::Io)?;
             s.set_only_v6(true).map_err(CoreError::Io)?;
             s.set_reuse_address(true).map_err(CoreError::Io)?;
             s.set_nonblocking(true).map_err(CoreError::Io)?;
-            s.bind(&socket2::SockAddr::from(addr))
-                .map_err(CoreError::Io)?;
+            s.bind(&SockAddr::from(addr)).map_err(CoreError::Io)?;
             s.listen(1024).map_err(CoreError::Io)?;
             Ok(vec![s.into()])
         }
         SocketAddr::V4(_) => {
-            let s = socket2::Socket::new(
-                socket2::Domain::IPV4,
-                socket2::Type::STREAM,
-                Some(socket2::Protocol::TCP),
-            )
-            .map_err(CoreError::Io)?;
+            let s = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))
+                .map_err(CoreError::Io)?;
             s.set_reuse_address(true).map_err(CoreError::Io)?;
             s.set_nonblocking(true).map_err(CoreError::Io)?;
-            s.bind(&socket2::SockAddr::from(addr))
-                .map_err(CoreError::Io)?;
+            s.bind(&SockAddr::from(addr)).map_err(CoreError::Io)?;
             s.listen(1024).map_err(CoreError::Io)?;
             Ok(vec![s.into()])
         }
@@ -484,9 +476,9 @@ fn bind_tcp_dual_stack(addr: SocketAddr) -> Result<Vec<std::net::TcpListener>, C
 
 async fn handle_metrics(State(state): State<AppState>) -> HttpResult<impl IntoResponse> {
     let uptime = state.start_time.elapsed().as_secs();
-    let body = crate::metrics::generate_metrics(&state.ctx, uptime).await;
+    let body = generate_metrics(&state.ctx, uptime).await;
 
-    axum::response::Response::builder()
+    AxumResponse::builder()
         .header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
         .body(Body::from(body))
         .map_err(|e| HttpError::Internal(format!("Failed to build metrics response: {e}")))
@@ -496,10 +488,7 @@ async fn handle_metrics(State(state): State<AppState>) -> HttpResult<impl IntoRe
 const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
 
 #[cfg(feature = "webui")]
-async fn handle_embedded_webui(
-    headers: axum::http::HeaderMap,
-    uri: axum::http::Uri,
-) -> impl IntoResponse {
+async fn handle_embedded_webui(headers: HeaderMap, uri: Uri) -> impl IntoResponse {
     let path = uri.path();
     match WebUiAssets::get_file_or_fallback(path) {
         Some((mime, content)) => {
@@ -511,11 +500,9 @@ async fn handle_embedded_webui(
                 etag_bytes[2 + i * 2] = HEX_DIGITS[(b & 0x0f) as usize];
             }
             etag_bytes[65] = b'"';
-            let etag = std::str::from_utf8(&etag_bytes).unwrap_or("");
+            let etag = str::from_utf8(&etag_bytes).unwrap_or("");
 
-            if let Some(if_none_match) = headers
-                .get(axum::http::header::IF_NONE_MATCH)
-                .and_then(|v| v.to_str().ok())
+            if let Some(if_none_match) = headers.get(IF_NONE_MATCH).and_then(|v| v.to_str().ok())
                 && if_none_match == etag
             {
                 return StatusCode::NOT_MODIFIED.into_response();
@@ -530,9 +517,9 @@ async fn handle_embedded_webui(
 
             (
                 [
-                    (axum::http::header::CONTENT_TYPE, mime.as_ref()),
-                    (axum::http::header::ETAG, etag),
-                    (axum::http::header::CACHE_CONTROL, cache_control),
+                    (CONTENT_TYPE, mime.as_ref()),
+                    (ETAG, etag),
+                    (CACHE_CONTROL, cache_control),
                 ],
                 content.data,
             )

@@ -1,5 +1,17 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 // Drives the server with the crate's own remote client.
 #![cfg(all(feature = "server", feature = "client"))]
+
+use std::net::TcpListener;
+use std::sync::Arc;
 
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
@@ -9,8 +21,9 @@ use lanforge_db::config::DatabaseConfig;
 use lanforge_db::engine::LanforgeDb;
 use lanforge_db::log_engine::LogDb;
 use lanforge_http::config::HttpConfig;
+use lanforge_http::remote::default_http_client;
 use lanforge_http::server::HttpService;
-use std::sync::Arc;
+use lanforge_types::system::ServiceId;
 
 async fn init_test_context() -> (LanforgeContext, Arc<lanforge_db::RedbDatabase>, Arc<LogDb>) {
     let bus = Arc::new(EventBus::new());
@@ -31,7 +44,7 @@ async fn test_http_simulation_basic() {
 
     // Bind on :0 so the OS assigns a free port, avoiding conflicts when
     // tests run in parallel or multiple `cargo test` processes run concurrently.
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     drop(listener); // HttpService will re-bind; window is negligibly small in CI
 
@@ -44,7 +57,7 @@ async fn test_http_simulation_basic() {
     let cfg = Arc::new(http_cfg);
 
     let mut service = HttpService::new(cfg, ctx.clone(), db, log_db);
-    let ctrl = ServiceHandle::new(lanforge_types::system::ServiceId::Http, ctx.clone());
+    let ctrl = ServiceHandle::new(ServiceId::Http, ctx.clone());
     let ctx_service = ctx.clone();
 
     let mut rx = ctx.bus().subscribe();
@@ -60,13 +73,13 @@ async fn test_http_simulation_basic() {
     loop {
         let event = rx.recv().await.expect("Bus closed");
         if let LanforgeEvent::System(SystemEvent::ServiceReady { id }) = event.event
-            && id == lanforge_types::system::ServiceId::Http
+            && id == ServiceId::Http
         {
             break;
         }
     }
 
-    let client = lanforge_http::remote::default_http_client();
+    let client = default_http_client();
     let uri: hyper::Uri = format!("http://127.0.0.1:{port}/api/v1/status")
         .parse()
         .unwrap();

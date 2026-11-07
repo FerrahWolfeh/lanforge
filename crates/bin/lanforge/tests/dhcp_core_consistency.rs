@@ -1,10 +1,19 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
 use dhcproto::v4::{DhcpOption, Message, MessageType, OptionCode};
 use dhcproto::{Encodable, Encoder};
-use lanforge_core::bus::{EventBus, LanforgeEvent};
+use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::{AsyncService, ServiceHandle};
@@ -14,7 +23,7 @@ use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::Dhcpv4Pool;
 use lanforge_types::system::ServiceId;
 use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate, LeaseTarget};
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 
 fn add_static_device(
     ctx: &LanforgeContext,
@@ -40,7 +49,7 @@ fn add_static_device(
 fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
     let bus = Arc::new(EventBus::new());
     let state = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), state, None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), state, None);
     (ctx, bus)
 }
 
@@ -122,7 +131,7 @@ async fn test_dynamic_to_static_lease_transition_consistency() {
         service_clone.serve(&ctx_clone, &h).await
     });
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     let client_mac = MacAddr([0xAA, 0x11, 0x22, 0x33, 0x44, 0x55]);
     let client_src = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 68);
@@ -160,7 +169,7 @@ async fn test_dynamic_to_static_lease_transition_consistency() {
     assert_eq!(ack.message().unwrap().yiaddr(), initial_ip);
 
     // Verify Core state and reverse index consistency
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    sleep(Duration::from_millis(30)).await;
     let dev = ctx
         .get_device(&client_mac)
         .expect("Device must be registered in Core");
@@ -171,7 +180,7 @@ async fn test_dynamic_to_static_lease_transition_consistency() {
     // 2. Administrator assigns static IP 192.168.1.50 to this workstation
     let static_ip = Ipv4Addr::new(192, 168, 1, 50);
     add_static_device(&ctx, client_mac, "workstation-pc", Some(static_ip));
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    sleep(Duration::from_millis(30)).await;
 
     // Verify Core state updated to Static
     let dev_static = ctx.get_device(&client_mac).expect("Device must exist");
@@ -233,7 +242,7 @@ async fn test_dynamic_to_static_lease_transition_consistency() {
     assert_eq!(ack_static.message().unwrap().yiaddr(), static_ip);
 
     // 8. Verify Core state retains Static (not downgraded to Dynamic) and indices match
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    sleep(Duration::from_millis(30)).await;
     let dev_final = ctx.get_device(&client_mac).expect("Device must exist");
     assert!(
         matches!(dev_final.v4, IPv4State::Static(ip) if ip == static_ip),
@@ -242,9 +251,7 @@ async fn test_dynamic_to_static_lease_transition_consistency() {
     assert_eq!(ctx.get_mac_by_ip(IpAddr::V4(static_ip)), Some(client_mac));
 
     // Clean shutdown
-    let _ = bus.publish(LanforgeEvent::System(
-        lanforge_core::bus::SystemEvent::Shutdown,
-    ));
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = timeout(Duration::from_millis(500), handle).await;
 }
 
@@ -266,13 +273,13 @@ async fn test_static_lease_outside_pool_bounds() {
         service_clone.serve(&ctx_clone, &h).await
     });
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     let server_mac = MacAddr([0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01]);
     let static_outside_ip = Ipv4Addr::new(192, 168, 1, 10); // Outside 100-200 pool, but valid on /24
 
     add_static_device(&ctx, server_mac, "nas-server", Some(static_outside_ip));
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    sleep(Duration::from_millis(30)).await;
 
     let client_src = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 68);
 
@@ -314,9 +321,7 @@ async fn test_static_lease_outside_pool_bounds() {
         Some(server_mac)
     );
 
-    let _ = bus.publish(LanforgeEvent::System(
-        lanforge_core::bus::SystemEvent::Shutdown,
-    ));
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = timeout(Duration::from_millis(500), handle).await;
 }
 
@@ -338,7 +343,7 @@ async fn test_ip_stealing_prevention() {
         service_clone.serve(&ctx_clone, &h).await
     });
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     let legit_mac = MacAddr([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
     let rogue_mac = MacAddr([0x99, 0x88, 0x77, 0x66, 0x55, 0x44]);
@@ -367,7 +372,7 @@ async fn test_ip_stealing_prevention() {
     let ack = dhcp_handle.recv_reply().await.unwrap();
     assert_eq!(ack.message().unwrap().yiaddr(), legit_ip);
 
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    sleep(Duration::from_millis(30)).await;
     assert_eq!(ctx.get_mac_by_ip(IpAddr::V4(legit_ip)), Some(legit_mac));
 
     // 2. Rogue client directly sends REQUEST for legit_ip
@@ -394,9 +399,7 @@ async fn test_ip_stealing_prevention() {
     // 4. Verify legit client ownership is uncompromised
     assert_eq!(ctx.get_mac_by_ip(IpAddr::V4(legit_ip)), Some(legit_mac));
 
-    let _ = bus.publish(LanforgeEvent::System(
-        lanforge_core::bus::SystemEvent::Shutdown,
-    ));
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = timeout(Duration::from_millis(500), handle).await;
 }
 
@@ -418,7 +421,7 @@ async fn test_dhcp_decline_quarantine_consistency() {
         service_clone.serve(&ctx_clone, &h).await
     });
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     let mac = MacAddr([0x44, 0x55, 0x66, 0x77, 0x88, 0x99]);
     let client_src = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 68);
@@ -440,7 +443,7 @@ async fn test_dhcp_decline_quarantine_consistency() {
     dhcp_handle.send_packet(decline, client_src).await;
 
     // Small yield
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    sleep(Duration::from_millis(30)).await;
 
     // Client sends Discover again
     dhcp_handle.send_packet(discover, client_src).await;
@@ -455,9 +458,7 @@ async fn test_dhcp_decline_quarantine_consistency() {
         "Server must not offer quarantined IP immediately after Decline"
     );
 
-    let _ = bus.publish(LanforgeEvent::System(
-        lanforge_core::bus::SystemEvent::Shutdown,
-    ));
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = timeout(Duration::from_millis(500), handle).await;
 }
 
@@ -491,7 +492,7 @@ async fn test_eventbus_ip_deleted_recovers_pool() {
         service_clone.serve(&ctx_clone, &h).await
     });
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     let mac1 = MacAddr([0x10, 0x10, 0x10, 0x10, 0x10, 0x10]);
     let mac2 = MacAddr([0x20, 0x20, 0x20, 0x20, 0x20, 0x20]);
@@ -530,7 +531,7 @@ async fn test_eventbus_ip_deleted_recovers_pool() {
         mac: mac1,
         target: LeaseTarget::V4,
     });
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     // 4. Client 2 tries to discover again -> IP should now be available!
     dhcp_handle.send_packet(d2, client_src).await;
@@ -543,8 +544,6 @@ async fn test_eventbus_ip_deleted_recovers_pool() {
         Ipv4Addr::new(192, 168, 1, 100)
     );
 
-    let _ = bus.publish(LanforgeEvent::System(
-        lanforge_core::bus::SystemEvent::Shutdown,
-    ));
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = timeout(Duration::from_millis(500), handle).await;
 }

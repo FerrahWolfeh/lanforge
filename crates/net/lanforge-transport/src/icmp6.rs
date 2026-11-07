@@ -1,6 +1,7 @@
 use crate::inert::{InertHandle, InertPort};
-use crate::metrics::TransportMetrics;
+use crate::metrics::{TransportMetrics, TransportStats};
 use crate::sys;
+use lanforge_types::network::snapshot::TransportSnapshot;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::io;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
@@ -25,7 +26,7 @@ struct Icmp6Inner {
     metrics: Arc<TransportMetrics>,
 }
 
-/// Specialized asynchronous ICMPv6 raw transport for Router Advertisements and NDP.
+/// Specialized asynchronous `ICMPv6` raw transport for Router Advertisements and NDP.
 ///
 /// Configures kernel-level `ICMP6_FILTER` for zero-overhead filtering of non-RS packets,
 /// hop limit 255 validation, and provides an inert mode for rootless testing.
@@ -35,7 +36,7 @@ pub struct Icmp6Transport {
 }
 
 impl Icmp6Transport {
-    /// Creates and binds a raw ICMPv6 socket to `iface`, joining `ff02::2` and filtering for RS (133).
+    /// Creates and binds a raw `ICMPv6` socket to `iface`, joining `ff02::2` and filtering for RS (133).
     pub fn bind(iface: &str, iface_index: u32) -> io::Result<Self> {
         let sock = Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6))?;
 
@@ -70,7 +71,7 @@ impl Icmp6Transport {
     }
 
     /// A passive listener for the Router Advertisements another router sends on `iface` (an
-    /// ISP's on the PPPoE link): only type 134 passes the kernel filter; the all-nodes group the
+    /// ISP's on the `PPPoE` link): only type 134 passes the kernel filter; the all-nodes group the
     /// RAs go to is joined by every IPv6 interface. Receives copies only: whoever configures
     /// the link (the kernel, networkd) still gets its own.
     pub fn bind_ra_listener(iface: &str) -> io::Result<Self> {
@@ -124,7 +125,7 @@ impl Icmp6Transport {
         Arc::clone(&self.inner.metrics)
     }
 
-    /// Receives an ICMPv6 datagram into the provided buffer.
+    /// Receives an `ICMPv6` datagram into the provided buffer.
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddrV6)> {
         match &self.inner.backend {
             Icmp6Backend::Kernel(async_fd) => loop {
@@ -160,7 +161,7 @@ impl Icmp6Transport {
         }
     }
 
-    /// Sends an ICMPv6 packet to the specified destination address.
+    /// Sends an `ICMPv6` packet to the specified destination address.
     pub fn send(&self, payload: &[u8], target: &SocketAddrV6) -> io::Result<usize> {
         let res = match &self.inner.backend {
             Icmp6Backend::Kernel(async_fd) => {
@@ -183,8 +184,8 @@ impl Icmp6Transport {
     }
 }
 
-impl crate::metrics::TransportStats for Icmp6Transport {
-    fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
+impl TransportStats for Icmp6Transport {
+    fn snapshot(&self) -> TransportSnapshot {
         self.inner.metrics.snapshot()
     }
 }
@@ -200,6 +201,10 @@ fn set_icmp6_filter_only(sock: &Socket, icmp_type: u8) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use std::net::SocketAddrV6;
+    use std::time::Duration;
+    use tokio::time::timeout;
 
     /// Real sockets: needs `CAP_NET_RAW`, so it is ignored by default. Rootless run:
     /// `unshare -rn sh -c 'ip link set lo up && cargo test -p lanforge-transport -- --ignored
@@ -217,20 +222,16 @@ mod tests {
         sender.send_to(&ns, &to).unwrap(); // filtered out by the kernel
         sender.send_to(&ra, &to).unwrap();
         let mut buf = [0u8; 64];
-        let (n, src) =
-            tokio::time::timeout(std::time::Duration::from_secs(2), listener.recv(&mut buf))
-                .await
-                .expect("an RA arrives")
-                .expect("recv");
+        let (n, src) = timeout(Duration::from_secs(2), listener.recv(&mut buf))
+            .await
+            .expect("an RA arrives")
+            .expect("recv");
         // The kernel fills the checksum (bytes 2..4) on send.
         assert_eq!(n, ra.len());
         assert_eq!(buf[0], 134, "the NS sent first never reached the listener");
         assert_eq!(&buf[4..n], &ra[4..]);
         assert_eq!(*src.ip(), Ipv6Addr::LOCALHOST);
     }
-    use super::*;
-    use std::net::SocketAddrV6;
-    use tokio::time::{Duration, timeout};
 
     #[test]
     fn should_report_inert_status() {

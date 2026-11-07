@@ -77,12 +77,13 @@ mod tests {
 
     #[test]
     fn should_handle_concurrent_metric_increments() {
+        use std::thread;
         let metrics = Arc::new(TransportMetrics::new());
         let mut handles = Vec::new();
 
         for _ in 0..10 {
             let m = Arc::clone(&metrics);
-            handles.push(std::thread::spawn(move || {
+            handles.push(thread::spawn(move || {
                 for _ in 0..100 {
                     m.record_rx(10);
                     m.record_tx(20);

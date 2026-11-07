@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 //! LCP → CHAP handshake against a scripted access concentrator (RFC 1661, RFC 1994).
 //!
 //! Owner logs (ISP BRAS, right after a lanforge restart): `CHAP Challenge timeout` and
@@ -12,7 +21,7 @@ use lanforge_pppoe::session::PppoeSession;
 use lanforge_pppoe::{AuthMethod, PppoeCredentials, PppoeError, PppoeTransport};
 use lanforge_transport::PppoeInertHandle;
 use lanforge_types::identifiers::MacAddr;
-use tokio::time::sleep;
+use tokio::time::{Instant, sleep};
 
 const LCP: [u8; 2] = [0xc0, 0x21];
 const CHAP: [u8; 2] = [0xc2, 0x23];
@@ -251,7 +260,7 @@ async fn pap_retransmits_a_dropped_request() {
 /// within a few seconds.
 #[tokio::test(start_paused = true)]
 async fn a_missing_chap_challenge_ends_the_phase_within_seconds() {
-    let started = tokio::time::Instant::now();
+    let started = Instant::now();
     let res = handshake(Bras {
         never_challenge: true,
         ..Bras::default()

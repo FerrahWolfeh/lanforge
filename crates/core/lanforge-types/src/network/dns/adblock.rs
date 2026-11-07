@@ -1,12 +1,9 @@
+use crate::identifiers::DeviceIdentifier;
 use crate::network::{DnsRecordType, IpSubnet};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::{
-    fmt::Display,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
-    str::FromStr,
-};
-
-use crate::identifiers::DeviceIdentifier;
+use std::fmt::{self, Display, Formatter};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::str::FromStr;
 
 pub mod rules_file;
 pub mod syntax;
@@ -155,7 +152,7 @@ impl FromStr for RewriteAnswer {
 }
 
 impl Display for RewriteAnswer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::A(ip) => write!(f, "{ip}"),
             Self::Aaaa(ip) => write!(f, "{ip}"),
@@ -204,7 +201,7 @@ impl FromStr for BlockingMode {
 }
 
 impl Display for BlockingMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::NxDomain => write!(f, "nxdomain"),
             Self::NullIp => write!(f, "null_ip"),
@@ -255,7 +252,7 @@ impl Default for TimeOfDay {
 }
 
 impl Display for TimeOfDay {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{:02}:{:02}", self.hour, self.minute)
     }
 }
@@ -322,7 +319,7 @@ impl FromStr for AdblockUrlKind {
 }
 
 impl Display for AdblockUrlKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Blocklist => write!(f, "blocklist"),
             Self::Allowlist => write!(f, "allowlist"),
@@ -370,7 +367,7 @@ impl AdblockSourceFormat {
 }
 
 impl Display for AdblockSourceFormat {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
@@ -394,7 +391,7 @@ impl FilterAction {
 }
 
 impl Display for FilterAction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
@@ -521,13 +518,13 @@ impl AdblockRuleAction {
     }
 }
 
-impl std::fmt::Display for AdblockRuleAction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for AdblockRuleAction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
-impl std::str::FromStr for AdblockRuleAction {
+impl FromStr for AdblockRuleAction {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -649,7 +646,7 @@ impl FromStr for ClientSelector {
 }
 
 impl Display for ClientSelector {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Subnet(s) if s.prefix_len == if s.addr.is_ipv4() { 32 } else { 128 } => {
                 write!(f, "{}", s.addr)
@@ -686,6 +683,7 @@ mod tests {
 
     #[test]
     fn client_selectors_parse_and_print_back() {
+        use crate::identifiers::MacAddr;
         let cases = [
             ("192.168.1.64/28", "192.168.1.64/28"),
             ("192.168.1.9", "192.168.1.9"),
@@ -703,7 +701,7 @@ mod tests {
         assert_eq!(
             ClientSelector::from_str("dev:aa:bb:cc:dd:ee:ff").unwrap(),
             ClientSelector::Device(DeviceIdentifier::Mac(
-                crate::identifiers::MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap()
+                MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap()
             ))
         );
         for bad in ["", "dev:", "pixel", "10.0.0.0/33", "dev:galaxy tab"] {

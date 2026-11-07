@@ -1,9 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::hash::Hash;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
 use lanforge_types::device::Origin;
-use lanforge_types::network::Ipv6AddrOrSuffix;
 use lanforge_types::network::dhcp::{
     DhcpOptionsConfig, Dhcpv4Options, Dhcpv4Pool, Dhcpv6Options, Dhcpv6Pool, TftpOptions,
 };
@@ -15,6 +15,7 @@ use lanforge_types::network::ra::{
     DnsslConfig, PrefixLifetime, PrefixSource, RAPrefix, RaServerConfig, RdnssConfig,
     RouterPriority,
 };
+use lanforge_types::network::{Ipv6AddrOrSuffix, is_ula};
 
 use crate::api::devices::HostConfigEntry;
 use crate::api::dns::DnsUpstreamConfig;
@@ -313,7 +314,7 @@ impl FirewallFile {
                 continue;
             }
             if let ForwardTarget::Ip(IpAddr::V6(v6)) = target
-                && lanforge_types::network::is_ula(&v6)
+                && is_ula(&v6)
             {
                 issues.push(format!(
                     "{at} to = \"{v6}\" is a ULA, not reachable from the WAN (use the host's GUA or \"dev:<name>\"); port not forwarded"
@@ -673,12 +674,12 @@ fn lease_secs(lease: HumanDuration, at: &str, issues: &mut Vec<String>) -> u32 {
 }
 
 /// Raw options keyed by their code as text; a key that is not a code is left out.
-fn raw_options<K: FromStr + std::hash::Hash + Eq>(
+fn raw_options<K: FromStr + Hash + Eq>(
     file: &BTreeMap<String, String>,
     at: &str,
     issues: &mut Vec<String>,
-) -> std::collections::HashMap<K, String> {
-    let mut out = std::collections::HashMap::new();
+) -> HashMap<K, String> {
+    let mut out = HashMap::new();
     for (code, value) in file {
         match code.trim().parse::<K>() {
             Ok(k) => {

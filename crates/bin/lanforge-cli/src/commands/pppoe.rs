@@ -1,4 +1,4 @@
-use std::io::IsTerminal;
+use std::io::{self, IsTerminal};
 
 use color_eyre::Result;
 use color_eyre::eyre::{bail, eyre};
@@ -422,7 +422,7 @@ async fn apply_config_set(
         || args.padi_timeout.is_some();
 
     // If invoked interactively without flags, launch the wizard
-    if !changed && std::io::stdout().is_terminal() {
+    if !changed && io::stdout().is_terminal() {
         return run_wizard(client, printer).await;
     }
 

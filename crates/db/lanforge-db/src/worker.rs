@@ -14,24 +14,29 @@
 //! All loggable events are immediately recorded in the in-memory `LogDb`.
 
 use lanforge_core::bus::{
-    DeviceEvent, DnsEvent, LanforgeEvent, StorageEvent, SystemEvent, TimedEvent,
+    DeviceEvent, DnsEvent, EventTopic, LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent,
+    TimedEvent,
+};
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use lanforge_core::context::{LanforgeContext, StorageCommand, StorageHandle};
+use lanforge_core::error::CoreError;
+use lanforge_core::service::{
+    AsyncService, Condition, LanforgeService, RestartPolicy, RuntimeClass, ServiceCommand,
+    ServiceHandle, ServiceSpec,
 };
 use lanforge_db_core::{DeviceStore, LogStore, PrefixStore};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::QueryLogEntry;
 use lanforge_types::network::dns::{DnsRequest, DnsResponse};
-use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use lanforge_types::system::{DegradedReason, ServiceId};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
-use tokio::time::{Interval, interval};
+use tokio::time::{Instant, Interval, interval};
 use tracing::{debug, error, info, warn};
-
-use lanforge_core::context::{LanforgeContext, StorageCommand, StorageHandle};
-use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
 
 use crate::config::DatabaseConfig;
 use crate::engine::LanforgeDb;
@@ -52,15 +57,6 @@ pub enum PendingDeviceOp {
 }
 
 /// Background worker for database operations.
-#[lanforge_macros::lanforge_service(
-    id = "db",
-    name = "Database Worker",
-    retries = 5,
-    base_backoff = 1,
-    max_backoff = 30,
-    runtime = "dedicated",
-    describe = format!("Database Worker ({})", self.cfg.config_path)
-)]
 pub struct DbWorker {
     cfg: DatabaseConfig,
     ctx: LanforgeContext,
@@ -78,6 +74,8 @@ pub struct DbWorker {
 }
 
 impl DbWorker {
+    /// Static identifier for the service.
+    pub const SERVICE_ID: ServiceId = ServiceId::Db;
     /// Creates a new `DbWorker` for the specified databases.
     #[must_use]
     pub fn new(
@@ -285,13 +283,11 @@ impl AsyncService for DbWorker {
     }
 
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
-        let db = self.db.clone();
-        let log_db = self.log_db.clone();
+        let db = Arc::clone(&self.db);
+        let log_db = Arc::clone(&self.log_db);
 
         if ctx.is_recovery_mode() {
-            h.degraded(lanforge_types::system::DegradedReason::custom(
-                "no persistence",
-            ));
+            h.degraded(DegradedReason::custom("no persistence"));
         } else {
             h.ready();
         }
@@ -310,8 +306,8 @@ impl AsyncService for DbWorker {
         let mut firewall_rx = ctx.bus().subscribe_firewall();
         let mut traffic_rx = ctx.bus().subscribe_traffic();
         let mut flush_interval: Interval = interval(Duration::from_secs(self.cfg.flush_interval));
-        let mut last_prune = tokio::time::Instant::now();
-        let stores = db.stores(log_db.clone());
+        let mut last_prune = Instant::now();
+        let stores = db.stores(Arc::clone(&log_db) as _);
 
         loop {
             tokio::select! {
@@ -351,14 +347,14 @@ impl AsyncService for DbWorker {
                 // Event handling
                 (topic, res) = async {
                     tokio::select! {
-                        res = system_rx.recv() => (lanforge_core::bus::EventTopic::System, res),
-                        res = network_rx.recv() => (lanforge_core::bus::EventTopic::Network, res),
-                        res = device_rx.recv() => (lanforge_core::bus::EventTopic::Device, res),
-                        res = dns_rx.recv() => (lanforge_core::bus::EventTopic::Dns, res),
-                        res = storage_rx_events.recv() => (lanforge_core::bus::EventTopic::Storage, res),
-                        res = pppoe_rx.recv() => (lanforge_core::bus::EventTopic::Pppoe, res),
-                        res = firewall_rx.recv() => (lanforge_core::bus::EventTopic::Firewall, res),
-                        res = traffic_rx.recv() => (lanforge_core::bus::EventTopic::Traffic, res),
+                        res = system_rx.recv() => (EventTopic::System, res),
+                        res = network_rx.recv() => (EventTopic::Network, res),
+                        res = device_rx.recv() => (EventTopic::Device, res),
+                        res = dns_rx.recv() => (EventTopic::Dns, res),
+                        res = storage_rx_events.recv() => (EventTopic::Storage, res),
+                        res = pppoe_rx.recv() => (EventTopic::Pppoe, res),
+                        res = firewall_rx.recv() => (EventTopic::Firewall, res),
+                        res = traffic_rx.recv() => (EventTopic::Traffic, res),
                     }
                 } => {
                     let Ok(timed_event) = res else {
@@ -371,10 +367,10 @@ impl AsyncService for DbWorker {
                     let mirrored = matches!(
                         (&timed_event.event, topic),
                         (LanforgeEvent::System(SystemEvent::Shutdown), topic)
-                            if topic != lanforge_core::bus::EventTopic::System
+                            if topic != EventTopic::System
                     ) || matches!(
                         (&timed_event.event, topic),
-                        (LanforgeEvent::Pppoe(_), lanforge_core::bus::EventTopic::Dns)
+                        (LanforgeEvent::Pppoe(_), EventTopic::Dns)
                     );
                     if mirrored { continue; }
                     // 1. Record in log database if loggable
@@ -406,7 +402,7 @@ impl AsyncService for DbWorker {
                     lanforge_core::match_event!(timed_event, {
                         // Remember the LAN's delegated prefix only (not `ppp0`'s own), and keep the
                         // last known one while it is briefly withdrawn during a reconnect.
-                        LanforgeEvent::Network(lanforge_core::bus::NetworkEvent::PrefixChanged(details)) => {
+                        LanforgeEvent::Network(NetworkEvent::PrefixChanged(details)) => {
                             if Some(details.ifindex) == ctx.target_ifindex()
                                 && let Some(gua) = details.gua
                             {
@@ -505,7 +501,7 @@ impl AsyncService for DbWorker {
                                 self.dns_log_buffer.pop_front();
                                 self.ctx.db_metrics().dropped_logs.fetch_add(1, Ordering::Relaxed);
                             }
-                            self.dns_log_buffer.push_back(entry.clone());
+                            self.dns_log_buffer.push_back(Arc::clone(entry));
                             if self.dns_log_buffer.len() >= 100 {
                                 self.flush_dns_log(&log_db);
                             }
@@ -525,7 +521,7 @@ impl AsyncService for DbWorker {
                         if let Err(e) = db.prune_zombies() {
                             error!("Background db prune failed: {e}");
                         }
-                        last_prune = tokio::time::Instant::now();
+                        last_prune = Instant::now();
                     }
                 }
             }
@@ -536,26 +532,53 @@ impl AsyncService for DbWorker {
 
     async fn cleanup(&mut self, _ctx: &LanforgeContext) -> Result<(), CoreError> {
         info!("Database worker flushing pending state and logs on cleanup...");
-        let db = self.db.clone();
-        let log_db = self.log_db.clone();
+        let db = Arc::clone(&self.db);
+        let log_db = Arc::clone(&self.log_db);
         self.flush_batch(&db, &log_db).await;
         Ok(())
+    }
+}
+
+impl LanforgeService for DbWorker {
+    fn spec(&self) -> ServiceSpec {
+        ServiceSpec {
+            id: Self::SERVICE_ID,
+            display_name: "Database Worker",
+            runtime: RuntimeClass::Dedicated {
+                multi_thread: false,
+                worker_threads: None,
+            },
+            restart: RestartPolicy {
+                base_backoff: Duration::from_secs(1),
+                max_backoff: Duration::from_secs(30),
+                max_retries: 5,
+                healthy_uptime: Duration::from_secs(30),
+            },
+            shutdown_timeout: Duration::from_secs(3),
+            deps: &[],
+            condition: Condition::ALWAYS,
+        }
+    }
+
+    fn describe(&self) -> String {
+        format!("Database Worker ({})", self.cfg.config_path)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lanforge_core::bus::EventBus;
     use lanforge_core::context::state::State;
     use lanforge_types::network::dns::{
         DnsRecordType, QueryLogEntry, QueryResult, TransportProtocol,
     };
     use std::sync::atomic::Ordering;
 
-    fn create_test_context() -> (LanforgeContext, Arc<lanforge_core::bus::EventBus>) {
-        let bus = Arc::new(lanforge_core::bus::EventBus::new());
+    fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
+        let bus = Arc::new(EventBus::new());
         let state = State::new();
-        let ctx = LanforgeContext::new(bus.clone(), state, None);
+        let ctx = LanforgeContext::new(Arc::clone(&bus), state, None);
         (ctx, bus)
     }
 
@@ -612,7 +635,7 @@ mod tests {
                     .dropped_logs
                     .fetch_add(1, Ordering::Relaxed);
             }
-            worker.dns_log_buffer.push_back(query_entry.clone());
+            worker.dns_log_buffer.push_back(Arc::clone(&query_entry));
         }
 
         assert_eq!(worker.dns_log_buffer.len(), MAX_DNS_LOG_BUFFER);
@@ -630,8 +653,8 @@ mod tests {
         let mut worker = DbWorker::new(
             DatabaseConfig::default(),
             ctx.clone(),
-            db.clone(),
-            log_db.clone(),
+            Arc::clone(&db),
+            Arc::clone(&log_db),
         );
 
         let mac = MacAddr([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);

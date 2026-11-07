@@ -9,7 +9,9 @@ use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::system::{Cap, ServiceId, ServiceState, SystemStatus};
 use lanforge_types::update::DeviceUpdate;
 use std::sync::Arc;
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
+use tokio::task::yield_now;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_core_state_concurrency_stress() {
@@ -28,7 +30,7 @@ async fn test_core_state_concurrency_stress() {
                     mac,
                     hostname: format!("host-{t_idx}-{i}"),
                 });
-                tokio::task::yield_now().await;
+                yield_now().await;
             }
         }));
     }
@@ -42,7 +44,7 @@ async fn test_core_state_concurrency_stress() {
                     let _ = s.devices.len();
                 });
                 let _ = ctx.get_device(&MacAddr([0x00, 0x11, 0x22, 0x33, 0, 0]));
-                tokio::task::yield_now().await;
+                yield_now().await;
             }
         }));
     }
@@ -63,28 +65,22 @@ async fn test_core_state_concurrency_stress() {
 async fn test_wait_for_service_dependency() {
     let bus = Arc::new(EventBus::new());
     let state = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), state, None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), state, None);
 
     // 1. When already online, wait_for_service returns Ok(()) immediately
-    ctx.set_service_state(lanforge_types::system::ServiceId::Dns, ServiceState::Online);
-    let res = ctx
-        .wait_for_service(lanforge_types::system::ServiceId::Dns)
-        .await;
+    ctx.set_service_state(ServiceId::Dns, ServiceState::Online);
+    let res = ctx.wait_for_service(ServiceId::Dns).await;
     assert!(res.is_ok());
 
     // 2. When not online, it waits for ServiceReady event
     let ctx_clone = ctx.clone();
-    let wait_handle = tokio::spawn(async move {
-        ctx_clone
-            .wait_for_service(lanforge_types::system::ServiceId::Db)
-            .await
-    });
+    let wait_handle = tokio::spawn(async move { ctx_clone.wait_for_service(ServiceId::Db).await });
 
     // Cooperative yield to let wait_handle spawn and register its listener
-    tokio::task::yield_now().await;
-    ctx.set_service_state(lanforge_types::system::ServiceId::Db, ServiceState::Online);
+    yield_now().await;
+    ctx.set_service_state(ServiceId::Db, ServiceState::Online);
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::ServiceReady {
-        id: lanforge_types::system::ServiceId::Db,
+        id: ServiceId::Db,
     }));
 
     let res = wait_handle.await.unwrap();
@@ -95,7 +91,7 @@ async fn test_wait_for_service_dependency() {
 async fn test_wait_for_condition_shutdown_aborts() {
     let bus = Arc::new(EventBus::new());
     let state = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), state, None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), state, None);
 
     // 1. If context is already terminated, wait_for_service immediately fails with Shutdown
     ctx.terminate();
@@ -107,7 +103,7 @@ async fn test_wait_for_condition_shutdown_aborts() {
     let ctx_clone = ctx.clone();
     let wait_handle = tokio::spawn(async move { ctx_clone.wait_for_service(ServiceId::Db).await });
 
-    tokio::task::yield_now().await;
+    yield_now().await;
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
 
     let res = wait_handle.await.unwrap();
@@ -118,7 +114,7 @@ async fn test_wait_for_condition_shutdown_aborts() {
 async fn test_service_handle_stream() {
     let bus = Arc::new(EventBus::new());
     let state = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), state, None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), state, None);
 
     let mut handle = ctx.service_handle();
 
@@ -140,7 +136,7 @@ async fn test_service_handle_stream() {
 async fn test_service_control_idempotency() {
     let bus = Arc::new(EventBus::new());
     let state = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), state, None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), state, None);
     let mut rx = bus.subscribe_system();
 
     let ctrl = ServiceHandle::new(ServiceId::Dns, ctx.clone());
@@ -227,7 +223,7 @@ async fn test_server_capabilities_matrix() {
 async fn test_dynamic_port_registration() {
     let bus = Arc::new(EventBus::new());
     let state = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), state, None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), state, None);
     let mut rx = bus.subscribe_firewall();
 
     // Register HTTP port 80
@@ -288,7 +284,7 @@ async fn test_firewall_transaction_lifecycle() {
     assert_eq!(staged.tx_id, tx_id);
 
     // Set rollback deadline
-    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    let deadline = Instant::now() + Duration::from_secs(60);
     assert!(ctx.set_firewall_transaction_rollback(&tx_id, deadline));
 
     // Clear transaction
@@ -302,14 +298,12 @@ async fn test_firewall_transaction_lifecycle() {
 /// every banner showed uptime 0.
 #[test]
 fn service_uptime_follows_the_serving_states() {
-    use lanforge_types::system::ServiceId;
-
     let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
     ctx.set_service_state(ServiceId::Dns, ServiceState::Starting);
     assert_eq!(ctx.get_service_uptime(ServiceId::Dns), 0);
 
     ctx.set_service_state(ServiceId::Dns, ServiceState::Online);
-    std::thread::sleep(std::time::Duration::from_millis(1100));
+    thread::sleep(Duration::from_millis(1100));
     assert_eq!(ctx.get_service_uptime(ServiceId::Dns), 1);
 
     ctx.set_service_state(ServiceId::Dns, ServiceState::Degraded);

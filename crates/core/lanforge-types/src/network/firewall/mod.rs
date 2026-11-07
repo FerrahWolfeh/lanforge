@@ -6,6 +6,7 @@ pub use validation::validate_firewall_candidate;
 
 use crate::identifiers::DeviceIdentifier;
 use crate::network::pppoe::PppoeNftablesConfig;
+use serde::de::{Deserializer, Error as DeError};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -187,9 +188,9 @@ impl Serialize for ForwardTarget {
 }
 
 impl<'de> Deserialize<'de> for ForwardTarget {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let text = String::deserialize(deserializer)?;
-        text.parse().map_err(serde::de::Error::custom)
+        text.parse().map_err(DeError::custom)
     }
 }
 

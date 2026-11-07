@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 //! The banner carries the serving instance's socket counters.
 
 use lanforge_core::bus::EventBus;
@@ -11,6 +20,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket;
+use tokio::time::{sleep, timeout};
 
 /// Real sockets, real `serve`: a request the server received shows in its banner, and the
 /// counters go when the service stops (the old banner read a registration-time instance that
@@ -42,7 +52,7 @@ async fn banner_counts_the_serving_sockets() {
         if bound.is_some() {
             break;
         }
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        sleep(Duration::from_millis(20)).await;
     }
     let server: SocketAddr = bound.expect("TFTP bound").parse().unwrap();
 
@@ -52,7 +62,7 @@ async fn banner_counts_the_serving_sockets() {
         .await
         .unwrap();
     let mut buf = [0u8; 516];
-    let _ = tokio::time::timeout(Duration::from_secs(2), client.recv_from(&mut buf)).await;
+    let _ = timeout(Duration::from_secs(2), client.recv_from(&mut buf)).await;
 
     let transport = |ctx: &LanforgeContext| {
         ctx.service_banners()

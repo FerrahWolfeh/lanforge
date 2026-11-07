@@ -33,7 +33,9 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::time::{Duration, Instant, SystemTime};
 
+use crate::identity::resolve_device;
 use crate::traits::DhcpPool;
+use lanforge_types::device::state::system_time_to_epoch_u32;
 use lanforge_types::device::{Device, IPv4State};
 use lanforge_types::identifiers::MacAddr;
 
@@ -120,7 +122,7 @@ impl IpPool {
     /// are present in `self.available`.
     pub fn reconcile_active(&mut self, ctx: &LanforgeContext) {
         let now = SystemTime::now();
-        let now_epoch = lanforge_types::device::state::system_time_to_epoch_u32(now);
+        let now_epoch = system_time_to_epoch_u32(now);
         let mut active_ips = RoaringBitmap::new();
 
         ctx.with_state(|state| {
@@ -199,7 +201,7 @@ impl IpPool {
         device: Option<&Device>,
     ) -> Option<Ipv4Addr> {
         let mut dev_owned = None;
-        let dev_ref = crate::identity::resolve_device(ctx, mac, device, &mut dev_owned);
+        let dev_ref = resolve_device(ctx, mac, device, &mut dev_owned);
 
         // 1. Sticky / Static: already has allocation in global table
         if let Some(dev) = dev_ref {

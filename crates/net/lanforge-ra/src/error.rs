@@ -1,11 +1,11 @@
-//! Network error types for `lanforge-ra`.
+//! RA error types for `lanforge-ra`.
 
 use std::io;
 use thiserror::Error;
 
 /// Errors that can occur in the Lanforge Router Advertisement subsystem.
 #[derive(Debug, Error)]
-pub enum NetworkError {
+pub enum RaError {
     /// Standard I/O error.
     #[error("I/O failure: {0}")]
     Io(#[from] io::Error),

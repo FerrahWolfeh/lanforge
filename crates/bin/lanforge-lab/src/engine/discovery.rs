@@ -1,7 +1,9 @@
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
+use tokio::net::UdpSocket as TokioUdpSocket;
 
 use lanforge_dns_wire::{WireDecoder, WireEncoder};
 use lanforge_types::identifiers::MacAddr;
@@ -23,7 +25,7 @@ impl DiscoveryEngine {
         _mac: MacAddr,
     ) -> Result<Arc<AtomicBool>, LabError> {
         let running = Arc::new(AtomicBool::new(true));
-        let running_clone = running.clone();
+        let running_clone = Arc::clone(&running);
         let host_str = hostname.to_string();
 
         let socket = UdpSocket::bind("0.0.0.0:0")
@@ -32,7 +34,7 @@ impl DiscoveryEngine {
             .set_read_timeout(Some(Duration::from_millis(500)))
             .map_err(LabError::Io)?;
 
-        std::thread::spawn(move || {
+        thread::spawn(move || {
             let mut buf = [0u8; 2048];
             info!("mDNS Mock Responder started for '{host_str}.local' -> {ip}");
 
@@ -50,7 +52,7 @@ impl DiscoveryEngine {
 
                     for q in &msg.questions {
                         resp.answers.push(DnsRecord {
-                            name: q.name.clone(),
+                            name: Arc::clone(&q.name),
                             rtype: DnsRecordType::A,
                             rclass: DnsClass::IN,
                             ttl: 120,
@@ -72,8 +74,8 @@ impl DiscoveryEngine {
 
     /// Tests connectivity / latency against a target IP using UDP probe.
     pub async fn probe_rtt(target: SocketAddr) -> Result<Duration, LabError> {
-        let start = std::time::Instant::now();
-        let sock = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
+        let start = Instant::now();
+        let sock = TokioUdpSocket::bind("0.0.0.0:0").await?;
         sock.connect(target).await?;
         let _ = sock.send(&[0xDE, 0xAD, 0xBE, 0xEF]).await?;
         Ok(start.elapsed())

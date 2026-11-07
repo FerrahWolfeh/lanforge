@@ -1,15 +1,16 @@
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
     Extension, Json, Router,
     extract::{Path, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header::SET_COOKIE},
-    response::IntoResponse,
+    response::{IntoResponse, Response as AxumResponse},
     routing::{delete, get, post},
 };
 use lanforge_crypto::hash_password;
 use lanforge_db_core::UserEntry;
-use lanforge_types::auth::UserRole;
+use lanforge_types::auth::{ApiScopes, UserRole};
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
@@ -133,7 +134,7 @@ async fn handle_generate_token(
     Json(payload): Json<GenerateTokenRequest>,
 ) -> impl IntoResponse {
     let parsed_scopes = payload.scopes.and_then(|s| {
-        let mut vec = lanforge_types::auth::ApiScopes::new();
+        let mut vec = ApiScopes::new();
         match s {
             ScopesPayload::List(items) => {
                 for item in items {
@@ -204,7 +205,7 @@ fn build_login_response(
     method: &str,
     ttl_secs: u64,
     auth_required: bool,
-) -> axum::response::Response {
+) -> AxumResponse {
     let cookie_header =
         format!("session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={ttl_secs}");
     let mut headers = HeaderMap::new();
@@ -356,7 +357,7 @@ pub async fn handle_login(
     client: ClientIp,
     Json(payload): Json<LoginRequest>,
 ) -> HttpResult<impl IntoResponse> {
-    let throttle = state.auth.throttle.clone();
+    let throttle = Arc::clone(&state.auth.throttle);
     throttle.guard(client, login(state, payload)).await
 }
 
@@ -430,7 +431,7 @@ async fn handle_elevate(
     Extension(user): Extension<AuthenticatedUser>,
     Json(payload): Json<ElevateRequest>,
 ) -> HttpResult<impl IntoResponse> {
-    let throttle = state.auth.throttle.clone();
+    let throttle = Arc::clone(&state.auth.throttle);
     throttle.guard(client, elevate(state, user, payload)).await
 }
 
@@ -479,7 +480,7 @@ async fn handle_change_password(
     Extension(user): Extension<AuthenticatedUser>,
     Json(payload): Json<ChangePasswordRequest>,
 ) -> HttpResult<impl IntoResponse> {
-    let throttle = state.auth.throttle.clone();
+    let throttle = Arc::clone(&state.auth.throttle);
     throttle
         .guard(client, change_password(state, user, payload))
         .await

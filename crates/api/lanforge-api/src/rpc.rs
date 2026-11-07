@@ -12,6 +12,7 @@ use crate::api::{
 };
 use lanforge_macros::lanforge_rpc;
 use lanforge_types::{
+    auth::ApiScopes,
     identifiers::MacAddr,
     network::{
         QueryResult, TrafficConfig,
@@ -35,7 +36,7 @@ use lanforge_types::{
 
 use std::{
     future::Future,
-    net::{Ipv4Addr, Ipv6Addr},
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -142,13 +143,13 @@ pub trait LanforgeRpc {
     ) -> impl Future<Output = Result<DnsUpstreamsResponse, RpcCallError>> + Send;
     fn dns_upstream_add(
         &self,
-        addr: std::net::SocketAddr,
+        addr: SocketAddr,
         protocol: UpstreamProtocol,
         domain: Option<String>,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn dns_upstream_remove(
         &self,
-        addr: std::net::SocketAddr,
+        addr: SocketAddr,
         protocol: UpstreamProtocol,
         domain: Option<String>,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
@@ -272,7 +273,7 @@ pub trait LanforgeRpc {
     fn ak_generate(
         &self,
         name: String,
-        scopes: Option<lanforge_types::auth::ApiScopes>,
+        scopes: Option<ApiScopes>,
         expires_at: Option<i64>,
     ) -> impl Future<Output = Result<Box<AuthTokenResponse>, RpcCallError>> + Send;
     fn ak_delete(

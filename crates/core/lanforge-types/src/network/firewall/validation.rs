@@ -403,7 +403,7 @@ fn diff_port_forwards(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::Ipv4Addr;
+    use std::net::{IpAddr, Ipv4Addr};
 
     #[test]
     fn test_validation_detects_port_forward_collision() {
@@ -452,7 +452,7 @@ mod tests {
         candidate.port_forwards.push(PortForwardRule {
             comment: None,
             src_zone: "external".into(),
-            internal_ip: "2001:db8::100".parse::<std::net::IpAddr>().unwrap().into(),
+            internal_ip: "2001:db8::100".parse::<IpAddr>().unwrap().into(),
             external_port: 8080,
             internal_port: 80,
             protocol: L4Protocol::Tcp,
@@ -488,7 +488,7 @@ mod tests {
         candidate.port_forwards.push(PortForwardRule {
             comment: Some("Web IPv6 Pinhole".into()),
             src_zone: "external".into(),
-            internal_ip: "2001:db8::100".parse::<std::net::IpAddr>().unwrap().into(),
+            internal_ip: "2001:db8::100".parse::<IpAddr>().unwrap().into(),
             external_port: 8080,
             internal_port: 8080,
             protocol: L4Protocol::Tcp,

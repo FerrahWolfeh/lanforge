@@ -1,6 +1,11 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::io;
+use std::net::{self, Ipv4Addr, SocketAddr};
+use std::num::NonZero;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use dhcproto::v4::{DhcpOption, Flags, Message, MessageType, OptionCode};
@@ -9,13 +14,13 @@ use lanforge_types::identifiers::MacAddr;
 use parking_lot::Mutex;
 use rand::RngExt;
 use tokio::net::UdpSocket;
-use tokio::sync::oneshot;
-use tokio::time::timeout;
+use tokio::sync::{Semaphore, oneshot};
+use tokio::time::{sleep, timeout};
 
 use crate::error::LabError;
 use crate::report::{DhcpFloodReport, DhcpStormReport, DoraResult};
 
-fn create_dhcp_socket(server_addr: SocketAddr, iface: Option<&str>) -> std::io::Result<UdpSocket> {
+fn create_dhcp_socket(server_addr: SocketAddr, iface: Option<&str>) -> io::Result<UdpSocket> {
     let target_port = if server_addr.port() == 67 {
         Some(68)
     } else if server_addr.port() == 1067 {
@@ -47,7 +52,7 @@ fn create_dhcp_socket(server_addr: SocketAddr, iface: Option<&str>) -> std::io::
         }
     }
 
-    let sock = std::net::UdpSocket::bind("0.0.0.0:0")?;
+    let sock = net::UdpSocket::bind("0.0.0.0:0")?;
     let _ = sock.set_broadcast(true);
     let _ = sock.set_nonblocking(true);
     UdpSocket::from_std(sock)
@@ -315,12 +320,12 @@ impl DhcpEngine {
             })
         };
 
-        let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency.max(1)));
+        let semaphore = Arc::new(Semaphore::new(concurrency.max(1)));
         let start_time = Instant::now();
         let mut handles = Vec::with_capacity(total_clients);
 
         for i in 0..total_clients {
-            let permit = semaphore.clone().acquire_owned().await.map_err(|e| {
+            let permit = Arc::clone(&semaphore).acquire_owned().await.map_err(|e| {
                 LabError::Protocol(format!("Failed to acquire semaphore permit: {e}"))
             })?;
             let sock = Arc::clone(&sock);
@@ -368,7 +373,7 @@ impl DhcpEngine {
             0.0
         };
 
-        latencies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        latencies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
 
         let (min, p50, p95, p99, max) = if latencies.is_empty() {
             (0.0, 0.0, 0.0, 0.0, 0.0)
@@ -402,10 +407,10 @@ impl DhcpEngine {
         duration: Duration,
     ) -> Result<DhcpFloodReport, LabError> {
         let start_time = Instant::now();
-        let total_sent = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let total_sent = Arc::new(AtomicUsize::new(0));
+        let running = Arc::new(AtomicBool::new(true));
 
-        let concurrency = std::thread::available_parallelism().map_or(4, std::num::NonZero::get);
+        let concurrency = thread::available_parallelism().map_or(4, NonZero::get);
         let mut handles = Vec::with_capacity(concurrency);
 
         let pps_per_worker = if target_pps > 0 {
@@ -425,7 +430,7 @@ impl DhcpEngine {
                 let mut buf = Vec::with_capacity(512);
                 let mut counter: usize = 0;
 
-                while running.load(std::sync::atomic::Ordering::Relaxed) {
+                while running.load(AtomicOrdering::Relaxed) {
                     let iter_start = Instant::now();
                     let batch_size = if pps_per_worker > 0 {
                         (pps_per_worker / 100).max(1)
@@ -459,7 +464,7 @@ impl DhcpEngine {
                         buf.clear();
                         if msg.encode(&mut Encoder::new(&mut buf)).is_ok() {
                             let _ = sock.send_to(&buf, server_addr).await;
-                            total_sent.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            total_sent.fetch_add(1, AtomicOrdering::Relaxed);
                         }
                     }
 
@@ -469,22 +474,22 @@ impl DhcpEngine {
                         );
                         let elapsed = iter_start.elapsed();
                         if let Some(remaining) = expected_time.checked_sub(elapsed) {
-                            tokio::time::sleep(remaining).await;
+                            sleep(remaining).await;
                         }
                     }
                 }
             }));
         }
 
-        tokio::time::sleep(duration).await;
-        running.store(false, std::sync::atomic::Ordering::Relaxed);
+        sleep(duration).await;
+        running.store(false, AtomicOrdering::Relaxed);
 
         for handle in handles {
             let _ = handle.await;
         }
 
         let elapsed_secs = start_time.elapsed().as_secs_f64();
-        let sent = total_sent.load(std::sync::atomic::Ordering::Relaxed);
+        let sent = total_sent.load(AtomicOrdering::Relaxed);
         let actual_pps = if elapsed_secs > 0.0 {
             sent as f64 / elapsed_secs
         } else {

@@ -1,8 +1,10 @@
 use std::collections::HashSet;
-use std::fs::File;
+use std::error::Error;
+use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::time::timeout;
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
@@ -19,6 +21,8 @@ use lanforge_types::network::dns::adblock::syntax::RuleAction;
 use crate::error::DnsError;
 use crate::resolver::filter::engine::{build_fst_map, encode_val, reverse_domain_key};
 use crate::resolver::filter::manifest::SourceManifestEntry;
+#[cfg(feature = "ring")]
+use rustls::crypto::ring;
 
 const MAX_BODY_SIZE: usize = 64 * 1024 * 1024; // 64 MiB
 
@@ -28,7 +32,7 @@ pub type AdblockHttpClient = Client<hyper_rustls::HttpsConnector<HttpConnector>,
 #[must_use]
 pub fn build_adblock_http_client() -> AdblockHttpClient {
     #[cfg(feature = "ring")]
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = ring::default_provider().install_default();
     #[cfg(all(feature = "aws-lc", not(feature = "ring")))]
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
@@ -48,7 +52,7 @@ pub fn build_adblock_http_client() -> AdblockHttpClient {
 }
 
 /// Formats an error and its entire underlying cause chain for diagnostics.
-pub fn format_error_chain(err: &impl std::error::Error) -> String {
+pub fn format_error_chain(err: &impl Error) -> String {
     let mut msg = err.to_string();
     let mut cur = err.source();
     while let Some(cause) = cur {
@@ -67,7 +71,7 @@ pub enum SourceFetchResult {
     },
 }
 
-/// Performs a conditional HTTP GET request using ETag and If-Modified-Since headers.
+/// Performs a conditional HTTP GET request using `ETag` and If-Modified-Since headers.
 pub async fn fetch_source_conditional(
     client: &Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<Bytes>>,
     mut url: String,
@@ -95,7 +99,7 @@ pub async fn fetch_source_conditional(
             .body(Full::default())
             .map_err(|e| DnsError::Generic(e.to_string()))?;
 
-        let resp = tokio::time::timeout(Duration::from_secs(120), client.request(req))
+        let resp = timeout(Duration::from_secs(120), client.request(req))
             .await
             .map_err(|_| DnsError::Generic("Request timed out (120s limit)".to_string()))?
             .map_err(|e| {
@@ -234,11 +238,11 @@ pub fn compile_source_artifacts(
         }
         f.flush()?;
     } else if bad_path.exists() {
-        let _ = std::fs::remove_file(&bad_path);
+        let _ = fs::remove_file(&bad_path);
     }
 
     // Compute content hash of the block.fst
-    let content_hash = match std::fs::read(&block_fst_path) {
+    let content_hash = match fs::read(&block_fst_path) {
         Ok(bytes) => {
             let mut h = 0xcbf29ce484222325u64;
             for &b in &bytes {
@@ -368,7 +372,7 @@ mod tests {
     fn an_unreadable_list_is_skipped_and_reported() {
         let dir = tempfile::tempdir().unwrap();
         compile(dir.path(), 1, AdblockSourceFormat::Hosts, "0.0.0.0 a.com\n");
-        std::fs::write(dir.path().join("2.block.fst"), b"garbage").unwrap();
+        fs::write(dir.path().join("2.block.fst"), b"garbage").unwrap();
         let kinds = [
             (2, AdblockUrlKind::Blocklist),
             (1, AdblockUrlKind::Blocklist),

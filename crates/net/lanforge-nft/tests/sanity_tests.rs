@@ -1,8 +1,19 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 use lanforge_nft::ruleset::RulesetBuilder;
 use lanforge_types::network::firewall::{
     DynamicPortRequest, FirewallConfig, FirewallMode, FirewallPolicy, FirewallZone, L4Protocol,
     PortForwardRule, ZoneForwarding,
 };
+use nftables::schema::{NfCmd, NfListObject, NfObject};
+use nftables::types::NfChainPolicy;
 use std::net::IpAddr;
 
 #[test]
@@ -502,12 +513,8 @@ fn test_sanity_strict_external_wan_drop_policy() {
 
     for obj in ruleset.objects.as_ref() {
         let chain = match obj {
-            nftables::schema::NfObject::CmdObject(nftables::schema::NfCmd::Add(
-                nftables::schema::NfListObject::Chain(c),
-            ))
-            | nftables::schema::NfObject::ListObject(nftables::schema::NfListObject::Chain(c)) => {
-                Some(c)
-            }
+            NfObject::CmdObject(NfCmd::Add(NfListObject::Chain(c)))
+            | NfObject::ListObject(NfListObject::Chain(c)) => Some(c),
             _ => None,
         };
 
@@ -515,14 +522,14 @@ fn test_sanity_strict_external_wan_drop_policy() {
             if chain.name == "input" {
                 assert_eq!(
                     chain.policy,
-                    Some(nftables::types::NfChainPolicy::Drop),
+                    Some(NfChainPolicy::Drop),
                     "Input chain default policy must be Drop"
                 );
                 found_input_policy_drop = true;
             } else if chain.name == "forward" {
                 assert_eq!(
                     chain.policy,
-                    Some(nftables::types::NfChainPolicy::Drop),
+                    Some(NfChainPolicy::Drop),
                     "Forward chain default policy must be Drop"
                 );
                 found_forward_policy_drop = true;
@@ -665,7 +672,7 @@ fn test_sanity_dns_and_vowifi_bypass_toggles() {
 
 /// AGENTS.md §4: the WAN is a closed wall. In `input` and `forward`, an `accept` that does not
 /// match the ingress interface also matches the WAN, so it is only allowed for conntrack state,
-/// ICMP/ICMPv6 control messages and DHCPv6 client replies (PD renewal). Everything else must name
+/// ICMP/ICMPv6 control messages and `DHCPv6` client replies (PD renewal). Everything else must name
 /// the (internal) interface it comes from.
 #[test]
 fn test_sanity_no_interface_less_accept_reaches_wan() {

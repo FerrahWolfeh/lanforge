@@ -1,4 +1,5 @@
-use crate::metrics::TransportMetrics;
+use crate::metrics::{TransportMetrics, TransportStats};
+use lanforge_types::network::snapshot::TransportSnapshot;
 use std::io;
 use std::net::{
     Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, TcpListener as StdTcpListener,
@@ -30,7 +31,7 @@ pub struct DualTcpListener {
 }
 
 impl DualTcpListener {
-    /// Binds a dual-stack TCP listener to `0.0.0.0:port` and `[::]:port` (IPV6_V6ONLY=true).
+    /// Binds a dual-stack TCP listener to `0.0.0.0:port` and `[::]:port` (`IPV6_V6ONLY=true`).
     ///
     /// If IPv6 is unsupported on the host, it gracefully falls back to IPv4 single-listener.
     pub fn bind_dual_stack(port: u16) -> io::Result<Self> {
@@ -163,8 +164,8 @@ impl DualTcpListener {
     }
 }
 
-impl crate::metrics::TransportStats for DualTcpListener {
-    fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
+impl TransportStats for DualTcpListener {
+    fn snapshot(&self) -> TransportSnapshot {
         self.inner.metrics.snapshot()
     }
 }

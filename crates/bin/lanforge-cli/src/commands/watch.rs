@@ -1,5 +1,7 @@
+use std::fmt::Display;
 use std::io::ErrorKind;
 use std::time::SystemTime;
+use tokio::signal;
 
 use chrono::{DateTime, Local};
 use color_eyre::eyre::Result;
@@ -53,7 +55,7 @@ async fn stream_uds_events(
 
     loop {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
+            _ = signal::ctrl_c() => {
                 if !printer.json {
                     println!("\nStopped watching events.");
                 }
@@ -122,7 +124,7 @@ async fn stream_remote_events(
 
     loop {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
+            _ = signal::ctrl_c() => {
                 if !printer.json {
                     println!("\nStopped watching events.");
                 }
@@ -171,7 +173,7 @@ pub fn render_event(e: &TimedEvent, printer: &Printer, verbose: bool) {
         LanforgeEvent::System(sys_evt) => render_system_event(&time_str, sys_evt, printer),
         LanforgeEvent::Network(net_evt) => render_network_event(&time_str, net_evt, printer),
         LanforgeEvent::Storage(storage_evt) => {
-            render_storage_event(&time_str, storage_evt, printer)
+            render_storage_event(&time_str, storage_evt, printer);
         }
         LanforgeEvent::Traffic(_) => {}
     }
@@ -182,6 +184,7 @@ fn format_time(ts: SystemTime) -> String {
     dt.format("%H:%M:%S").to_string()
 }
 
+#[allow(clippy::too_many_lines)]
 fn render_device_event(time_str: &str, evt: &DeviceEvent, printer: &Printer, verbose: bool) {
     match evt {
         DeviceEvent::Discovered { mac, hostname } => {
@@ -696,8 +699,8 @@ fn render_storage_event(time_str: &str, evt: &StorageEvent, printer: &Printer) {
 fn print_log(
     time_str: &str,
     domain: &str,
-    tag: impl std::fmt::Display,
-    msg: impl std::fmt::Display,
+    tag: impl Display,
+    msg: impl Display,
     printer: &Printer,
 ) {
     if printer.no_color {

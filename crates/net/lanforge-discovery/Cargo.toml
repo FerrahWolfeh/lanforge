@@ -8,7 +8,6 @@ authors.workspace = true
 [dependencies]
 # Lanforge
 lanforge-core = { workspace = true }
-lanforge-macros = { workspace = true }
 lanforge-types = { workspace = true }
 lanforge-dns-wire = { workspace = true }
 lanforge-transport = { workspace = true }
@@ -26,7 +25,6 @@ serde = { workspace = true }
 tracing = { workspace = true }
 parking_lot = { workspace = true }
 rtnetlink = { workspace = true }
-libc = { workspace = true }
 socket2 = { workspace = true }
 netlink-packet-core = { workspace = true }
 netlink-sys = { workspace = true }
@@ -46,3 +44,6 @@ default = []
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
+
+[lints]
+workspace = true

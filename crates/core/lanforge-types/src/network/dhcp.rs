@@ -22,9 +22,15 @@
 //! * **Static Allocation:** A static network segment or subnet CIDR can be specified via
 //!   the `address` field.
 
-use crate::network::Ipv6AddrOrSuffix;
+use std::collections::HashMap;
+use std::fmt::Display;
+use std::net::{Ipv4Addr, Ipv6Addr};
+use std::str::FromStr;
+
+use serde::de::{Deserializer, Error as DeError};
 use serde::{Deserialize, Serialize};
-use std::net::Ipv4Addr;
+
+use crate::network::Ipv6AddrOrSuffix;
 
 /// Deserializes an optional value from a string, treating empty or whitespace-only strings as `None`.
 ///
@@ -34,9 +40,9 @@ use std::net::Ipv4Addr;
 /// cannot be parsed as `T`.
 pub fn empty_string_as_none<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
-    D: serde::Deserializer<'de>,
-    T: std::str::FromStr + serde::Deserialize<'de>,
-    T::Err: std::fmt::Display,
+    D: Deserializer<'de>,
+    T: FromStr + Deserialize<'de>,
+    T::Err: Display,
 {
     if !deserializer.is_human_readable() {
         return Option::<T>::deserialize(deserializer);
@@ -44,7 +50,7 @@ where
     let opt = Option::<String>::deserialize(deserializer)?;
     match opt.as_deref().map(str::trim) {
         None | Some("") => Ok(None),
-        Some(s) => s.parse::<T>().map(Some).map_err(serde::de::Error::custom),
+        Some(s) => s.parse::<T>().map(Some).map_err(DeError::custom),
     }
 }
 
@@ -177,7 +183,7 @@ pub struct Dhcpv4Options {
     pub tftp_server: Option<String>,
     #[serde(default, deserialize_with = "empty_string_as_none_str")]
     pub boot_file: Option<String>,
-    pub raw_options: std::collections::HashMap<u8, String>,
+    pub raw_options: HashMap<u8, String>,
 }
 
 impl Default for Dhcpv4Options {
@@ -196,7 +202,7 @@ impl Default for Dhcpv4Options {
             ],
             tftp_server: None,
             boot_file: None,
-            raw_options: std::collections::HashMap::new(),
+            raw_options: HashMap::new(),
         }
     }
 }
@@ -207,11 +213,11 @@ impl Default for Dhcpv4Options {
 pub struct Dhcpv6Options {
     pub enabled: bool,
     pub lease_time: u32,
-    pub dns_servers: Vec<std::net::Ipv6Addr>,
+    pub dns_servers: Vec<Ipv6Addr>,
     pub search_domains: Vec<String>,
     pub ntp_servers: Vec<String>,
     pub boot_file: Option<String>,
-    pub raw_options: std::collections::HashMap<u16, String>,
+    pub raw_options: HashMap<u16, String>,
 }
 
 impl Default for Dhcpv6Options {
@@ -226,7 +232,7 @@ impl Default for Dhcpv6Options {
                 "time.google.com".to_string(),
             ],
             boot_file: None,
-            raw_options: std::collections::HashMap::new(),
+            raw_options: HashMap::new(),
         }
     }
 }

@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 //! Per-upstream accounting under sequential hedging and parallel races.
 
 use std::sync::Arc;
@@ -12,6 +21,7 @@ use lanforge_types::network::dns::{
     DnsClass, DnsMessage, DnsQuestion, DnsRecordType, UpstreamStatus,
 };
 use tokio::net::UdpSocket;
+use tokio::time::sleep;
 
 /// A local UDP upstream answering every query after `delay` (`None` = never answers).
 async fn upstream(delay: Option<Duration>) -> Arc<UpstreamManager> {
@@ -34,7 +44,7 @@ async fn upstream(delay: Option<Duration>) -> Arc<UpstreamManager> {
                 let bytes = WireEncoder::new().encode_message(&resp).to_vec();
                 let sock = Arc::clone(&sock);
                 tokio::spawn(async move {
-                    tokio::time::sleep(delay).await;
+                    sleep(delay).await;
                     let _ = sock.send_to(&bytes, client).await;
                 });
             }
@@ -79,7 +89,7 @@ async fn a_mute_first_upstream_degrades_and_stops_costing_the_hedge_delay() {
         strategy.resolve(&query(i)).await.unwrap();
     }
     // The abandoned attempts expire; the next query that reaches the mute upstream counts them.
-    tokio::time::sleep(Duration::from_millis(3200)).await;
+    sleep(Duration::from_millis(3200)).await;
     strategy.resolve(&query(6)).await.unwrap();
 
     let snaps = strategy.snapshots();
@@ -107,7 +117,7 @@ async fn counts(mode: UpstreamMode, delays: &[Option<Duration>], n: usize) -> Ve
         strategy.resolve(&query(i)).await.unwrap();
     }
     // Late answers of the losers arrive after the winner.
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    sleep(Duration::from_millis(800)).await;
     let snaps = strategy.snapshots();
     mgrs.iter()
         .map(|m| {
@@ -151,7 +161,7 @@ async fn every_query_has_one_winner_and_queries_count_what_was_sent() {
 }
 
 /// A backup the sequential order never needed has no evidence: "untested", not "healthy"
-/// (the owner's ::1001 showed 0 queries and "healthy").
+/// (the owner's `::1001` showed 0 queries and "healthy").
 #[tokio::test(flavor = "multi_thread")]
 async fn an_upstream_never_asked_is_untested_not_healthy() {
     let first = upstream(Some(Duration::from_millis(5))).await;

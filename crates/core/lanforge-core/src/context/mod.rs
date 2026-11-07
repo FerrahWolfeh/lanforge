@@ -58,12 +58,14 @@ use crate::context::state::State;
 use lanforge_types::build::BuildInfo;
 use lanforge_types::device::Device;
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::system::DormantReason;
 
 use arc_swap::ArcSwap;
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::SystemTime;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::RecvError;
@@ -225,7 +227,7 @@ impl LanforgeContext {
     #[must_use]
     pub fn new(bus: Arc<EventBus>, state: State, target_ifindex: Option<u32>) -> Self {
         let inner = Arc::new(LanforgeContextInner {
-            bus: bus.clone(),
+            bus: Arc::clone(&bus),
             state: ArcSwap::from_pointee(state),
             writer_mutex: Mutex::new(()),
             discovery: Arc::new(state::cache::DiscoveryStore::default()),
@@ -284,13 +286,13 @@ impl LanforgeContext {
     }
 
     /// Sets the path to the active TOML configuration file.
-    pub fn set_config_path(&self, path: impl Into<std::path::PathBuf>) {
-        *self.inner.runtime.config_path.write() = Some(path.into());
+    pub fn set_config_path(&self, path: &Path) {
+        *self.inner.runtime.config_path.write() = Some(path.to_path_buf());
     }
 
     /// Returns the path to the active TOML configuration file, if set.
     #[must_use]
-    pub fn config_path(&self) -> Option<std::path::PathBuf> {
+    pub fn config_path(&self) -> Option<PathBuf> {
         self.inner.runtime.config_path.read().clone()
     }
 
@@ -326,16 +328,13 @@ impl LanforgeContext {
         self.inner
             .runtime
             .config_writable
-            .store(writable, std::sync::atomic::Ordering::Relaxed);
+            .store(writable, Ordering::Relaxed);
     }
 
     /// Returns whether the API may write configuration changes to the config file.
     #[must_use]
     pub fn is_config_writable(&self) -> bool {
-        self.inner
-            .runtime
-            .config_writable
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.inner.runtime.config_writable.load(Ordering::Relaxed)
     }
 
     /// Returns the uptime of this context in seconds.
@@ -367,19 +366,19 @@ impl LanforgeContext {
     /// Why a LAN service must wait: its interface is known to be absent (see
     /// `InterfaceSnapshot::lacks_link`). For service conditions.
     #[must_use]
-    pub fn lan_link_wait(&self) -> Option<lanforge_types::system::DormantReason> {
+    pub fn lan_link_wait(&self) -> Option<DormantReason> {
         let name = self.inner.target_ifname.read().clone()?;
         self.interfaces_snapshot()
             .lacks_link(&name)
-            .then_some(lanforge_types::system::DormantReason::WaitingForLink(name))
+            .then_some(DormantReason::WaitingForLink(name))
     }
 
     /// Why the WAN service must wait: its link `iface` is known to be absent.
     #[must_use]
-    pub fn wan_link_wait(&self, iface: &str) -> Option<lanforge_types::system::DormantReason> {
+    pub fn wan_link_wait(&self, iface: &str) -> Option<DormantReason> {
         self.interfaces_snapshot()
             .lacks_link(iface)
-            .then(|| lanforge_types::system::DormantReason::WaitingForWan(iface.to_string()))
+            .then(|| DormantReason::WaitingForWan(iface.to_string()))
     }
 
     /// Returns the shared event bus for this instance.
@@ -387,7 +386,7 @@ impl LanforgeContext {
     /// The bus can be used to subscribe to or publish events.
     #[must_use]
     pub fn bus(&self) -> Arc<EventBus> {
-        self.inner.bus.clone()
+        Arc::clone(&self.inner.bus)
     }
 
     /// Returns a reference to the shared event bus.
@@ -416,7 +415,7 @@ impl LanforgeContext {
     /// Access the global active API clients counter.
     #[must_use]
     pub fn active_clients(&self) -> Arc<AtomicUsize> {
-        self.inner.runtime.active_clients.clone()
+        Arc::clone(&self.inner.runtime.active_clients)
     }
 
     /// Returns the internal event counters.
@@ -506,7 +505,7 @@ impl LanforgeContext {
             .runtime
             .event_counters
             .dns_blocked
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// Captures a snapshot of the device registry for database persistence.

@@ -1,13 +1,16 @@
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    http::{StatusCode, header},
+    http::{
+        HeaderMap, HeaderValue, StatusCode,
+        header::{self, SET_COOKIE},
+    },
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use lanforge_api::api::SystemConfigExport;
+use lanforge_api::api::{HttpDataResponse, Response as ApiResponse, SystemConfigExport};
 use lanforge_api_dispatch::ClientContext;
-use lanforge_types::system::ServiceAction;
+use lanforge_types::system::{ServiceAction, SetupPayload};
 use serde::Deserialize;
 
 use crate::routes::auth::{REMEMBER_ME_TTL_SECS, issue_session};
@@ -59,8 +62,8 @@ async fn handle_status(State(state): State<AppState>) -> impl IntoResponse {
 async fn handle_capabilities(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     (
-        axum::http::StatusCode::OK,
-        axum::Json(lanforge_api::api::HttpDataResponse {
+        StatusCode::OK,
+        Json(HttpDataResponse {
             data: ctx.server_capabilities(),
         }),
     )
@@ -156,14 +159,14 @@ async fn handle_setup_status(State(state): State<AppState>) -> impl IntoResponse
 
 async fn handle_setup(
     State(state): State<AppState>,
-    Json(payload): Json<lanforge_types::system::SetupPayload>,
+    Json(payload): Json<SetupPayload>,
 ) -> impl IntoResponse {
     // Fails closed: an unreadable flag or user table must not reopen first-run setup.
     let is_provisioned = match (state.db.is_provisioned(), state.db.count_users()) {
         (Ok(provisioned), Ok(users)) => provisioned || users > 0,
         _ => {
             return (
-                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                StatusCode::SERVICE_UNAVAILABLE,
                 Json(serde_json::json!({ "error": "persistence unavailable" })),
             )
                 .into_response();
@@ -171,7 +174,7 @@ async fn handle_setup(
     };
     if is_provisioned || state.ctx.is_recovery_mode() {
         return (
-            axum::http::StatusCode::FORBIDDEN,
+            StatusCode::FORBIDDEN,
             Json(serde_json::json!({
                 "error": "Forbidden: Lanforge has already completed first-run setup. This endpoint is permanently locked."
             })),
@@ -184,7 +187,7 @@ async fn handle_setup(
     let res = ctx.handle_setup(payload).await;
 
     match res {
-        lanforge_api::api::Response::Setup(mut setup_res) => {
+        ApiResponse::Setup(mut setup_res) => {
             // Setup stores the name trimmed and lowercased.
             let token = match state
                 .db
@@ -200,25 +203,25 @@ async fn handle_setup(
             let cookie_header = format!(
                 "session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={REMEMBER_ME_TTL_SECS}"
             );
-            let mut headers = axum::http::HeaderMap::new();
-            if let Ok(v) = axum::http::HeaderValue::from_str(&cookie_header) {
-                headers.insert(axum::http::header::SET_COOKIE, v);
+            let mut headers = HeaderMap::new();
+            if let Ok(v) = HeaderValue::from_str(&cookie_header) {
+                headers.insert(SET_COOKIE, v);
             }
 
             (
-                axum::http::StatusCode::OK,
+                StatusCode::OK,
                 headers,
-                Json(lanforge_api::api::HttpDataResponse { data: setup_res }),
+                Json(HttpDataResponse { data: setup_res }),
             )
                 .into_response()
         }
-        lanforge_api::api::Response::Error { error } => (
-            axum::http::StatusCode::BAD_REQUEST,
+        ApiResponse::Error { error } => (
+            StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": error })),
         )
             .into_response(),
         _ => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": "Unexpected setup response" })),
         )
             .into_response(),

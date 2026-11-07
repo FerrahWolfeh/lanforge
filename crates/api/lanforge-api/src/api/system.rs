@@ -8,8 +8,9 @@ use lanforge_types::network::firewall::{
     FirewallCommitResponse, FirewallConfig, FirewallStatus, FirewallValidationReport,
 };
 use lanforge_types::network::pppoe::PppoeConfig;
-use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
-use lanforge_types::network::traffic::TrafficConfig;
+use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RaServerConfig, RdnssConfig};
+use lanforge_types::network::traffic::{TrafficConfig, TrafficTelemetryResponse};
+use lanforge_types::system::{PppoeStatusResponse, RaStatusResponse, TrafficStatusResponse};
 use serde::{Deserialize, Serialize};
 
 /// Interface information.
@@ -281,8 +282,8 @@ impl HttpWrappedResponse for SystemConfigImportResponse {
     }
 }
 
-impl HttpWrappedResponse for lanforge_types::system::PppoeStatusResponse {
-    type Wrapper = HttpDataResponse<lanforge_types::system::PppoeStatusResponse>;
+impl HttpWrappedResponse for PppoeStatusResponse {
+    type Wrapper = HttpDataResponse<PppoeStatusResponse>;
 
     fn wrap(self) -> Self::Wrapper {
         HttpDataResponse { data: self }
@@ -293,8 +294,8 @@ impl HttpWrappedResponse for lanforge_types::system::PppoeStatusResponse {
     }
 }
 
-impl HttpWrappedResponse for lanforge_types::system::RaStatusResponse {
-    type Wrapper = HttpDataResponse<lanforge_types::system::RaStatusResponse>;
+impl HttpWrappedResponse for RaStatusResponse {
+    type Wrapper = HttpDataResponse<RaStatusResponse>;
 
     fn wrap(self) -> Self::Wrapper {
         HttpDataResponse { data: self }
@@ -305,8 +306,8 @@ impl HttpWrappedResponse for lanforge_types::system::RaStatusResponse {
     }
 }
 
-impl HttpWrappedResponse for lanforge_types::network::ra::RaServerConfig {
-    type Wrapper = HttpDataResponse<lanforge_types::network::ra::RaServerConfig>;
+impl HttpWrappedResponse for RaServerConfig {
+    type Wrapper = HttpDataResponse<RaServerConfig>;
 
     fn wrap(self) -> Self::Wrapper {
         HttpDataResponse { data: self }
@@ -394,8 +395,8 @@ impl HttpWrappedResponse for FirewallCommitResponse {
     }
 }
 
-impl HttpWrappedResponse for lanforge_types::network::TrafficConfig {
-    type Wrapper = HttpDataResponse<lanforge_types::network::TrafficConfig>;
+impl HttpWrappedResponse for TrafficConfig {
+    type Wrapper = HttpDataResponse<TrafficConfig>;
 
     fn wrap(self) -> Self::Wrapper {
         HttpDataResponse { data: self }
@@ -406,8 +407,8 @@ impl HttpWrappedResponse for lanforge_types::network::TrafficConfig {
     }
 }
 
-impl HttpWrappedResponse for lanforge_types::system::TrafficStatusResponse {
-    type Wrapper = HttpDataResponse<lanforge_types::system::TrafficStatusResponse>;
+impl HttpWrappedResponse for TrafficStatusResponse {
+    type Wrapper = HttpDataResponse<TrafficStatusResponse>;
 
     fn wrap(self) -> Self::Wrapper {
         HttpDataResponse { data: self }
@@ -418,8 +419,8 @@ impl HttpWrappedResponse for lanforge_types::system::TrafficStatusResponse {
     }
 }
 
-impl HttpWrappedResponse for lanforge_types::network::traffic::TrafficTelemetryResponse {
-    type Wrapper = HttpDataResponse<lanforge_types::network::traffic::TrafficTelemetryResponse>;
+impl HttpWrappedResponse for TrafficTelemetryResponse {
+    type Wrapper = HttpDataResponse<TrafficTelemetryResponse>;
 
     fn wrap(self) -> Self::Wrapper {
         HttpDataResponse { data: self }

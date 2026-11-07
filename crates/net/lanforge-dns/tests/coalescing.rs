@@ -1,3 +1,13 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -7,8 +17,9 @@ use lanforge_dns::resolver::recursive::{
 };
 use lanforge_dns_wire::{WireDecoder, WireEncoder};
 use lanforge_types::network::dns::upstream::UpstreamTarget;
-use lanforge_types::network::dns::{DnsClass, DnsMessage, DnsQuestion, DnsRecordType};
+use lanforge_types::network::dns::{DnsClass, DnsMessage, DnsQuestion, DnsRecordType, QueryResult};
 use tokio::net::UdpSocket;
+use tokio::time::sleep;
 
 #[path = "common/mod.rs"]
 mod common;
@@ -28,7 +39,7 @@ async fn test_coalesced_queries_patch_transaction_id_and_deduplicate() {
             let mut decoder = WireDecoder::new(&buf[..n]);
             if let Some(msg) = decoder.decode_message() {
                 // Delay 150ms to allow concurrent followers to enter in_flight
-                tokio::time::sleep(Duration::from_millis(150)).await;
+                sleep(Duration::from_millis(150)).await;
 
                 let mut resp_msg = DnsMessage::new();
                 resp_msg.header.id = msg.header.id;
@@ -121,7 +132,7 @@ async fn test_coalesced_queries_pipeline_metrics() {
         while let Ok((n, client_addr)) = upstream_sock.recv_from(&mut buf).await {
             let mut decoder = WireDecoder::new(&buf[..n]);
             if let Some(msg) = decoder.decode_message() {
-                tokio::time::sleep(Duration::from_millis(150)).await;
+                sleep(Duration::from_millis(150)).await;
 
                 let mut resp_msg = DnsMessage::new();
                 resp_msg.header.id = msg.header.id;
@@ -168,7 +179,7 @@ async fn test_coalesced_queries_pipeline_metrics() {
     let q2 = make_query(2002);
     let q3 = make_query(2003);
 
-    let src_ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 100));
+    let src_ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100));
 
     let run_one = |query_bytes: Vec<u8>| {
         let ctx_ref = &dns_ctx;
@@ -208,7 +219,7 @@ async fn test_coalesced_queries_pipeline_metrics() {
         assert_eq!(entries.len(), 3);
         let coalesced_count = entries
             .iter()
-            .filter(|e| e.result == lanforge_types::network::dns::QueryResult::Coalesced)
+            .filter(|e| e.result == QueryResult::Coalesced)
             .count();
         assert_eq!(
             coalesced_count, 2,

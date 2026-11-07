@@ -1,5 +1,12 @@
+#![allow(
+    unused_crate_dependencies,
+    reason = "binary target uses dependencies via library target"
+)]
+
 use clap::Parser;
 use color_eyre::Result;
+use color_eyre::config::{HookBuilder, Theme};
+use colored::control;
 use lanforge_cli::args::{Cli, Command};
 use lanforge_cli::client::LanforgeClient;
 use lanforge_cli::commands::StatusArgs;
@@ -17,10 +24,8 @@ async fn main() -> Result<()> {
 
     let no_color = cli.colors_off();
     if no_color {
-        colored::control::set_override(false);
-        color_eyre::config::HookBuilder::new()
-            .theme(color_eyre::config::Theme::new())
-            .install()?;
+        control::set_override(false);
+        HookBuilder::new().theme(Theme::new()).install()?;
     } else {
         color_eyre::install()?;
     }

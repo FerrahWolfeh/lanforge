@@ -6,10 +6,14 @@ use lanforge_api::api::{
 };
 use lanforge_api::config_file::NamedUpstream;
 use lanforge_types::network::dns::{
-    DnsRecordType, DnsRequest, DnsResponse, UpstreamStatus,
+    DnsRecordType, DnsRequest, DnsResponse, UpstreamHealthSnapshot, UpstreamStatus,
     upstream::{UpstreamMode, UpstreamProtocol, UpstreamTarget},
 };
-use std::{collections::HashMap, net::IpAddr};
+use std::collections::hash_map::Entry;
+use std::{
+    collections::HashMap,
+    net::{IpAddr, SocketAddr},
+};
 
 impl ClientContext {
     /// Snapshot of DNS resolver statistics.
@@ -63,7 +67,7 @@ impl ClientContext {
             .ctx
             .get_dns_upstreams()
             .into_iter()
-            .map(|r| lanforge_types::network::dns::UpstreamHealthSnapshot {
+            .map(|r| UpstreamHealthSnapshot {
                 target: r.addr,
                 protocol: r.protocol,
                 rtt_ewma_us: 0,
@@ -82,7 +86,7 @@ impl ClientContext {
 
     pub async fn handle_dns_upstream_add(
         &self,
-        addr: std::net::SocketAddr,
+        addr: SocketAddr,
         protocol: UpstreamProtocol,
         domain: Option<String>,
     ) -> Response {
@@ -111,7 +115,7 @@ impl ClientContext {
 
     pub async fn handle_dns_upstream_remove(
         &self,
-        addr: std::net::SocketAddr,
+        addr: SocketAddr,
         protocol: UpstreamProtocol,
         domain: Option<String>,
     ) -> Response {
@@ -131,10 +135,7 @@ impl ClientContext {
     /// Replaces the default upstreams (those without a `domain`) with plain-DNS `addrs` in one
     /// change; conditional upstreams stay. An empty list is refused: a resolver without upstreams
     /// (local names only) is set in the configuration file.
-    pub async fn handle_dns_upstream_set_default(
-        &self,
-        addrs: Vec<std::net::SocketAddr>,
-    ) -> Response {
+    pub async fn handle_dns_upstream_set_default(&self, addrs: Vec<SocketAddr>) -> Response {
         if addrs.is_empty() {
             return Response::Rejected {
                 error: "At least one upstream is required; a resolver without upstreams \
@@ -208,7 +209,7 @@ impl ClientContext {
                 .chain(data.top_blocked_clients.iter().map(|(ip, _)| ip))
             {
                 if let Ok(parsed_ip) = ip_str.parse::<IpAddr>()
-                    && let std::collections::hash_map::Entry::Vacant(e) = map.entry(parsed_ip)
+                    && let Entry::Vacant(e) = map.entry(parsed_ip)
                 {
                     let hostname = super::resolve_ip_identity(state, parsed_ip).1;
                     e.insert(hostname);

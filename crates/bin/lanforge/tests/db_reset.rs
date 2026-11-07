@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 use lanforge::config::Config;
 use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_api_dispatch::ClientContext;
@@ -21,10 +30,11 @@ use std::sync::atomic::AtomicUsize;
 use tempfile::tempdir;
 use tokio::io::duplex;
 use tokio::time::{Duration, sleep};
+use tracing_subscriber::fmt;
 
 #[tokio::test]
 async fn test_full_db_reset_chain() {
-    let _ = tracing_subscriber::fmt::try_init();
+    let _ = fmt::try_init();
 
     // 1. Setup temporary environment
     let dir = tempdir().expect("Failed to create temp dir");
@@ -44,7 +54,7 @@ async fn test_full_db_reset_chain() {
     });
 
     let bus = Arc::new(EventBus::new());
-    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), State::new(), None);
 
     // 2. Add some initial state (dynamic and static)
     let _ = ctx.apply(DeviceUpdate::ArpSeen {
@@ -74,8 +84,8 @@ async fn test_full_db_reset_chain() {
     let mut db_worker = DbWorker::new(
         cfg.database.clone(),
         ctx_db.clone(),
-        db.clone(),
-        log_db.clone(),
+        Arc::clone(&db),
+        Arc::clone(&log_db),
     );
     let ctrl = ServiceHandle::new(ServiceId::Db, ctx.clone());
     tokio::spawn(async move {

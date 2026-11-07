@@ -1,10 +1,13 @@
 use anyhow::Result;
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
+#[cfg(feature = "discovery")]
+use pnet::datalink;
 use sd_notify::{NotifyState, notify};
-#[cfg(any(feature = "uds", feature = "http"))]
+use std::mem;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::time::Instant;
 use tracing::{debug, info};
 
 use crate::bootstrap::BootstrapResult;
@@ -43,18 +46,14 @@ pub struct Daemon {
     registry: ServiceRegistry,
     ctx: LanforgeContext,
     /// When the process started (systemd's start timeout runs from exec).
-    started: tokio::time::Instant,
+    started: Instant,
 }
 
 impl Daemon {
     /// Creates a new Daemon instance from a bootstrap result and context; `started` is when the
     /// process started, the origin of the readiness deadline.
     #[must_use]
-    pub fn new(
-        bootstrap: BootstrapResult,
-        ctx: LanforgeContext,
-        started: tokio::time::Instant,
-    ) -> Self {
+    pub fn new(bootstrap: BootstrapResult, ctx: LanforgeContext, started: Instant) -> Self {
         Self {
             bootstrap,
             registry: ServiceRegistry::new(),
@@ -71,7 +70,7 @@ impl Daemon {
         self.validate_features();
         self.spawn_services();
         let expected = self.registry.registered_ids();
-        let registry = std::mem::take(&mut self.registry);
+        let registry = mem::take(&mut self.registry);
         let supervisor = registry.start(&self.ctx)?;
 
         run_event_loop(
@@ -132,21 +131,21 @@ impl Daemon {
     }
 
     fn spawn_services(&mut self) {
-        let cfg = self.bootstrap.cfg.clone();
+        let cfg = Arc::clone(&self.bootstrap.cfg);
         #[cfg(feature = "discovery")]
         let target_ifindex = self.bootstrap.target_ifindex;
         #[cfg(feature = "discovery")]
         let rt_handle = self.bootstrap.rt_handle.clone();
         let messages = self.bootstrap.messages.clone();
-        let db = self.bootstrap.db.clone();
-        let log_db = self.bootstrap.log_db.clone();
+        let db = Arc::clone(&self.bootstrap.db);
+        let log_db = Arc::clone(&self.bootstrap.log_db);
         let ctx = self.ctx.clone();
 
         #[cfg(feature = "discovery")]
         let monitored_ifindexes = if cfg.monitor_toml.ifaces.is_empty() {
             vec![target_ifindex]
         } else {
-            let host_ifaces = pnet::datalink::interfaces();
+            let host_ifaces = datalink::interfaces();
             let mut indexes: Vec<u32> = cfg
                 .monitor_toml
                 .ifaces
@@ -232,7 +231,7 @@ impl Daemon {
         sd_notify_stopping();
         info!("Starting shutdown sequence...");
         #[cfg(feature = "traffic")]
-        let log_db = self.bootstrap.log_db.clone();
+        let log_db = Arc::clone(&self.bootstrap.log_db);
         self.ctx.terminate();
         let _ = self
             .ctx

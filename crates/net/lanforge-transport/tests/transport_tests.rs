@@ -1,10 +1,21 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 use lanforge_transport::{
     DualTcpListener, Icmp6Transport, RateLimitConfig, RateLimiter, UdpTransport,
 };
 use std::error::Error;
+use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV6};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpStream, UdpSocket};
 use tokio::time::timeout;
 
 const TEST_TIMEOUT: Duration = Duration::from_millis(1000);
@@ -143,7 +154,7 @@ async fn test_udp_kernel_loopback_bidirectional() -> Result<(), Box<dyn Error>> 
     assert_ne!(port, 0);
 
     // Independent client socket
-    let client = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
+    let client = UdpSocket::bind("127.0.0.1:0").await?;
     let target = SocketAddr::from(([127, 0, 0, 1], port));
 
     // Client -> Server
@@ -173,13 +184,13 @@ async fn test_tcp_kernel_loopback_connection_lifecycle() -> Result<(), Box<dyn E
     assert_ne!(server_addr.port(), 0);
 
     let client_handle = tokio::spawn(async move {
-        let mut stream = tokio::net::TcpStream::connect(server_addr).await?;
+        let mut stream = TcpStream::connect(server_addr).await?;
         stream.write_all(b"HELLO_TCP_SERVER").await?;
 
         let mut buf = [0u8; 16];
         stream.read_exact(&mut buf).await?;
         assert_eq!(&buf, b"HELLO_TCP_CLIENT");
-        Ok::<(), std::io::Error>(())
+        Ok::<(), io::Error>(())
     });
 
     let (mut server_stream, client_addr) = timeout(TEST_TIMEOUT, listener.accept()).await??;

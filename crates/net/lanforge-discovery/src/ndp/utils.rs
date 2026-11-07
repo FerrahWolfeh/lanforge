@@ -27,7 +27,7 @@ use rtnetlink::{
     },
 };
 
-use crate::error::NetworkError;
+use crate::error::DiscoveryError;
 
 /// Looks up the MAC address for a specific IPv6 neighbor in the kernel's NDP table.
 ///
@@ -215,7 +215,7 @@ pub async fn get_ipv6_neighbors(
     handle: &Handle,
     target_prefix: &str,
     target_ifindex: Option<u32>,
-) -> Result<Vec<NeighborEvent>, NetworkError> {
+) -> Result<Vec<NeighborEvent>, DiscoveryError> {
     let mut neighbors = Vec::new();
     let mut stream = handle
         .neighbours()
@@ -270,7 +270,7 @@ pub async fn get_ipv6_neighbors(
 pub async fn get_ipv4_neighbors(
     handle: &Handle,
     target_ifindex: Option<u32>,
-) -> Result<Vec<NeighborEvent>, NetworkError> {
+) -> Result<Vec<NeighborEvent>, DiscoveryError> {
     let mut neighbors = Vec::new();
     let mut stream = handle
         .neighbours()

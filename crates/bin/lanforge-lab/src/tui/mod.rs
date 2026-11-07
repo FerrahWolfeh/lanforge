@@ -4,6 +4,8 @@ pub mod ui;
 
 use std::io::stdout;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::sleep;
 
 use crossterm::execute;
 use crossterm::terminal::{
@@ -13,7 +15,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 use crate::error::LabError;
-use crate::harness::LabHarness;
+use crate::harness::{LabHarness, LabMode};
 pub use app::App;
 
 /// Runs the interactive TUI application.
@@ -25,9 +27,9 @@ pub async fn run_tui(harness: LabHarness) -> Result<(), LabError> {
     let mut terminal = Terminal::new(backend).map_err(LabError::Io)?;
 
     let mode_str = match harness.mode() {
-        crate::harness::LabMode::Direct => "Direct (Socket Mode)".to_string(),
-        crate::harness::LabMode::Netns => "Kernel Netns (veth-lf)".to_string(),
-        crate::harness::LabMode::Interface => "Interface".to_string(),
+        LabMode::Direct => "Direct (Socket Mode)".to_string(),
+        LabMode::Netns => "Kernel Netns (veth-lf)".to_string(),
+        LabMode::Interface => "Interface".to_string(),
     };
 
     let mut app = App::new(harness.dhcp_target, harness.dns_target, mode_str);
@@ -39,7 +41,7 @@ pub async fn run_tui(harness: LabHarness) -> Result<(), LabError> {
             .map_err(LabError::Io)?;
 
         events::handle_events(&mut app, &harness_arc)?;
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        sleep(Duration::from_millis(20)).await;
     }
 
     disable_raw_mode().map_err(LabError::Io)?;

@@ -15,8 +15,13 @@ use crate::pipeline::middleware::AdblockMiddleware;
 use crate::pipeline::middleware::{
     CacheMiddleware, LocalResolverMiddleware, RewriteMiddleware, UpstreamMiddleware,
 };
-use crate::resolver::recursive::UpstreamManager;
+use crate::resolver::recursive::{DnsCache, UpstreamManager};
 use crate::server::DnsContext;
+use crate::utils::ip_to_arpa;
+use lanforge_core::context::LanforgeContext;
+use lanforge_types::network::dns::upstream::UpstreamTarget;
+use parking_lot::{Mutex, RwLock};
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::Arc;
 
@@ -190,9 +195,9 @@ fn handle_reverse_dns_trigger(ctx: &DnsContext, client_ip: IpAddr) {
 
         if should_resolve {
             let ctx_core = ctx.local.ctx.clone();
-            let reverse_managers = ctx.reverse_managers.clone();
-            let resolving_ips = ctx.resolving_ips.clone();
-            let cache = ctx.cache.clone();
+            let reverse_managers = Arc::clone(&ctx.reverse_managers);
+            let resolving_ips = Arc::clone(&ctx.resolving_ips);
+            let cache = Arc::clone(&ctx.cache);
 
             tokio::spawn(async move {
                 resolve_reverse_ptr_background(
@@ -210,19 +215,12 @@ fn handle_reverse_dns_trigger(ctx: &DnsContext, client_ip: IpAddr) {
 }
 
 async fn resolve_reverse_ptr_background(
-    ctx_core: lanforge_core::context::LanforgeContext,
-    reverse_managers: Arc<
-        parking_lot::RwLock<
-            std::collections::HashMap<
-                lanforge_types::network::dns::upstream::UpstreamTarget,
-                Arc<UpstreamManager>,
-            >,
-        >,
-    >,
-    resolving_ips: Arc<parking_lot::Mutex<std::collections::HashSet<IpAddr>>>,
-    cache: Arc<crate::resolver::recursive::DnsCache>,
+    ctx_core: LanforgeContext,
+    reverse_managers: Arc<RwLock<HashMap<UpstreamTarget, Arc<UpstreamManager>>>>,
+    resolving_ips: Arc<Mutex<HashSet<IpAddr>>>,
+    cache: Arc<DnsCache>,
     ip: IpAddr,
-    resolver: lanforge_types::network::dns::upstream::UpstreamTarget,
+    resolver: UpstreamTarget,
 ) {
     // 1. Get or create UpstreamManager
     let mgr = {
@@ -247,21 +245,21 @@ async fn resolve_reverse_ptr_background(
             };
             let mut write_guard = reverse_managers.write();
             if let Some(m) = write_guard.get(&resolver) {
-                m.clone()
+                Arc::clone(m)
             } else {
-                write_guard.insert(resolver.clone(), new_mgr.clone());
+                write_guard.insert(resolver.clone(), Arc::clone(&new_mgr));
                 new_mgr
             }
         }
     };
 
     // 2. Perform reverse PTR query
-    let arpa_name = crate::utils::ip_to_arpa(ip);
+    let arpa_name = ip_to_arpa(ip);
     let mut query = DnsMessage::new();
     query.header.rd = true;
     query.header.qdcount = 1;
     query.questions.push(DnsQuestion {
-        name: std::sync::Arc::from(arpa_name),
+        name: Arc::from(arpa_name),
         qtype: DnsRecordType::PTR,
         qclass: DnsClass::IN,
     });

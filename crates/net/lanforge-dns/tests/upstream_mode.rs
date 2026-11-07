@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 mod common;
 
 use common::*;
@@ -8,7 +17,7 @@ use lanforge_types::network::dns::upstream::UpstreamMode;
 
 /// The live config is the only source of the upstream mode. `Sequential` is both the default
 /// and a valid admin choice: the service used to read it as "unset" and fall back to the
-/// static `[dns] upstream_mode`, so a WebUI choice of Sequential flipped back on a DNS restart.
+/// static `[dns] upstream_mode`, so a `WebUI` choice of Sequential flipped back on a DNS restart.
 #[tokio::test]
 async fn upstream_mode_comes_from_the_live_config() {
     let ctx = init_test_context();

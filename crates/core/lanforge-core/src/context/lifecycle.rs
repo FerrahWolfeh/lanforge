@@ -1,16 +1,18 @@
 //! Lifecycle, readiness, service telemetry, and status coordination.
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use lanforge_types::network::snapshot::{InterfaceSnapshot, WanSnapshot};
+use lanforge_types::network::snapshot::{InterfaceSnapshot, TransportMetrics, WanSnapshot};
 use lanforge_types::network::traffic::TrafficTelemetryResponse;
 use lanforge_types::system::{
     Cap, PppoeStatusResponse, RaStatusResponse, ServerCapabilities, ServiceBanner, ServiceId,
-    ServiceState, SystemStatus, TrafficStatusResponse,
+    ServiceState, StateDetail, SystemStatus, TrafficStatusResponse,
 };
 use lanforge_types::update::{DhcpV4PoolUpdate, DhcpV6PoolUpdate};
 use smallvec::SmallVec;
+use tokio::sync::{mpsc, watch};
 
 use crate::context::state::network::DhcpPoolStats;
 use crate::context::{DnsHandle, DnsRequestRx, LanforgeContext, StorageHandle};
@@ -111,11 +113,7 @@ impl LanforgeContext {
 
     /// Sets the traffic counters of the sockets a service holds now: call it on every (re)bind
     /// from the serving instance. Cleared when the service stops, goes dormant or fails.
-    pub fn set_service_transports(
-        &self,
-        id: ServiceId,
-        transports: Vec<Arc<lanforge_types::network::snapshot::TransportMetrics>>,
-    ) {
+    pub fn set_service_transports(&self, id: ServiceId, transports: Vec<Arc<TransportMetrics>>) {
         self.inner.runtime.set_service_transports(id, transports);
     }
 
@@ -144,7 +142,7 @@ impl LanforgeContext {
         if let Some(rx) = parked {
             return rx;
         }
-        let (tx, rx) = tokio::sync::mpsc::channel(100);
+        let (tx, rx) = mpsc::channel(100);
         self.set_dns_handle(DnsHandle::new(tx));
         rx
     }
@@ -189,17 +187,13 @@ impl LanforgeContext {
     }
 
     /// Sets the state detail explanation of a service.
-    pub fn set_service_detail(
-        &self,
-        id: ServiceId,
-        detail: Option<lanforge_types::system::StateDetail>,
-    ) {
+    pub fn set_service_detail(&self, id: ServiceId, detail: Option<StateDetail>) {
         self.inner.runtime.set_service_detail(id, detail);
     }
 
     /// Returns the state detail of a service if any.
     #[must_use]
-    pub fn get_service_detail(&self, id: ServiceId) -> Option<lanforge_types::system::StateDetail> {
+    pub fn get_service_detail(&self, id: ServiceId) -> Option<StateDetail> {
         self.inner.runtime.get_service_detail(id)
     }
 
@@ -216,13 +210,13 @@ impl LanforgeContext {
     }
 
     /// Registers an arbitrary typed shared service state.
-    pub fn provide_shared<T: std::any::Any + Send + Sync + 'static>(&self, instance: Arc<T>) {
+    pub fn provide_shared<T: Any + Send + Sync + 'static>(&self, instance: Arc<T>) {
         self.inner.runtime.provide_shared(instance);
     }
 
     /// Retrieves an arbitrary typed shared service state by type.
     #[must_use]
-    pub fn get_shared<T: std::any::Any + Send + Sync + 'static>(&self) -> Option<Arc<T>> {
+    pub fn get_shared<T: Any + Send + Sync + 'static>(&self) -> Option<Arc<T>> {
         self.inner.runtime.get_shared::<T>()
     }
 
@@ -364,7 +358,7 @@ impl LanforgeContext {
 
     /// Subscribes to changes in effective WAN L3 connectivity.
     #[must_use]
-    pub fn watch_wan(&self) -> tokio::sync::watch::Receiver<WanSnapshot> {
+    pub fn watch_wan(&self) -> watch::Receiver<WanSnapshot> {
         self.inner.runtime.watch_wan()
     }
 
@@ -381,7 +375,7 @@ impl LanforgeContext {
 
     /// Subscribes to changes in discovered network interfaces.
     #[must_use]
-    pub fn watch_interfaces(&self) -> tokio::sync::watch::Receiver<InterfaceSnapshot> {
+    pub fn watch_interfaces(&self) -> watch::Receiver<InterfaceSnapshot> {
         self.inner.runtime.watch_interfaces()
     }
 

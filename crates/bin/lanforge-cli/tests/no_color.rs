@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 //! `NO_COLOR` follows <https://no-color.org>: any non-empty value turns colours off, and it never
 //! stops a command (it was a clap `bool` env that refused the usual `NO_COLOR=1`).
 

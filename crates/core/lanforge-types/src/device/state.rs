@@ -1,3 +1,4 @@
+use std::mem::{align_of, size_of};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, SystemTime};
 
@@ -49,8 +50,8 @@ pub struct V4Lease {
     pub last_seen: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<V4Lease>() == 16);
-const _: () = assert!(std::mem::align_of::<V4Lease>() == 4);
+const _: () = assert!(size_of::<V4Lease>() == 16);
+const _: () = assert!(align_of::<V4Lease>() == 4);
 
 impl V4Lease {
     #[must_use]
@@ -152,8 +153,8 @@ pub struct V6Lease {
     pub reserved: u16,
 }
 
-const _: () = assert!(std::mem::size_of::<V6Lease>() == 32);
-const _: () = assert!(std::mem::align_of::<V6Lease>() == 4);
+const _: () = assert!(size_of::<V6Lease>() == 32);
+const _: () = assert!(align_of::<V6Lease>() == 4);
 
 impl V6Lease {
     #[must_use]
@@ -262,8 +263,8 @@ pub struct V6PrefixLease {
     pub reserved: [u8; 7],
 }
 
-const _: () = assert!(std::mem::size_of::<V6PrefixLease>() == 32);
-const _: () = assert!(std::mem::align_of::<V6PrefixLease>() == 4);
+const _: () = assert!(size_of::<V6PrefixLease>() == 32);
+const _: () = assert!(align_of::<V6PrefixLease>() == 4);
 
 impl V6PrefixLease {
     #[must_use]

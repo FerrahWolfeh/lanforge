@@ -1,5 +1,8 @@
 use std::fmt::Write;
+use std::fs;
+use std::num::NonZeroUsize;
 use std::path::Path;
+use std::thread;
 use tracing::debug;
 
 /// Parses `/sys/devices/system/cpu/online` or falls back to system thread count.
@@ -9,7 +12,7 @@ pub fn detect_online_cpus() -> Vec<usize> {
 }
 
 pub fn detect_online_cpus_from_path(path: &Path) -> Vec<usize> {
-    if let Ok(content) = std::fs::read_to_string(path)
+    if let Ok(content) = fs::read_to_string(path)
         && let Some(cpus) = parse_cpu_range_list(&content)
         && !cpus.is_empty()
     {
@@ -17,8 +20,7 @@ pub fn detect_online_cpus_from_path(path: &Path) -> Vec<usize> {
         return cpus;
     }
 
-    let fallback_count =
-        std::thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get);
+    let fallback_count = thread::available_parallelism().map_or(4, NonZeroUsize::get);
     debug!(
         fallback_count,
         "Falling back to available parallelism for CPU count"

@@ -4,7 +4,9 @@ use lanforge_api::api::{
     TransientHostsResponse,
 };
 use lanforge_types::device::{Device, IPv4State, IPv6State, classify_ipv6};
+use std::io::Write;
 use std::net::{IpAddr, Ipv6Addr};
+use std::str;
 
 impl ClientContext {
     /// Generates a `DevicesResponse`, optionally filtering by a search string.
@@ -79,12 +81,11 @@ impl ClientContext {
                 return true;
             }
             if let Some(ip) = dev.v4.ip() {
-                use std::io::Write;
                 let mut buf = [0u8; 16];
                 let mut slice = &mut buf[..];
                 if write!(slice, "{ip}").is_ok() {
                     let written = 16 - slice.len();
-                    if let Ok(ip_str) = std::str::from_utf8(&buf[..written])
+                    if let Ok(ip_str) = str::from_utf8(&buf[..written])
                         && ip_str.contains(f)
                     {
                         return true;

@@ -1,5 +1,8 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use crate::auth::AuthManager;
-use std::time::SystemTime;
+#[cfg(feature = "server")]
+use crate::throttle::ClientIp;
 
 #[tokio::test]
 async fn test_auth_manager_token_lifecycle() {
@@ -33,7 +36,7 @@ async fn test_auth_token_expiration() {
 
     let now = usize::try_from(
         SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+            .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs(),
     )
@@ -101,15 +104,15 @@ async fn test_handle_login() {
             ..Default::default()
         }),
         ctx: ctx.clone(),
-        db: db.clone(),
-        log_db: log_db.clone(),
+        db: Arc::clone(&db) as _,
+        log_db: Arc::clone(&log_db) as _,
         auth: Arc::new(AuthManager::new()),
         start_time: Instant::now(),
     };
 
     let res = handle_login(
         State(state_no_auth),
-        crate::throttle::ClientIp(None),
+        ClientIp(None),
         Json(LoginRequest {
             username: None,
             password: Some("any_password".to_string()),
@@ -138,7 +141,7 @@ async fn test_handle_login() {
     // Correct password
     let res_correct = handle_login(
         State(state_with_auth.clone()),
-        crate::throttle::ClientIp(None),
+        ClientIp(None),
         Json(LoginRequest {
             username: Some("admin".to_string()),
             password: Some(password.to_string()),
@@ -152,7 +155,7 @@ async fn test_handle_login() {
     // Incorrect password
     let res_incorrect = handle_login(
         State(state_with_auth),
-        crate::throttle::ClientIp(None),
+        ClientIp(None),
         Json(LoginRequest {
             username: Some("admin".to_string()),
             password: Some("wrong_password".to_string()),

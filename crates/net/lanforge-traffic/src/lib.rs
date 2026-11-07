@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! # Lanforge Traffic & NIC Orchestrator
 //!
 //! High-performance network interface hardware optimization, RPS/RFS/XPS packet steering,

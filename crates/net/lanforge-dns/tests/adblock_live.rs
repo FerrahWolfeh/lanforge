@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 #![cfg(feature = "adblock")]
 
 mod common;
@@ -16,10 +25,12 @@ use lanforge_types::network::dns::{
     AdblockUrlEntry, DnsClass, DnsMessage, DnsQuestion, DnsRecordType, DnsResponseCode,
     FilterAction, FilterOrigin,
 };
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
+use tokio::time::{Instant, sleep};
 
 const LOCAL_ADBLOCK_RULES: &str = r#"[Adblock Plus 2.0]
 ! Test adblock list
@@ -38,7 +49,7 @@ const LOCAL_BADFILTER_RULES: &str = r#"[Adblock Plus 2.0]
 
 /// Spawns a local mock HTTP server that serves local adblock & badfilter lists.
 async fn spawn_local_rule_server() -> u16 {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
 
     tokio::spawn(async move {
@@ -81,7 +92,7 @@ fn make_query(name: &str, qtype: DnsRecordType) -> Vec<u8> {
     WireEncoder::new().encode_message(&query)
 }
 
-/// Comprehensive battery of adblock test cases executed against live StevenBlack hosts
+/// Comprehensive battery of adblock test cases executed against live `StevenBlack` hosts
 /// combined with Adblock-syntax wildcards, exception rules, badfilters, user allowlist overrides,
 /// and dynamic runtime toggles in a single execution.
 ///
@@ -142,7 +153,7 @@ async fn test_adblock_live_comprehensive_battery() {
     };
 
     let dns_ctx = Arc::new(mock_dns_context(ctx_instance.clone(), cfg).await);
-    let manager_handle = spawn_adblock_manager(dns_ctx.clone());
+    let manager_handle = spawn_adblock_manager(Arc::clone(&dns_ctx));
 
     let filter = dns_ctx
         .filter
@@ -151,12 +162,12 @@ async fn test_adblock_live_comprehensive_battery() {
 
     // Wait for the manager to download, compile, merge, and arm the in-memory blocker
     println!("Waiting for adblock lists to download, compile, and merge...");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    while tokio::time::Instant::now() < deadline {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
         if filter.blocklist_size() > 50_000 {
             break;
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(100)).await;
     }
 
     assert!(
@@ -317,7 +328,7 @@ async fn test_adblock_live_comprehensive_battery() {
     filter.replace_config(
         BlockingMode::Refused,
         Some(Ipv4Addr::UNSPECIFIED),
-        Some(std::net::Ipv6Addr::UNSPECIFIED),
+        Some(Ipv6Addr::UNSPECIFIED),
     );
     resp_buf.clear();
     process_query_test(&query_data, &dns_ctx, client_ip, &mut resp_buf)
@@ -330,7 +341,7 @@ async fn test_adblock_live_comprehensive_battery() {
     filter.replace_config(
         BlockingMode::NxDomain,
         Some(Ipv4Addr::UNSPECIFIED),
-        Some(std::net::Ipv6Addr::UNSPECIFIED),
+        Some(Ipv6Addr::UNSPECIFIED),
     );
     resp_buf.clear();
     process_query_test(&query_data, &dns_ctx, client_ip, &mut resp_buf)

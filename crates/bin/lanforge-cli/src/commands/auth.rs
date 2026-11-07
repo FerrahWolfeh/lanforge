@@ -1,4 +1,4 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Local, Utc};
 use color_eyre::Result;
@@ -188,7 +188,7 @@ async fn renew_token(
         return printer.print_json(&*resp);
     }
 
-    printer.success(&format!("API token '{target}' renewed successfully.",));
+    printer.success(&format!("API token '{target}' renewed successfully."));
     render_secret_token_banner(&resp.name, &resp.token);
     Ok(())
 }
@@ -229,7 +229,7 @@ pub fn parse_expires_duration(s: &str) -> Result<Option<i64>> {
     }
 
     let dur = if let Ok(secs) = trimmed.parse::<u64>() {
-        std::time::Duration::from_secs(secs)
+        Duration::from_secs(secs)
     } else {
         duration_str::parse_std(&trimmed)
             .map_err(|e| eyre!("Invalid expiration duration '{s}': {e}"))?
@@ -273,7 +273,7 @@ fn render_tokens_table(tokens: &[AuthTokenEntry], printer: &Printer) {
         } else {
             t.scopes
                 .iter()
-                .map(std::string::ToString::to_string)
+                .map(ToString::to_string)
                 .collect::<Vec<_>>()
                 .join(", ")
         };

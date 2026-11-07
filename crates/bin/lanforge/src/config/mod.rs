@@ -41,7 +41,24 @@ use lanforge_uds::config::ApiConfig;
 pub use toml::load_toml;
 
 use clap::Parser;
+#[cfg(feature = "http")]
+use std::fs;
+use std::net::Ipv6Addr;
 use std::path::{Path, PathBuf};
+
+#[cfg(test)]
+use lanforge_api::config_file::ConfigFile;
+#[cfg(feature = "dhcp")]
+use lanforge_api::config_file::DhcpSettings;
+#[cfg(feature = "dns")]
+use lanforge_api::config_file::{AdblockSettings, DnsSettings};
+#[cfg(feature = "ra")]
+use lanforge_api::config_file::{RaInputs, effective_ra};
+#[cfg(feature = "pppoe")]
+use lanforge_pppoe::config::PppoeConfig as PppoeTomlConfig;
+use lanforge_types::device::StaticHost;
+use lanforge_types::network::dns::upstream::UpstreamTarget;
+use lanforge_types::network::{Ipv6Prefix, is_ula};
 
 use crate::config::toml::SystemCfg;
 
@@ -72,7 +89,7 @@ pub struct Config {
     pub dhcpv6_toml: Dhcpv6Config,
     /// The DHCP options and pools the daemon runs: `[dhcp]` + `[tftp]`, their only source.
     #[cfg(feature = "dhcp")]
-    pub dhcp: lanforge_api::config_file::DhcpSettings,
+    pub dhcp: DhcpSettings,
 
     // DNS
     #[cfg(feature = "dns")]
@@ -82,10 +99,10 @@ pub struct Config {
     /// `[dns]` as the settings the daemon runs: upstreams (with their names), mode, reverse
     /// resolvers and rewrites. The file is their only source.
     #[cfg(feature = "dns")]
-    pub dns: lanforge_api::config_file::DnsSettings,
+    pub dns: DnsSettings,
     /// `[adblock]` as the settings the daemon runs. The file is their only source.
     #[cfg(feature = "dns")]
-    pub adblock: lanforge_api::config_file::AdblockSettings,
+    pub adblock: AdblockSettings,
     /// The text of the global adblock rules file (`[adblock] rules`).
     #[cfg(feature = "dns")]
     pub adblock_rules: String,
@@ -107,7 +124,7 @@ pub struct Config {
     #[cfg(feature = "pppoe")]
     pub pppoe_enabled: bool,
     #[cfg(feature = "pppoe")]
-    pub pppoe_toml: lanforge_pppoe::config::PppoeConfig,
+    pub pppoe_toml: PppoeTomlConfig,
     #[cfg(feature = "nft")]
     pub firewall_enabled: bool,
     #[cfg(feature = "nft")]
@@ -122,7 +139,7 @@ pub struct Config {
     /// Problems found while loading the config file, shown to the admin.
     pub config_issues: Vec<String>,
     /// `[hosts]` (`None`: not read, the table's static hosts stay as they are).
-    pub static_hosts: Option<Vec<lanforge_types::device::StaticHost>>,
+    pub static_hosts: Option<Vec<StaticHost>>,
     /// `[dhcp]` was set aside: the defaults that run are never written over it.
     pub dhcp_set_aside: bool,
 }
@@ -325,8 +342,8 @@ impl Config {
     /// What `[ra]` falls back on (see `ra::effective_ra`).
     #[cfg(feature = "ra")]
     #[must_use]
-    pub fn ra_inputs(&self) -> lanforge_api::config_file::RaInputs {
-        lanforge_api::config_file::RaInputs {
+    pub fn ra_inputs(&self) -> RaInputs {
+        RaInputs {
             lan_iface: self.system.iface.clone(),
             ula: self.resolve_ula_prefix(),
             search_domains: self.search_domains.clone(),
@@ -341,7 +358,7 @@ impl Config {
     #[cfg(feature = "ra")]
     #[must_use]
     pub fn effective_ra(&self) -> RaServerConfig {
-        lanforge_api::config_file::effective_ra(self.ra.clone(), &self.ra_inputs())
+        effective_ra(self.ra.clone(), &self.ra_inputs())
     }
 
     /// Builds an `RaConfig` from the merged configuration.
@@ -394,7 +411,7 @@ impl Config {
             })
             .map(|p| (p.resolved_address(), p.prefix_len));
         #[cfg(not(feature = "ra"))]
-        let prefix_detected: Option<(Option<std::net::Ipv6Addr>, u8)> = None;
+        let prefix_detected: Option<(Option<Ipv6Addr>, u8)> = None;
         if let Some((addr, len)) = prefix_detected {
             cfg.ula_prefix = addr;
             cfg.ula_prefix_len = len;
@@ -413,7 +430,7 @@ impl Config {
 
     /// Runs `dns` as the DNS settings (`[dns]`); the boot hands them to the context.
     #[cfg(feature = "dns")]
-    pub fn set_dns(&mut self, dns: lanforge_api::config_file::DnsSettings) {
+    pub fn set_dns(&mut self, dns: DnsSettings) {
         self.dns = dns;
     }
 
@@ -462,7 +479,7 @@ impl Config {
     pub fn to_http_config(&self) -> HttpConfig {
         let mut cfg = self.http_toml.clone();
 
-        cfg.auth_password_hash = std::fs::read_to_string(self.get_password_hash_path())
+        cfg.auth_password_hash = fs::read_to_string(self.get_password_hash_path())
             .map(|s| s.trim().to_string())
             .ok()
             .or_else(|| self.http_toml.auth_password_hash.clone());
@@ -488,7 +505,7 @@ impl Config {
         cfg
     }
 
-    fn resolve_ula_prefix(&self) -> Option<lanforge_types::network::Ipv6Prefix> {
+    fn resolve_ula_prefix(&self) -> Option<Ipv6Prefix> {
         parse_ula_prefix(&self.system.target_prefix)
     }
 
@@ -532,16 +549,12 @@ impl Config {
     }
 
     #[cfg(feature = "dns")]
-    fn resolve_dns_upstream(
-        &self,
-    ) -> Option<lanforge_types::network::dns::upstream::UpstreamTarget> {
+    fn resolve_dns_upstream(&self) -> Option<UpstreamTarget> {
         self.dns_toml.upstreams.first().map(|u| u.target.clone())
     }
 
     #[cfg(not(feature = "dns"))]
-    const fn resolve_dns_upstream(
-        &self,
-    ) -> Option<lanforge_types::network::dns::upstream::UpstreamTarget> {
+    const fn resolve_dns_upstream(&self) -> Option<UpstreamTarget> {
         None
     }
 
@@ -615,11 +628,10 @@ impl Config {
     }
 }
 
-fn parse_ula_prefix(raw: &str) -> Option<lanforge_types::network::Ipv6Prefix> {
+fn parse_ula_prefix(raw: &str) -> Option<Ipv6Prefix> {
     let raw = raw.split('/').next()?;
-    let addr = raw.parse::<std::net::Ipv6Addr>().ok()?;
-    lanforge_types::network::is_ula(&addr)
-        .then(|| lanforge_types::network::Ipv6Prefix::from_addr(addr))
+    let addr = raw.parse::<Ipv6Addr>().ok()?;
+    is_ula(&addr).then(|| Ipv6Prefix::from_addr(addr))
 }
 
 /// `lanforge reload` resolves the search domains from the file (`ConfigFile::search_domains`),
@@ -636,7 +648,7 @@ mod search_domain_tests {
             "[system]\nsearch_domains = [\"home.arpa\"]\n\n[dhcp.v4]\ndomain_name = \"corp\"\n",
             "[dhcp.v4]\ndomain_name = \"lan\"\n",
         ] {
-            let file = lanforge_api::config_file::ConfigFile::parse(text).unwrap();
+            let file = ConfigFile::parse(text).unwrap();
             let boot = Config::resolve_search_domains(&toml::TomlConfig::from(&file));
             assert_eq!(file.search_domains(), boot, "{text:?}");
         }
@@ -646,12 +658,13 @@ mod search_domain_tests {
 /// One search-domain rule for every consumer: a section's own list, else the site's
 /// (`[system] search_domains`, else `lan`).
 #[cfg(all(test, feature = "dns", feature = "dhcp"))]
+#[allow(clippy::unwrap_used, reason = "test helper parses literal config")]
 mod site_domain_tests {
     use super::*;
     use clap::Parser;
 
-    fn config(text: &str) -> (Config, lanforge_api::config_file::ConfigFile) {
-        let file = lanforge_api::config_file::ConfigFile::parse(text).unwrap();
+    fn config(text: &str) -> (Config, ConfigFile) {
+        let file = ConfigFile::parse(text).unwrap();
         let toml = toml::TomlConfig::from(&file);
         let site = Config::resolve_search_domains(&toml);
         let cli = args::CliArgs::parse_from(["lanforge"]);
@@ -757,15 +770,15 @@ impl Default for Config {
             #[cfg(feature = "dhcp")]
             dhcpv6_toml: Dhcpv6Config::default(),
             #[cfg(feature = "dhcp")]
-            dhcp: lanforge_api::config_file::DhcpSettings::default(),
+            dhcp: DhcpSettings::default(),
             #[cfg(feature = "dns")]
             dns_enabled: true,
             #[cfg(feature = "dns")]
             dns_toml: DnsConfig::default(),
             #[cfg(feature = "dns")]
-            dns: lanforge_api::config_file::DnsSettings::default(),
+            dns: DnsSettings::default(),
             #[cfg(feature = "dns")]
-            adblock: lanforge_api::config_file::AdblockSettings::default(),
+            adblock: AdblockSettings::default(),
             #[cfg(feature = "dns")]
             adblock_rules: String::new(),
             search_domains: vec!["lan".to_string()],
@@ -782,7 +795,7 @@ impl Default for Config {
             #[cfg(feature = "pppoe")]
             pppoe_enabled: false,
             #[cfg(feature = "pppoe")]
-            pppoe_toml: lanforge_pppoe::config::PppoeConfig::default(),
+            pppoe_toml: PppoeTomlConfig::default(),
             #[cfg(feature = "nft")]
             firewall_enabled: true,
             #[cfg(feature = "nft")]

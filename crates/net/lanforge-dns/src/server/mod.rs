@@ -7,7 +7,10 @@ use crate::pipeline::Pipeline;
 #[cfg(feature = "adblock")]
 use crate::resolver::AdBlocker;
 use crate::resolver::recursive::UpstreamManager;
-use crate::resolver::{LocalResolver, RewriteStore, recursive::UpstreamStrategy};
+use crate::resolver::{
+    LocalResolver, RewriteStore,
+    recursive::{DnsCache, UpstreamStrategy},
+};
 use crate::telemetry::{DnsStats, QueryRing};
 use lanforge_core::bus::{DnsEvent, EventBus, LanforgeEvent};
 use lanforge_core::context::LanforgeContext;
@@ -37,7 +40,7 @@ pub struct DnsContext {
     // Sub-components
     pub local: LocalResolver,
     pub recursive: Arc<UpstreamStrategy>,
-    pub cache: Arc<crate::resolver::recursive::DnsCache>,
+    pub cache: Arc<DnsCache>,
     pub rewrites: Arc<RewriteStore>,
     #[cfg(feature = "adblock")]
     pub filter: Option<Arc<AdBlocker>>,

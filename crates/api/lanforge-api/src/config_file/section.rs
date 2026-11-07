@@ -1,5 +1,7 @@
 use bitflags::bitflags;
+use lanforge_types::config::{ConfigDomain, DomainSet};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// High-level logical sections of the Lanforge configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -87,8 +89,8 @@ impl Section {
     }
 }
 
-impl std::fmt::Display for Section {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for Section {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.name())
     }
 }
@@ -143,41 +145,41 @@ impl<'de> Deserialize<'de> for SectionSet {
     }
 }
 
-impl From<lanforge_types::config::ConfigDomain> for Section {
-    fn from(domain: lanforge_types::config::ConfigDomain) -> Self {
+impl From<ConfigDomain> for Section {
+    fn from(domain: ConfigDomain) -> Self {
         match domain {
-            lanforge_types::config::ConfigDomain::Pppoe => Self::Pppoe,
-            lanforge_types::config::ConfigDomain::Firewall => Self::Firewall,
-            lanforge_types::config::ConfigDomain::Traffic => Self::Traffic,
-            lanforge_types::config::ConfigDomain::DhcpV4Pools
-            | lanforge_types::config::ConfigDomain::DhcpV6Pools
-            | lanforge_types::config::ConfigDomain::DhcpV4Options
-            | lanforge_types::config::ConfigDomain::DhcpV6Options => Self::Dhcp,
-            lanforge_types::config::ConfigDomain::Tftp => Self::Tftp,
-            lanforge_types::config::ConfigDomain::RaServer
-            | lanforge_types::config::ConfigDomain::RaPrefixes
-            | lanforge_types::config::ConfigDomain::RaRdnss
-            | lanforge_types::config::ConfigDomain::RaDnssl => Self::Ra,
-            lanforge_types::config::ConfigDomain::DnsUpstreams
-            | lanforge_types::config::ConfigDomain::DnsUpstreamMode
-            | lanforge_types::config::ConfigDomain::DnsRewrites
-            | lanforge_types::config::ConfigDomain::DnsReverse
-            | lanforge_types::config::ConfigDomain::DnsListen => Self::Dns,
+            ConfigDomain::Pppoe => Self::Pppoe,
+            ConfigDomain::Firewall => Self::Firewall,
+            ConfigDomain::Traffic => Self::Traffic,
+            ConfigDomain::DhcpV4Pools
+            | ConfigDomain::DhcpV6Pools
+            | ConfigDomain::DhcpV4Options
+            | ConfigDomain::DhcpV6Options => Self::Dhcp,
+            ConfigDomain::Tftp => Self::Tftp,
+            ConfigDomain::RaServer
+            | ConfigDomain::RaPrefixes
+            | ConfigDomain::RaRdnss
+            | ConfigDomain::RaDnssl => Self::Ra,
+            ConfigDomain::DnsUpstreams
+            | ConfigDomain::DnsUpstreamMode
+            | ConfigDomain::DnsRewrites
+            | ConfigDomain::DnsReverse
+            | ConfigDomain::DnsListen => Self::Dns,
             // `[system] search_domains`, but DNS is its consumer: file-owned, never synced.
-            lanforge_types::config::ConfigDomain::SiteDomains => Self::Dns,
-            lanforge_types::config::ConfigDomain::DnsAdblock
-            | lanforge_types::config::ConfigDomain::DnsAdblockUrls
-            | lanforge_types::config::ConfigDomain::DnsAdblockRules => Self::Adblock,
-            lanforge_types::config::ConfigDomain::Discovery => Self::Monitor,
-            lanforge_types::config::ConfigDomain::Interfaces => Self::System,
-            lanforge_types::config::ConfigDomain::Http => Self::Http,
-            lanforge_types::config::ConfigDomain::Auth => Self::System,
+            ConfigDomain::SiteDomains => Self::Dns,
+            ConfigDomain::DnsAdblock
+            | ConfigDomain::DnsAdblockUrls
+            | ConfigDomain::DnsAdblockRules => Self::Adblock,
+            ConfigDomain::Discovery => Self::Monitor,
+            ConfigDomain::Interfaces => Self::System,
+            ConfigDomain::Http => Self::Http,
+            ConfigDomain::Auth => Self::System,
         }
     }
 }
 
-impl From<lanforge_types::config::DomainSet> for SectionSet {
-    fn from(domains: lanforge_types::config::DomainSet) -> Self {
+impl From<DomainSet> for SectionSet {
+    fn from(domains: DomainSet) -> Self {
         let mut set = Self::empty();
         for domain in domains.domains() {
             set |= Section::from(domain).as_bitflag();

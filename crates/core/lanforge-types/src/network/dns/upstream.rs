@@ -1,4 +1,6 @@
-use std::{net::SocketAddr, str::FromStr};
+use std::fmt::{self, Display, Formatter};
+use std::net::SocketAddr;
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
@@ -16,7 +18,7 @@ pub enum UpstreamProtocol {
     Https,
 }
 
-impl std::str::FromStr for UpstreamProtocol {
+impl FromStr for UpstreamProtocol {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
@@ -29,8 +31,8 @@ impl std::str::FromStr for UpstreamProtocol {
     }
 }
 
-impl std::fmt::Display for UpstreamProtocol {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for UpstreamProtocol {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Udp => write!(f, "udp"),
             Self::Tls => write!(f, "tls"),
@@ -63,7 +65,7 @@ pub enum UpstreamMode {
     RoundRobin,
 }
 
-impl std::str::FromStr for UpstreamMode {
+impl FromStr for UpstreamMode {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
@@ -76,8 +78,8 @@ impl std::str::FromStr for UpstreamMode {
     }
 }
 
-impl std::fmt::Display for UpstreamMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for UpstreamMode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Sequential => write!(f, "sequential"),
             Self::Parallel => write!(f, "parallel"),
@@ -235,8 +237,8 @@ impl FromStr for UpstreamTarget {
     }
 }
 
-impl std::fmt::Display for UpstreamTarget {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for UpstreamTarget {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.protocol {
             UpstreamProtocol::Tls => {
                 if let Some(ref hn) = self.hostname {

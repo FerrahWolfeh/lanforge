@@ -1,15 +1,21 @@
-use crate::server::handle_client;
+use std::sync::Arc;
+
 use lanforge_api::api::EventKind;
 use lanforge_api::rpc::{RpcRequest, RpcResponse};
 use lanforge_api_dispatch::ClientContext;
 use lanforge_core::bus::EventBus;
 use lanforge_core::context::LanforgeContext;
+use lanforge_core::context::StorageCommand;
 use lanforge_core::context::state::State as CoreState;
 use lanforge_core::context::storage_handle::StorageHandle;
 use lanforge_db::LogStore;
+use lanforge_types::build::BuildInfo;
+use lanforge_types::config::DomainSet;
 use lanforge_types::events::{LanforgeEvent, StorageEvent, SystemEvent, TimedEvent};
-use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
+use tokio::sync::mpsc;
+
+use crate::server::handle_client;
 
 async fn init_test_context() -> ClientContext {
     let bus = Arc::new(EventBus::new());
@@ -27,7 +33,7 @@ async fn init_test_context() -> ClientContext {
 #[tokio::test]
 async fn test_uds_client_status_flow() {
     let client_ctx = init_test_context().await;
-    let (mut client, server) = tokio::io::duplex(8192);
+    let (mut client, server) = duplex(8192);
 
     let handler_task = tokio::spawn(async move {
         handle_client(server, client_ctx).await.unwrap();
@@ -59,7 +65,7 @@ async fn test_uds_client_status_flow() {
 #[tokio::test]
 async fn test_uds_client_large_framing_protection() {
     let client_ctx = init_test_context().await;
-    let (mut client, server) = tokio::io::duplex(1024);
+    let (mut client, server) = duplex(1024);
 
     let handler_task = tokio::spawn(async move {
         // It should return an encoding error when framing size is exceeded
@@ -78,15 +84,15 @@ async fn test_uds_client_large_framing_protection() {
 #[tokio::test]
 async fn test_uds_log_streaming_filter() {
     let client_ctx = init_test_context().await;
-    let (mut client, server) = tokio::io::duplex(8192);
+    let (mut client, server) = duplex(8192);
 
-    let (storage_tx, mut storage_rx) = tokio::sync::mpsc::channel(16);
+    let (storage_tx, mut storage_rx) = mpsc::channel(16);
     client_ctx
         .ctx
         .set_storage_handle(StorageHandle::new(storage_tx));
 
     let log1 = TimedEvent::new(LanforgeEvent::System(SystemEvent::ConfigChanged {
-        sections: lanforge_types::config::DomainSet::DNS_REWRITES,
+        sections: DomainSet::DNS_REWRITES,
     })); // matches ConfigReloaded
     let log2 = TimedEvent::new(LanforgeEvent::Storage(StorageEvent::DbLogClean)); // filtered out
 
@@ -99,11 +105,11 @@ async fn test_uds_log_streaming_filter() {
     tokio::spawn(async move {
         while let Some(cmd) = storage_rx.recv().await {
             match cmd {
-                lanforge_core::context::StorageCommand::Call(call) => call(&stores),
-                lanforge_core::context::StorageCommand::FlushNow(resp_tx) => {
+                StorageCommand::Call(call) => call(&stores),
+                StorageCommand::FlushNow(resp_tx) => {
                     let _ = resp_tx.send(Ok(()));
                 }
-                lanforge_core::context::StorageCommand::FlushDnsLog(resp_tx) => {
+                StorageCommand::FlushDnsLog(resp_tx) => {
                     let _ = resp_tx.send(());
                 }
             }
@@ -153,7 +159,7 @@ async fn test_uds_log_streaming_filter() {
 
     // 3. Publish dynamic live events to the bus
     let live1 = TimedEvent::new(LanforgeEvent::System(SystemEvent::ConfigChanged {
-        sections: lanforge_types::config::DomainSet::DNS_REWRITES,
+        sections: DomainSet::DNS_REWRITES,
     })); // matches filter
     let live2 = TimedEvent::new(LanforgeEvent::Storage(StorageEvent::DbLogClean)); // filtered out
 
@@ -185,10 +191,10 @@ async fn test_uds_log_streaming_filter() {
 #[tokio::test]
 async fn the_build_request_is_variant_zero_and_names_the_daemon_build() {
     let client_ctx = init_test_context().await;
-    client_ctx.ctx.set_build(
-        lanforge_types::build::BuildInfo::parse("0.40.0+a1b2c3d4e5f6.1762160000").unwrap(),
-    );
-    let (mut client, server) = tokio::io::duplex(8192);
+    client_ctx
+        .ctx
+        .set_build(BuildInfo::parse("0.40.0+a1b2c3d4e5f6.1762160000").unwrap());
+    let (mut client, server) = duplex(8192);
     let handler_task = tokio::spawn(async move {
         handle_client(server, client_ctx).await.unwrap();
     });

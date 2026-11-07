@@ -5,8 +5,9 @@
 
 #[cfg(feature = "dhcp")]
 use lanforge_dhcp::v4::sanity::derive_dhcp_defaults_from_v4;
-use pnet::datalink::interfaces;
+use pnet::datalink::{NetworkInterface, interfaces};
 use pnet::ipnetwork::IpNetwork;
+use std::fs;
 use std::net::Ipv4Addr;
 use std::path::Path;
 use tracing::{info, warn};
@@ -174,7 +175,7 @@ pub fn is_container_bridge_topology(name: &str) -> bool {
         return false;
     }
 
-    if let Ok(entries) = std::fs::read_dir(brif_path) {
+    if let Ok(entries) = fs::read_dir(brif_path) {
         let mut has_entries = false;
         let mut all_veth = true;
 
@@ -197,7 +198,7 @@ pub fn is_container_bridge_topology(name: &str) -> bool {
 
 /// Scores a candidate interface based on physical properties, link status, and IP addressing.
 #[must_use]
-pub fn score_interface(iface: &pnet::datalink::NetworkInterface) -> i32 {
+pub fn score_interface(iface: &NetworkInterface) -> i32 {
     let mut score = 0;
     let name = &iface.name;
     let sys_net = Path::new("/sys/class/net").join(name);
@@ -214,7 +215,7 @@ pub fn score_interface(iface: &pnet::datalink::NetworkInterface) -> i32 {
     }
 
     // 3. Physical link carrier up (/sys/class/net/<iface>/carrier == "1")
-    if let Ok(carrier) = std::fs::read_to_string(sys_net.join("carrier")) {
+    if let Ok(carrier) = fs::read_to_string(sys_net.join("carrier")) {
         if carrier.trim() == "1" {
             score += 20;
         }

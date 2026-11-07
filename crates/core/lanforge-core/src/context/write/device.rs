@@ -1,26 +1,24 @@
 //! Device-specific mutation wrappers.
 
 use crate::context::LanforgeContext;
+use lanforge_types::device::{Origin, StaticHost};
 use lanforge_types::identifiers::MacAddr;
-use std::time::Duration;
+use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate};
+use std::time::{Duration, SystemTime};
 
 #[cfg(test)]
 use lanforge_types::device::Device;
 #[cfg(test)]
 use lanforge_types::device::Ipv6AddrOrSuffix;
 #[cfg(test)]
-use lanforge_types::device::Origin;
-#[cfg(test)]
 use lanforge_types::identifiers::Duid;
-#[cfg(test)]
-use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate};
 #[cfg(test)]
 use std::net::Ipv4Addr;
 
 impl LanforgeContext {
     /// The static hosts in the device table (by hostname, then MAC): what `[hosts]` holds.
     #[must_use]
-    pub fn static_hosts(&self) -> Vec<lanforge_types::device::StaticHost> {
+    pub fn static_hosts(&self) -> Vec<StaticHost> {
         let mut hosts: Vec<_> = self.with_state(|state| {
             state
                 .devices
@@ -39,10 +37,7 @@ impl LanforgeContext {
     /// discovered device again (`HostDemoted`). Returns one message per host not applied: the
     /// router itself cannot be a static host.
     #[must_use = "the messages name hosts that were not applied"]
-    pub fn apply_static_hosts(&self, hosts: &[lanforge_types::device::StaticHost]) -> Vec<String> {
-        use lanforge_types::device::Origin;
-        use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate};
-
+    pub fn apply_static_hosts(&self, hosts: &[StaticHost]) -> Vec<String> {
         let mut issues = Vec::new();
         for host in hosts {
             let live = self.get_device(&host.mac);
@@ -105,7 +100,7 @@ impl LanforgeContext {
     ) -> Option<MacAddr> {
         let found_mac = {
             let state = self.read();
-            let now = std::time::SystemTime::now();
+            let now = SystemTime::now();
             state.devices.iter().find_map(|(mac, dev)| {
                 if let (Some(threshold), Ok(elapsed)) =
                     (last_seen_threshold, now.duration_since(dev.last_seen))

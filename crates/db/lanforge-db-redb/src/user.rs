@@ -1,4 +1,4 @@
-//! UserStore and ApiTokenStore implementations for `RedbDatabase`.
+//! `UserStore` and `ApiTokenStore` implementations for `RedbDatabase`.
 
 use crate::tables::{TABLE_API_TOKENS, TABLE_USERS};
 use crate::{RedbDatabase, decode, encode};

@@ -1,6 +1,28 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
+use std::fs;
+use std::iter;
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tempfile::{TempDir, tempdir};
+use tokio::sync::broadcast::Receiver;
+use tokio::task::yield_now;
+use tokio::time::sleep;
+
 use lanforge_api::api::{
     AllowlistEntry, DnsUpstreamConfig, HostConfigEntry, Response, SystemConfigExport,
 };
+use lanforge_api::config_file::{AdblockSettings, ConfigFile, DnsSettings};
 use lanforge_api_dispatch::ClientContext;
 use lanforge_core::bus::{DnsEvent, EventBus, LanforgeEvent, NetworkEvent, TimedEvent};
 use lanforge_core::context::LanforgeContext;
@@ -9,19 +31,24 @@ use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_db::config::DatabaseConfig;
 use lanforge_db::engine::LanforgeDb;
 use lanforge_db::log_engine::LogDb;
-use lanforge_types::device::{Ipv6AddrOrSuffix, Origin};
+use lanforge_db::worker::DbWorker;
+use lanforge_db_core::Stores;
+use lanforge_types::device::{IPv4State, Ipv6AddrOrSuffix, Origin};
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::network::DnsRecordType;
 use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::{
-    AdblockDbConfig, AdblockRuleAction, AdblockUrlKind, BlockingMode, RewriteAnswer, RewriteRule,
+    AdblockDbConfig, AdblockRuleAction, AdblockRuleEntry, AdblockSourceFormat, AdblockUrlKind,
+    BlockingMode, RewriteAnswer, RewriteRule, TimeOfDay,
 };
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
+use lanforge_types::network::firewall::{
+    FirewallCommitRequest, FirewallConfig, L4Protocol, PortForwardRule,
+};
+use lanforge_types::network::pppoe::PppoeConfig;
+use lanforge_types::network::{DnsRecordType, TrafficConfig};
+use lanforge_types::system::ServiceId;
 use lanforge_types::update::DeviceUpdate;
-use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
-use std::time::{Duration, SystemTime};
 
 async fn init_test_context() -> ClientContext {
     let bus = Arc::new(EventBus::new());
@@ -36,11 +63,10 @@ async fn init_test_context() -> ClientContext {
     let log_db = Arc::new(LogDb::open_in_memory());
     let ctx = LanforgeContext::new(bus, table, None);
 
-    let mut worker =
-        lanforge_db::worker::DbWorker::new(DatabaseConfig::default(), ctx.clone(), db, log_db);
+    let mut worker = DbWorker::new(DatabaseConfig::default(), ctx.clone(), db, log_db);
     let ctx_worker = ctx.clone();
     tokio::spawn(async move {
-        let h = ServiceHandle::new(lanforge_types::system::ServiceId::Db, ctx_worker.clone());
+        let h = ServiceHandle::new(ServiceId::Db, ctx_worker.clone());
         let _ = worker.serve(&ctx_worker, &h).await;
     });
 
@@ -169,7 +195,7 @@ async fn test_dispatch_system_config_import_export() {
             blocking_mode: BlockingMode::NullIp,
             blocking_ip_v4: Some("0.0.0.0".parse().unwrap()),
             blocking_ip_v6: Some("::".parse().unwrap()),
-            refresh_time: lanforge_types::network::dns::adblock::TimeOfDay {
+            refresh_time: TimeOfDay {
                 hour: 4,
                 minute: 30,
             },
@@ -180,7 +206,7 @@ async fn test_dispatch_system_config_import_export() {
                 name: Some("adblock-hosts".to_string()),
                 url: "https://example.com/adblock.hosts".to_string(),
                 kind: AdblockUrlKind::Blocklist,
-                format: lanforge_types::network::dns::adblock::AdblockSourceFormat::Auto,
+                format: AdblockSourceFormat::Auto,
             }]
         } else {
             vec![]
@@ -194,15 +220,13 @@ async fn test_dispatch_system_config_import_export() {
             vec![]
         },
         dns_adblock_rules: if cfg!(feature = "adblock") {
-            Some(vec![
-                lanforge_types::network::dns::adblock::AdblockRuleEntry {
-                    id: None,
-                    name: Some("custom-blocked".to_string()),
-                    domain: "custom-blocked.com".to_string(),
-                    action: AdblockRuleAction::Block,
-                    enabled: true,
-                },
-            ])
+            Some(vec![AdblockRuleEntry {
+                id: None,
+                name: Some("custom-blocked".to_string()),
+                domain: "custom-blocked.com".to_string(),
+                action: AdblockRuleAction::Block,
+                enabled: true,
+            }])
         } else {
             None
         },
@@ -243,7 +267,7 @@ async fn test_dispatch_system_config_import_export() {
         assert_eq!(cfg.dns_adblock_config.blocking_mode, BlockingMode::NullIp);
         assert_eq!(
             cfg.dns_adblock_config.refresh_time,
-            lanforge_types::network::dns::adblock::TimeOfDay {
+            TimeOfDay {
                 hour: 4,
                 minute: 30
             }
@@ -487,7 +511,7 @@ async fn wol_sends_packet_to_correct_device() {
 
     let mac = MacAddr::parse("00:11:22:33:44:55").unwrap();
     let ip = "192.168.1.100".parse().unwrap();
-    let expires = SystemTime::now() + std::time::Duration::from_secs(3600);
+    let expires = SystemTime::now() + Duration::from_secs(3600);
 
     // Seed the device in state so it has a hostname hint and IP
     let _ = client_ctx
@@ -540,7 +564,7 @@ async fn removing_a_static_host_demotes_it_and_purging_forgets_it() {
 
     // 2. Grant lease information in memory context
     let ip = "192.168.1.100".parse().unwrap();
-    let expires = SystemTime::now() + std::time::Duration::from_secs(3600);
+    let expires = SystemTime::now() + Duration::from_secs(3600);
     let _ = client_ctx
         .ctx
         .apply(DeviceUpdate::V4LeaseGranted { mac, ip, expires });
@@ -557,10 +581,7 @@ async fn removing_a_static_host_demotes_it_and_purging_forgets_it() {
     assert!(matches!(remove_res, Response::Success(_)));
     let dev = client_ctx.ctx.get_device(&mac).expect("the device stays");
     assert_eq!(dev.origin, Origin::Dynamic);
-    assert!(!matches!(
-        dev.v4,
-        lanforge_types::device::IPv4State::Static(_)
-    ));
+    assert!(!matches!(dev.v4, IPv4State::Static(_)));
     assert!(client_ctx.ctx.static_hosts().is_empty());
 
     // 4. Purge forgets it
@@ -634,8 +655,8 @@ async fn test_static_host_creation_creates_all_leases_for_specific_mac() {
 // PPPoE is file-owned: an API change is written to `[pppoe]` before it is applied
 // ---------------------------------------------------------------------------
 
-fn pppoe_with(username: &str) -> lanforge_types::network::pppoe::PppoeConfig {
-    let mut cfg = lanforge_types::network::pppoe::PppoeConfig {
+fn pppoe_with(username: &str) -> PppoeConfig {
+    let mut cfg = PppoeConfig {
         enabled: true,
         username: username.into(),
         password: "secret".into(),
@@ -650,7 +671,7 @@ async fn pppoe_update_is_written_to_the_config_file() {
     let client_ctx = init_test_context().await;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("lanforge.toml");
-    std::fs::write(&path, "# mine\n[system]\niface = \"lan0\"\n").unwrap();
+    fs::write(&path, "# mine\n[system]\niface = \"lan0\"\n").unwrap();
     client_ctx.ctx.set_config_path(&path);
     client_ctx.ctx.set_config_writable(true);
 
@@ -658,8 +679,8 @@ async fn pppoe_update_is_written_to_the_config_file() {
     let res = client_ctx.handle_update_pppoe_config(cfg.clone()).await;
     assert!(matches!(res, Response::Success(_)), "{res:?}");
 
-    let text = std::fs::read_to_string(&path).unwrap();
-    let file = lanforge_api::config_file::ConfigFile::parse(&text).unwrap();
+    let text = fs::read_to_string(&path).unwrap();
+    let file = ConfigFile::parse(&text).unwrap();
     assert_eq!(file.pppoe, cfg, "every field reaches the file");
     assert!(text.contains("# mine") && text.contains("iface = \"lan0\""));
     assert_eq!(client_ctx.ctx.get_pppoe_config(), Some(cfg));
@@ -670,7 +691,7 @@ async fn pppoe_update_is_rejected_when_the_file_cannot_take_it() {
     let client_ctx = init_test_context().await;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("lanforge.toml");
-    std::fs::write(&path, "[system\nbroken").unwrap();
+    fs::write(&path, "[system\nbroken").unwrap();
     client_ctx.ctx.set_config_path(&path);
     client_ctx.ctx.set_config_writable(true);
     let before = client_ctx.ctx.get_pppoe_config();
@@ -681,7 +702,7 @@ async fn pppoe_update_is_rejected_when_the_file_cannot_take_it() {
 
     assert!(matches!(res, Response::Error { .. }), "{res:?}");
     assert_eq!(client_ctx.ctx.get_pppoe_config(), before, "not applied");
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), "[system\nbroken");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "[system\nbroken");
 }
 
 #[tokio::test]
@@ -689,7 +710,7 @@ async fn pppoe_update_on_read_only_config_applies_in_memory_and_says_so() {
     let client_ctx = init_test_context().await;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("lanforge.toml");
-    std::fs::write(&path, "[system]\n").unwrap();
+    fs::write(&path, "[system]\n").unwrap();
     client_ctx.ctx.set_config_path(&path);
     client_ctx.ctx.set_config_writable(false);
 
@@ -701,7 +722,7 @@ async fn pppoe_update_on_read_only_config_applies_in_memory_and_says_so() {
     };
     assert!(ok.message.contains("not saved"), "{}", ok.message);
     assert_eq!(client_ctx.ctx.get_pppoe_config(), Some(cfg));
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), "[system]\n");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "[system]\n");
 }
 
 #[tokio::test]
@@ -709,19 +730,19 @@ async fn traffic_update_is_written_to_the_config_file() {
     let client_ctx = init_test_context().await;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("lanforge.toml");
-    std::fs::write(&path, "# mine\n[system]\niface = \"lan0\"\n").unwrap();
+    fs::write(&path, "# mine\n[system]\niface = \"lan0\"\n").unwrap();
     client_ctx.ctx.set_config_path(&path);
     client_ctx.ctx.set_config_writable(true);
 
-    let mut cfg = lanforge_types::network::TrafficConfig::default();
+    let mut cfg = TrafficConfig::default();
     cfg.sqm.enabled = true;
     cfg.sqm.rtt_ms = Some(25);
     cfg.sqm.raw_cake_args = Some("ack-filter".into());
     let res = client_ctx.handle_update_traffic_config(cfg.clone()).await;
     assert!(matches!(res, Response::Success(_)), "{res:?}");
 
-    let text = std::fs::read_to_string(&path).unwrap();
-    let file = lanforge_api::config_file::ConfigFile::parse(&text).unwrap();
+    let text = fs::read_to_string(&path).unwrap();
+    let file = ConfigFile::parse(&text).unwrap();
     assert_eq!(file.traffic, cfg, "every field reaches the file");
     assert!(text.contains("# mine"));
     assert_eq!(client_ctx.ctx.get_traffic_config(), Some(cfg));
@@ -731,39 +752,35 @@ async fn traffic_update_is_written_to_the_config_file() {
 // Firewall is file-owned: saved before it applies; a trial (auto-rollback) is not saved
 // ---------------------------------------------------------------------------
 
-fn file_firewall(path: &std::path::Path) -> lanforge_types::network::firewall::FirewallConfig {
-    let text = std::fs::read_to_string(path).unwrap();
-    let (fw, issues) = lanforge_api::config_file::ConfigFile::parse(&text)
-        .unwrap()
-        .firewall
-        .to_config();
+fn file_firewall(path: &Path) -> FirewallConfig {
+    let text = fs::read_to_string(path).unwrap();
+    let (fw, issues) = ConfigFile::parse(&text).unwrap().firewall.to_config();
     assert!(issues.is_empty(), "{issues:?}");
     fw
 }
 
-async fn firewall_ctx() -> (ClientContext, tempfile::TempDir, std::path::PathBuf) {
+async fn firewall_ctx() -> (ClientContext, TempDir, PathBuf) {
     let client_ctx = init_test_context().await;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("lanforge.toml");
-    std::fs::write(&path, "[system]\niface = \"lan0\"\n").unwrap();
+    fs::write(&path, "[system]\niface = \"lan0\"\n").unwrap();
     client_ctx.ctx.set_config_path(&path);
     client_ctx.ctx.set_config_writable(true);
     (client_ctx, dir, path)
 }
 
-fn with_forward(port: u16) -> lanforge_types::network::firewall::FirewallConfig {
-    let mut fw = lanforge_types::network::firewall::FirewallConfig::default();
-    fw.port_forwards
-        .push(lanforge_types::network::firewall::PortForwardRule {
-            comment: Some("game".into()),
-            src_zone: "external".into(),
-            internal_ip: "192.0.2.7".parse().unwrap(),
-            external_port: port,
-            internal_port: port,
-            protocol: lanforge_types::network::firewall::L4Protocol::Udp,
-            enable_hairpin: true,
-            family: None,
-        });
+fn with_forward(port: u16) -> FirewallConfig {
+    let mut fw = FirewallConfig::default();
+    fw.port_forwards.push(PortForwardRule {
+        comment: Some("game".into()),
+        src_zone: "external".into(),
+        internal_ip: "192.0.2.7".parse().unwrap(),
+        external_port: port,
+        internal_port: port,
+        protocol: L4Protocol::Udp,
+        enable_hairpin: true,
+        family: None,
+    });
     fw
 }
 
@@ -780,7 +797,7 @@ async fn firewall_update_is_written_to_the_config_file() {
 #[tokio::test]
 async fn firewall_with_a_zone_defined_twice_is_refused() {
     let (client_ctx, _dir, path) = firewall_ctx().await;
-    let mut fw = lanforge_types::network::firewall::FirewallConfig::default();
+    let mut fw = FirewallConfig::default();
     fw.zones.push(fw.zones[0].clone());
     let before = client_ctx.ctx.get_firewall_config();
 
@@ -789,15 +806,13 @@ async fn firewall_with_a_zone_defined_twice_is_refused() {
     assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
     assert_eq!(client_ctx.ctx.get_firewall_config(), before);
     assert_eq!(
-        std::fs::read_to_string(&path).unwrap(),
+        fs::read_to_string(&path).unwrap(),
         "[system]\niface = \"lan0\"\n"
     );
 }
 
 #[tokio::test]
 async fn firewall_trial_is_saved_only_when_confirmed() {
-    use lanforge_types::network::firewall::FirewallCommitRequest;
-
     let (client_ctx, _dir, path) = firewall_ctx().await;
     let saved = with_forward(7777);
     assert!(matches!(
@@ -834,12 +849,10 @@ async fn firewall_trial_is_saved_only_when_confirmed() {
 
 #[tokio::test]
 async fn dhcp_updates_are_written_to_the_config_file() {
-    use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
-
     let client_ctx = init_test_context().await;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("lanforge.toml");
-    std::fs::write(&path, "# mine\n[system]\niface = \"lan0\"\n").unwrap();
+    fs::write(&path, "# mine\n[system]\niface = \"lan0\"\n").unwrap();
     client_ctx.ctx.set_config_path(&path);
     client_ctx.ctx.set_config_writable(true);
 
@@ -865,10 +878,8 @@ async fn dhcp_updates_are_written_to_the_config_file() {
     let res = client_ctx.handle_update_dhcp_options(options.clone()).await;
     assert!(matches!(res, Response::Success(_)), "{res:?}");
 
-    let text = std::fs::read_to_string(&path).unwrap();
-    let (file, issues) = lanforge_api::config_file::ConfigFile::parse(&text)
-        .unwrap()
-        .dhcp_settings();
+    let text = fs::read_to_string(&path).unwrap();
+    let (file, issues) = ConfigFile::parse(&text).unwrap().dhcp_settings();
     assert!(issues.is_empty(), "{issues:?}");
     assert_eq!(
         file.options, options,
@@ -886,12 +897,10 @@ async fn dhcp_updates_are_written_to_the_config_file() {
 
 #[tokio::test]
 async fn a_dhcp_pool_the_file_cannot_hold_is_refused_and_not_applied() {
-    use lanforge_types::network::dhcp::Dhcpv4Pool;
-
     let client_ctx = init_test_context().await;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("lanforge.toml");
-    std::fs::write(&path, "[system]\n").unwrap();
+    fs::write(&path, "[system]\n").unwrap();
     client_ctx.ctx.set_config_path(&path);
     client_ctx.ctx.set_config_writable(true);
     let before = client_ctx.ctx.get_dhcp_v4_pools();
@@ -907,7 +916,7 @@ async fn a_dhcp_pool_the_file_cannot_hold_is_refused_and_not_applied() {
         .await;
     assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
     assert_eq!(client_ctx.ctx.get_dhcp_v4_pools(), before);
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), "[system]\n");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "[system]\n");
 }
 
 #[tokio::test]
@@ -918,7 +927,7 @@ async fn ra_update_is_written_to_the_config_file_without_the_lan_interface() {
     client_ctx.ctx.set_target_interface_name("lan0".into());
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("lanforge.toml");
-    std::fs::write(&path, "# mine\n[system]\niface = \"lan0\"\n").unwrap();
+    fs::write(&path, "# mine\n[system]\niface = \"lan0\"\n").unwrap();
     client_ctx.ctx.set_config_path(&path);
     client_ctx.ctx.set_config_writable(true);
 
@@ -932,8 +941,8 @@ async fn ra_update_is_written_to_the_config_file_without_the_lan_interface() {
     let res = client_ctx.handle_update_ra_config(cfg.clone()).await;
     assert!(matches!(res, Response::Success(_)), "{res:?}");
 
-    let text = std::fs::read_to_string(&path).unwrap();
-    let file = lanforge_api::config_file::ConfigFile::parse(&text).unwrap();
+    let text = fs::read_to_string(&path).unwrap();
+    let file = ConfigFile::parse(&text).unwrap();
     assert_eq!(file.ra.iface, None, "follows [system] iface");
     let (from_file, issues) = file.ra.to_config();
     assert!(issues.is_empty(), "{issues:?}");
@@ -958,13 +967,13 @@ async fn ra_update_is_written_to_the_config_file_without_the_lan_interface() {
 }
 
 /// Host changes reach `[hosts]` before they apply: the reservation and the boot file are
-/// written (comments kept), the DNS log switch is not (a WebUI setting, kept on the device).
+/// written (comments kept), the DNS log switch is not (a `WebUI` setting, kept on the device).
 #[tokio::test]
 async fn host_changes_are_written_to_the_config_file() {
     let client_ctx = init_test_context().await;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("lanforge.toml");
-    std::fs::write(&path, "# mine\n[system]\niface = \"lan0\"\n").unwrap();
+    fs::write(&path, "# mine\n[system]\niface = \"lan0\"\n").unwrap();
     client_ctx.ctx.set_config_path(&path);
     client_ctx.ctx.set_config_writable(true);
     let mac = MacAddr::parse("04:d9:f5:0a:25:94").unwrap();
@@ -986,10 +995,8 @@ async fn host_changes_are_written_to_the_config_file() {
         .await;
     assert!(matches!(res, Response::Success(_)), "{res:?}");
 
-    let text = std::fs::read_to_string(&path).unwrap();
-    let (hosts, issues) = lanforge_api::config_file::ConfigFile::parse(&text)
-        .unwrap()
-        .static_hosts();
+    let text = fs::read_to_string(&path).unwrap();
+    let (hosts, issues) = ConfigFile::parse(&text).unwrap().static_hosts();
     assert!(issues.is_empty(), "{issues:?}");
     assert_eq!(hosts, client_ctx.ctx.static_hosts());
     assert_eq!(hosts[0].v4, Some("192.168.0.129".parse().unwrap()));
@@ -1006,17 +1013,17 @@ async fn host_changes_are_written_to_the_config_file() {
         .handle_host_set(mac, "v6".into(), "::zz".into())
         .await;
     assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    assert_eq!(fs::read_to_string(&path).unwrap(), text);
 
     // Removing it empties `[hosts]`; the device stays.
     let res = client_ctx.handle_host_remove(mac).await;
     assert!(matches!(res, Response::Success(_)), "{res:?}");
-    let text = std::fs::read_to_string(&path).unwrap();
+    let text = fs::read_to_string(&path).unwrap();
     assert!(!text.contains("[hosts"), "{text}");
     assert!(client_ctx.ctx.get_device(&mac).is_some());
 }
 
-/// An update without a boot file (the WebUI does not send one) keeps the host's.
+/// An update without a boot file (the `WebUI` does not send one) keeps the host's.
 #[tokio::test]
 async fn a_host_update_without_a_boot_file_keeps_it() {
     let client_ctx = init_test_context().await;
@@ -1047,28 +1054,22 @@ const OWNER_DNS: &str = "[system]\niface = \"lan0\"\n\n# resolvers\n[dns]\nenabl
     \"*.eonteam.xyz\" = \"dev:pixie\"\n";
 
 /// A client whose live DNS settings are `OWNER_DNS`, as the boot applies them.
-async fn owner_dns_client(writable: bool) -> (ClientContext, tempfile::TempDir) {
+async fn owner_dns_client(writable: bool) -> (ClientContext, TempDir) {
     let client_ctx = init_test_context().await;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("lanforge.toml");
-    std::fs::write(&path, OWNER_DNS).unwrap();
+    fs::write(&path, OWNER_DNS).unwrap();
     client_ctx.ctx.set_config_path(&path);
     client_ctx.ctx.set_config_writable(writable);
-    let (dns, issues) = lanforge_api::config_file::ConfigFile::parse(OWNER_DNS)
-        .unwrap()
-        .dns
-        .to_config();
+    let (dns, issues) = ConfigFile::parse(OWNER_DNS).unwrap().dns.to_config();
     assert!(issues.is_empty(), "{issues:?}");
     client_ctx.apply_dns_settings(dns);
     (client_ctx, dir)
 }
 
-fn dns_in_file(dir: &tempfile::TempDir) -> (lanforge_api::config_file::DnsSettings, String) {
-    let text = std::fs::read_to_string(dir.path().join("lanforge.toml")).unwrap();
-    let (dns, issues) = lanforge_api::config_file::ConfigFile::parse(&text)
-        .unwrap()
-        .dns
-        .to_config();
+fn dns_in_file(dir: &TempDir) -> (DnsSettings, String) {
+    let text = fs::read_to_string(dir.path().join("lanforge.toml")).unwrap();
+    let (dns, issues) = ConfigFile::parse(&text).unwrap().dns.to_config();
     assert!(issues.is_empty(), "{issues:?}\n{text}");
     (dns, text)
 }
@@ -1156,11 +1157,7 @@ async fn dns_changes_are_written_to_the_config_file() {
     assert!(matches!(res, Response::DnsUpstreamMode(_)), "{res:?}");
 
     let (back, text) = dns_in_file(&dir);
-    let owner = lanforge_api::config_file::ConfigFile::parse(OWNER_DNS)
-        .unwrap()
-        .dns
-        .to_config()
-        .0;
+    let owner = ConfigFile::parse(OWNER_DNS).unwrap().dns.to_config().0;
     assert_eq!(back, owner, "back to the owner's settings\n{text}");
 }
 
@@ -1234,12 +1231,12 @@ async fn a_refused_dns_change_writes_and_applies_nothing() {
         .await;
     assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
     assert_eq!(
-        std::fs::read_to_string(dir.path().join("lanforge.toml")).unwrap(),
+        fs::read_to_string(dir.path().join("lanforge.toml")).unwrap(),
         OWNER_DNS
     );
     assert_eq!(client_ctx.ctx.get_dns_rewrites().len(), 1);
 
-    std::fs::write(dir.path().join("lanforge.toml"), "[system\nbroken").unwrap();
+    fs::write(dir.path().join("lanforge.toml"), "[system\nbroken").unwrap();
     let res = client_ctx
         .handle_dns_upstream_set_default(vec!["9.9.9.9:53".parse().unwrap()])
         .await;
@@ -1261,7 +1258,7 @@ async fn dns_default_upstreams_are_replaced_in_one_change() {
         .await;
     assert!(matches!(res, Response::Success(_)), "{res:?}");
 
-    let quad9: Vec<std::net::SocketAddr> = vec![
+    let quad9: Vec<SocketAddr> = vec![
         "9.9.9.9:53".parse().unwrap(),
         "[2620:fe::fe]:53".parse().unwrap(),
     ];
@@ -1307,7 +1304,7 @@ async fn dns_change_on_read_only_config_applies_in_memory_and_says_so() {
     assert!(ok.message.contains("not saved"), "{}", ok.message);
     assert!(client_ctx.ctx.get_dns_rewrites().is_empty());
     assert_eq!(
-        std::fs::read_to_string(dir.path().join("lanforge.toml")).unwrap(),
+        fs::read_to_string(dir.path().join("lanforge.toml")).unwrap(),
         OWNER_DNS
     );
 }
@@ -1366,16 +1363,16 @@ const OWNER_RULES: &str = "! Bradesco\n@@||app-measurement.com^\n@@||www.googlet
 
 /// A client whose live adblock settings and rules are the owner's, as the boot applies them.
 #[cfg(feature = "adblock")]
-async fn owner_adblock_client(writable: bool) -> (ClientContext, tempfile::TempDir) {
+async fn owner_adblock_client(writable: bool) -> (ClientContext, TempDir) {
     let client_ctx = init_test_context().await;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir().unwrap();
     let path = dir.path().join("lanforge.toml");
-    std::fs::write(&path, OWNER_ADBLOCK).unwrap();
-    std::fs::create_dir(dir.path().join("adblock")).unwrap();
-    std::fs::write(dir.path().join("adblock/global.rules"), OWNER_RULES).unwrap();
+    fs::write(&path, OWNER_ADBLOCK).unwrap();
+    fs::create_dir(dir.path().join("adblock")).unwrap();
+    fs::write(dir.path().join("adblock/global.rules"), OWNER_RULES).unwrap();
     client_ctx.ctx.set_config_path(&path);
     client_ctx.ctx.set_config_writable(writable);
-    let (adblock, issues) = lanforge_api::config_file::ConfigFile::parse(OWNER_ADBLOCK)
+    let (adblock, issues) = ConfigFile::parse(OWNER_ADBLOCK)
         .unwrap()
         .adblock
         .to_config();
@@ -1389,14 +1386,9 @@ async fn owner_adblock_client(writable: bool) -> (ClientContext, tempfile::TempD
 
 /// `[adblock]` and the rules file as the boot reads them, plus the `lanforge.toml` text.
 #[cfg(feature = "adblock")]
-fn adblock_in_files(
-    dir: &tempfile::TempDir,
-) -> (lanforge_api::config_file::AdblockSettings, String, String) {
-    let text = std::fs::read_to_string(dir.path().join("lanforge.toml")).unwrap();
-    let (adblock, issues) = lanforge_api::config_file::ConfigFile::parse(&text)
-        .unwrap()
-        .adblock
-        .to_config();
+fn adblock_in_files(dir: &TempDir) -> (AdblockSettings, String, String) {
+    let text = fs::read_to_string(dir.path().join("lanforge.toml")).unwrap();
+    let (adblock, issues) = ConfigFile::parse(&text).unwrap().adblock.to_config();
     assert!(issues.is_empty(), "{issues:?}\n{text}");
     let (rules, rule_issues) = adblock.load_rules(&dir.path().join("lanforge.toml"));
     assert!(rule_issues.is_empty(), "{rule_issues:?}");
@@ -1546,8 +1538,8 @@ async fn adblock_change_on_read_only_config_applies_in_memory_and_says_so() {
 async fn every_block_path_announces_the_block() {
     let (client_ctx, _dir) = owner_adblock_client(true).await;
     let mut rx = client_ctx.ctx.bus().subscribe_dns();
-    let blocked = |rx: &mut tokio::sync::broadcast::Receiver<_>| {
-        std::iter::from_fn(|| rx.try_recv().ok())
+    let blocked = |rx: &mut Receiver<_>| {
+        iter::from_fn(|| rx.try_recv().ok())
             .filter_map(|e: TimedEvent| match e.event {
                 LanforgeEvent::Dns(DnsEvent::AdblockBlock(d)) => Some(d),
                 _ => None,
@@ -1628,9 +1620,9 @@ async fn a_pasted_list_is_imported_in_one_write() {
 #[tokio::test]
 async fn the_first_rule_creates_the_rules_file() {
     let client_ctx = init_test_context().await;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir().unwrap();
     let path = dir.path().join("lanforge.toml");
-    std::fs::write(&path, "[adblock]\nenabled = true\n").unwrap();
+    fs::write(&path, "[adblock]\nenabled = true\n").unwrap();
     client_ctx.ctx.set_config_path(&path);
     client_ctx.ctx.set_config_writable(true);
 
@@ -1678,15 +1670,15 @@ async fn a_fresh_query_is_in_the_log_at_once() {
         if let Some(s) = client.ctx.storage_handle() {
             break s;
         }
-        tokio::task::yield_now().await;
+        yield_now().await;
     };
     // The worker answers storage calls only from `serve`, after it subscribed to the bus.
     storage
-        .call(|s: &lanforge_db_core::Stores| s.db.is_provisioned())
+        .call(|s: &Stores| s.db.is_provisioned())
         .await
         .unwrap();
     // The periodic flush ticks once at start; let it pass so only the 60 s tick is left.
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    sleep(Duration::from_millis(20)).await;
 
     let _ = client
         .ctx
@@ -1695,7 +1687,7 @@ async fn a_fresh_query_is_in_the_log_at_once() {
             QueryLogEntry {
                 // Recent: the log store prunes lines older than a week.
                 timestamp: SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .duration_since(UNIX_EPOCH)
                     .unwrap()
                     .as_secs(),
                 src_ip: "192.168.1.20".parse().unwrap(),
@@ -1713,7 +1705,7 @@ async fn a_fresh_query_is_in_the_log_at_once() {
             },
         ))));
     // The query was answered before the admin opened the log.
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     let res = client
         .handle_dns_query_log(None, None, None, None, None, false, None)

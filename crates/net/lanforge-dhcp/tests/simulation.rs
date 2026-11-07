@@ -1,5 +1,15 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 mod common;
 
+use std::iter;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, SystemTime};
 
@@ -20,7 +30,7 @@ use lanforge_dhcp::v4::server::HandleResult as HandleResultV4;
 use lanforge_dhcp::v6::server::HandleResult as HandleResultV6;
 use lanforge_types::device::Origin;
 use lanforge_types::identifiers::{Duid, MacAddr};
-use lanforge_types::update::{CliHostUpdate, DeviceUpdate};
+use lanforge_types::update::{CliHostUpdate, DeviceUpdate, V6LeaseUpdate};
 
 #[test]
 fn test_dhcpv4_dora_lifecycle_simulation() {
@@ -260,15 +270,13 @@ fn test_dhcpv6_sarr_lifecycle_simulation() {
     );
 
     // Register lease in context (what the service wrapper does)
-    let _ = ctx.apply(DeviceUpdate::V6LeaseGranted(Box::new(
-        lanforge_types::update::V6LeaseUpdate {
-            mac: Some(client_mac),
-            duid: client_duid.clone(),
-            iaid: 1,
-            ips: std::iter::once(offered_ip).collect(),
-            expires: SystemTime::now() + Duration::from_secs(86400),
-        },
-    )));
+    let _ = ctx.apply(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
+        mac: Some(client_mac),
+        duid: client_duid.clone(),
+        iaid: 1,
+        ips: iter::once(offered_ip).collect(),
+        expires: SystemTime::now() + Duration::from_secs(86400),
+    })));
 
     // --- 3. RELEASE ---
     let release_msg = Dhcpv6PacketBuilder::release(client_duid.clone(), server_duid)

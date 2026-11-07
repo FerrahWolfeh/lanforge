@@ -10,7 +10,6 @@ authors.workspace = true
 lanforge-api = { workspace = true }
 lanforge-api-dispatch = { workspace = true }
 lanforge-core = { workspace = true }
-lanforge-macros = { workspace = true }
 lanforge-types = { workspace = true }
 
 # Workspace
@@ -18,7 +17,6 @@ tokio = { workspace = true, features = ["io-util", "net", "sync", "rt"] }
 serde = { workspace = true, features = ["rc"] }
 tracing = { workspace = true }
 thiserror = { workspace = true }
-futures = { workspace = true }
 postcard = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
@@ -35,3 +33,6 @@ hotpath = [
 
 [dev-dependencies]
 lanforge-db = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,3 +1,4 @@
+use crate::network::TrafficHistorySample;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -8,5 +9,5 @@ pub enum StorageEvent {
     DbResetCompleted,
     TableDirty,
     DbWrite { devices: usize },
-    SaveTrafficHistory(Vec<crate::network::TrafficHistorySample>),
+    SaveTrafficHistory(Vec<TrafficHistorySample>),
 }

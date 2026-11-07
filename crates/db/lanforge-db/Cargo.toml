@@ -21,25 +21,21 @@ hotpath-alloc = [
 [dependencies]
 # Lanforge
 lanforge-core = { workspace = true }
-lanforge-api = { workspace = true }
-lanforge-macros = { workspace = true }
 lanforge-types = { workspace = true }
 lanforge-db-core = { path = "../lanforge-db-core" }
 lanforge-db-redb = { path = "../lanforge-db-redb" }
 
 # Workspace
-thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
 serde = { workspace = true }
 tracing = { workspace = true }
-chrono = { workspace = true }
-serde_json = { workspace = true }
 hotpath = { workspace = true, optional = true }
-futures.workspace = true
-parking_lot.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
 tempfile = "3.27.0"
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
 smallvec = { workspace = true }
+
+[lints]
+workspace = true

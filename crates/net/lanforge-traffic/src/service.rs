@@ -1,15 +1,23 @@
+use std::time::Duration;
+
+use crate::collector::get_traffic_history_snapshot;
+use crate::tuning::cpu::resolve_effective_cpu_mask;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
-    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
-    ServiceCommand, ServiceHandle, ServiceSpec,
+    Activation, AsyncService, Condition, Edge, LanforgeService, LossPolicy, RestartPolicy,
+    RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
 };
-use lanforge_types::events::LanforgeEvent;
+use lanforge_types::config::ConfigDomain;
 use lanforge_types::events::pppoe::PppoeEvent;
 use lanforge_types::events::system::SystemEvent;
 use lanforge_types::events::traffic::TrafficEvent;
+use lanforge_types::events::{LanforgeEvent, StorageEvent};
 use lanforge_types::network::TrafficConfig;
+use lanforge_types::network::snapshot::WanSnapshot;
 use lanforge_types::system::{DormantReason, ServiceId, ServiceState, TrafficStatusResponse};
+use tokio::sync::broadcast::error::RecvError;
+use tokio::time::{MissedTickBehavior, interval};
 use tracing::{debug, info};
 
 #[cfg(any(test, feature = "inert"))]
@@ -17,10 +25,7 @@ use crate::host::InertTraffic;
 use crate::host::{KernelTraffic, TrafficHost};
 
 const TRAFFIC_DEPS: &[Edge] = &[
-    Edge::requires(
-        ServiceId::Interfaces,
-        lanforge_core::service::LossPolicy::Continue,
-    ),
+    Edge::requires(ServiceId::Interfaces, LossPolicy::Continue),
     Edge::wants(ServiceId::Wan),
 ];
 
@@ -60,7 +65,7 @@ impl<H: TrafficHost> TrafficService<H> {
     /// A service acting on the machine through `host`.
     #[must_use]
     pub fn with_host(cfg: TrafficConfig, host: H) -> Self {
-        let cpu_mask = crate::tuning::cpu::resolve_effective_cpu_mask(&cfg.tuning.cpu_mask);
+        let cpu_mask = resolve_effective_cpu_mask(&cfg.tuning.cpu_mask);
         Self {
             cfg,
             active_wan: None,
@@ -211,8 +216,7 @@ impl<H: TrafficHost> TrafficService<H> {
                 .host
                 .apply_tuning(&self.cfg.tuning, &default_ifaces)
                 .await;
-            self.effective_cpu_mask =
-                crate::tuning::cpu::resolve_effective_cpu_mask(&self.cfg.tuning.cpu_mask);
+            self.effective_cpu_mask = resolve_effective_cpu_mask(&self.cfg.tuning.cpu_mask);
             self.tuned_interfaces.clone_from(&tuned);
             let _ = ctx.bus().publish(LanforgeEvent::Traffic(Box::new(
                 TrafficEvent::TuningApplied {
@@ -257,8 +261,7 @@ impl<H: TrafficHost> TrafficService<H> {
                     .host
                     .apply_tuning(&new_cfg.tuning, &default_ifaces)
                     .await;
-                self.effective_cpu_mask =
-                    crate::tuning::cpu::resolve_effective_cpu_mask(&new_cfg.tuning.cpu_mask);
+                self.effective_cpu_mask = resolve_effective_cpu_mask(&new_cfg.tuning.cpu_mask);
                 self.tuned_interfaces = tuned;
             } else {
                 self.tuned_interfaces.clear();
@@ -282,11 +285,7 @@ impl<H: TrafficHost> TrafficService<H> {
         self.update_service_state(ctx);
     }
 
-    async fn handle_wan_snapshot(
-        &mut self,
-        ctx: &LanforgeContext,
-        snap: &lanforge_types::network::snapshot::WanSnapshot,
-    ) {
+    async fn handle_wan_snapshot(&mut self, ctx: &LanforgeContext, snap: &WanSnapshot) {
         if snap.is_up() {
             if let Some(ref ifname) = snap.ifname {
                 let is_pppoe = ifname.starts_with("ppp");
@@ -373,8 +372,8 @@ impl<H: TrafficHost> TrafficService<H> {
         let mut if_rx = ctx.watch_interfaces();
         let mut wan_rx = ctx.watch_wan();
 
-        let mut telemetry_tick = tokio::time::interval(std::time::Duration::from_millis(2500));
-        telemetry_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut telemetry_tick = interval(Duration::from_millis(2500));
+        telemetry_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         loop {
             tokio::select! {
@@ -382,10 +381,10 @@ impl<H: TrafficHost> TrafficService<H> {
                     match cmd {
                         ServiceCommand::Stop | ServiceCommand::Shutdown => {
                             debug!("Stop/shutdown command received");
-                            let history = crate::collector::get_traffic_history_snapshot().await;
+                            let history = get_traffic_history_snapshot().await;
                             if !history.is_empty() {
                                 let _ = ctx.bus().publish(LanforgeEvent::Storage(
-                                    lanforge_types::events::StorageEvent::SaveTrafficHistory(history),
+                                    StorageEvent::SaveTrafficHistory(history),
                                 ));
                             }
                             break;
@@ -393,10 +392,10 @@ impl<H: TrafficHost> TrafficService<H> {
                         ServiceCommand::Restart => {
                             debug!("Restart command received");
                             h.request_restart();
-                            let history = crate::collector::get_traffic_history_snapshot().await;
+                            let history = get_traffic_history_snapshot().await;
                             if !history.is_empty() {
                                 let _ = ctx.bus().publish(LanforgeEvent::Storage(
-                                    lanforge_types::events::StorageEvent::SaveTrafficHistory(history),
+                                    StorageEvent::SaveTrafficHistory(history),
                                 ));
                             }
                             break;
@@ -427,8 +426,8 @@ impl<H: TrafficHost> TrafficService<H> {
                                 self.handle_traffic_config_change(ctx).await;
                             }
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                        Err(RecvError::Closed) => break,
+                        Err(RecvError::Lagged(_)) => {}
                     }
                 }
 
@@ -439,8 +438,8 @@ impl<H: TrafficHost> TrafficService<H> {
                                 self.handle_pppoe_event(ctx, pe).await;
                             }
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                        Err(RecvError::Closed) => break,
+                        Err(RecvError::Lagged(_)) => {}
                     }
                 }
 
@@ -449,17 +448,17 @@ impl<H: TrafficHost> TrafficService<H> {
                         Ok(te) => {
                             if matches!(te.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
                                 debug!("Shutdown signal received");
-                                let history = crate::collector::get_traffic_history_snapshot().await;
+                                let history = get_traffic_history_snapshot().await;
                                 if !history.is_empty() {
                                     let _ = ctx.bus().publish(LanforgeEvent::Storage(
-                                        lanforge_types::events::StorageEvent::SaveTrafficHistory(history),
+                                        StorageEvent::SaveTrafficHistory(history),
                                     ));
                                 }
                                 break;
                             }
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                        Err(RecvError::Closed) => break,
+                        Err(RecvError::Lagged(_)) => {}
                     }
                 }
             }
@@ -474,15 +473,15 @@ impl<H: TrafficHost> LanforgeService for TrafficService<H> {
             display_name: "Traffic & SQM Manager",
             runtime: RuntimeClass::Shared,
             restart: RestartPolicy {
-                base_backoff: std::time::Duration::from_secs(2),
-                max_backoff: std::time::Duration::from_secs(10),
+                base_backoff: Duration::from_secs(2),
+                max_backoff: Duration::from_secs(10),
                 max_retries: 3,
-                healthy_uptime: std::time::Duration::from_secs(30),
+                healthy_uptime: Duration::from_secs(30),
             },
-            shutdown_timeout: std::time::Duration::from_secs(3),
+            shutdown_timeout: Duration::from_secs(3),
             deps: TRAFFIC_DEPS,
             condition: Condition {
-                sections: &[lanforge_types::config::ConfigDomain::Traffic],
+                sections: &[ConfigDomain::Traffic],
                 eval: |ctx| {
                     if ctx
                         .get_traffic_config()

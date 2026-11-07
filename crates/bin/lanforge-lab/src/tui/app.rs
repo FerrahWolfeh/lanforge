@@ -1,10 +1,14 @@
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
+use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::dns::DnsRecordType;
 use parking_lot::Mutex;
 use rand::RngExt;
 
+use crate::engine::DiscoveryEngine;
 use crate::harness::LabHarness;
 
 /// Visual action item in the TUI menu.
@@ -101,12 +105,12 @@ impl App {
         }
     }
 
-    pub fn add_log(&self, msg: impl Into<String>) {
+    pub fn add_log(&self, msg: String) {
         let mut l = self.logs.lock();
         if l.len() >= 200 {
             l.pop_front();
         }
-        l.push_back(msg.into());
+        l.push_back(msg);
     }
 
     pub fn next_action(&mut self) {
@@ -143,14 +147,13 @@ impl App {
 
         self.is_busy = true;
         self.status_message = format!("Running {}...", action.title());
-        let logs = self.logs.clone();
+        let logs = Arc::clone(&self.logs);
 
         tokio::spawn(async move {
             match action {
                 LabAction::DhcpDora => {
                     let b = rand::rng().random_range(10..=250);
-                    let mac =
-                        lanforge_types::identifiers::MacAddr([0x02, 0x11, 0x22, 0x33, 0x44, b]);
+                    let mac = MacAddr([0x02, 0x11, 0x22, 0x33, 0x44, b]);
                     logs.lock().push_back(format!(
                         "-> [DHCP] Simulating client {mac} (hostname: 'lab-device-{b}')..."
                     ));
@@ -212,11 +215,7 @@ impl App {
                     for d in domains {
                         logs.lock()
                             .push_back(format!("-> [DNS] Querying '{d}' (A record)..."));
-                        match harness
-                            .dns()
-                            .query(d, lanforge_types::network::dns::DnsRecordType::A)
-                            .await
-                        {
+                        match harness.dns().query(d, DnsRecordType::A).await {
                             Ok(res) => {
                                 let blk = if res.is_blocked {
                                     " [ADBLOCK BLOCKED]"
@@ -238,7 +237,7 @@ impl App {
                 LabAction::DiscoveryPing => {
                     logs.lock()
                         .push_back("-> [PROBE] Sending connectivity probe...".to_string());
-                    match crate::engine::DiscoveryEngine::probe_rtt(harness.dhcp_target).await {
+                    match DiscoveryEngine::probe_rtt(harness.dhcp_target).await {
                         Ok(dur) => {
                             logs.lock().push_back(format!(
                                 "<- [PROBE] RTT against {}: {:.2} ms",
@@ -269,7 +268,7 @@ impl App {
                         .push_back("-> [FLOOD] Running DNS Flood (1,000 queries)...".to_string());
                     match harness
                         .dns()
-                        .flood_benchmark(1000, std::time::Duration::from_secs(1), &[])
+                        .flood_benchmark(1000, Duration::from_secs(1), &[])
                         .await
                     {
                         Ok(rep) => {

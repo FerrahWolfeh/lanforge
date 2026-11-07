@@ -32,20 +32,27 @@ use serde::{Deserialize, Serialize};
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
+use lanforge_core::service::{
+    AsyncService, Condition, LanforgeService, RestartPolicy, RuntimeClass, ServiceCommand,
+    ServiceHandle, ServiceSpec,
+};
 use pnet::datalink::interfaces;
 use smallvec::SmallVec;
-use std::io::{ErrorKind, Write};
+use std::io::{Cursor, ErrorKind, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
+use std::str;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::task;
+use tokio::time::interval;
 use tracing::{debug, error, info, warn};
 
 use lanforge_dns_wire::{WireDecoder, WireEncoder};
 use lanforge_transport::TransportMetrics;
 
-use crate::error::NetworkError;
+use crate::error::DiscoveryError;
 
 const MDNS_PORT: u16 = 5353;
 const MDNS_IPV4: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 251);
@@ -79,18 +86,52 @@ enum MdnsCommand {
 ///
 /// Sends commands to the background worker via an `mpsc` channel.
 /// The worker manages the actual socket listeners and packet processing.
-#[lanforge_macros::lanforge_service(
-    id = "mdns",
-    name = "mDNS Prober",
-    retries = 0,
-    base_backoff = 2,
-    max_backoff = 30
-)]
 pub struct MdnsProber {
     cfg: MdnsConfig,
     tx: Sender<MdnsCommand>,
     metrics: Arc<TransportMetrics>,
     _ctx: LanforgeContext,
+}
+
+impl MdnsProber {
+    /// Static identifier for the service.
+    pub const SERVICE_ID: ServiceId = ServiceId::Mdns;
+
+    /// Creates a new `MdnsProber`.
+    #[must_use]
+    pub fn new(cfg: MdnsConfig, ctx: LanforgeContext) -> Self {
+        let (tx, _) = mpsc::channel(32);
+        Self {
+            cfg,
+            tx,
+            metrics: Arc::new(TransportMetrics::new()),
+            _ctx: ctx,
+        }
+    }
+
+    /// Requests a full mDNS broadcast probe across all interfaces.
+    pub async fn trigger_scan(&self) {
+        let _ = self.tx.send(MdnsCommand::ProbeAll).await;
+    }
+}
+
+impl LanforgeService for MdnsProber {
+    fn spec(&self) -> ServiceSpec {
+        ServiceSpec {
+            id: Self::SERVICE_ID,
+            display_name: "mDNS Prober",
+            runtime: RuntimeClass::Shared,
+            restart: RestartPolicy {
+                base_backoff: Duration::from_secs(2),
+                max_backoff: Duration::from_secs(30),
+                max_retries: 0,
+                healthy_uptime: Duration::from_secs(30),
+            },
+            shutdown_timeout: Duration::from_secs(3),
+            deps: &[],
+            condition: Condition::ALWAYS,
+        }
+    }
 }
 
 impl AsyncService for MdnsProber {
@@ -110,7 +151,7 @@ impl AsyncService for MdnsProber {
             ctx.clone(),
             rx,
             tx,
-            self.metrics.clone(),
+            Arc::clone(&self.metrics),
             h,
         )
         .await
@@ -123,23 +164,6 @@ impl AsyncService for MdnsProber {
 }
 
 impl MdnsProber {
-    /// Creates a new `MdnsProber`.
-    #[must_use]
-    pub fn new(cfg: MdnsConfig, ctx: LanforgeContext) -> Self {
-        let (tx, _) = mpsc::channel(32);
-        Self {
-            cfg,
-            tx,
-            metrics: Arc::new(TransportMetrics::new()),
-            _ctx: ctx,
-        }
-    }
-
-    /// Requests a full mDNS broadcast probe across all interfaces.
-    pub async fn trigger_scan(&self) {
-        let _ = self.tx.send(MdnsCommand::ProbeAll).await;
-    }
-
     /// Sends a targeted mDNS PTR query for a specific IP address.
     pub async fn probe_ip(&self, ip: IpAddr) {
         let _ = self.tx.send(MdnsCommand::ProbeIp(ip)).await;
@@ -154,7 +178,7 @@ async fn run_mdns_worker(
     tx: Sender<MdnsCommand>,
     metrics: Arc<TransportMetrics>,
     h: &ServiceHandle,
-) -> Result<(), NetworkError> {
+) -> Result<(), DiscoveryError> {
     let bus = ctx.bus();
     // We bind to a random port to SEND queries, and a fixed port to LISTEN if we want passive,
     // but on Linux, to receive multicast, we usually bind to 5353 with REUSEPORT.
@@ -166,15 +190,15 @@ async fn run_mdns_worker(
     // Spawn listeners
     let socket_v4_clone = socket_v4
         .try_clone()
-        .map_err(|e| NetworkError::Socket(e.to_string()))?;
+        .map_err(|e| DiscoveryError::Socket(e.to_string()))?;
     socket_v4_clone
         .set_read_timeout(Some(Duration::from_millis(500)))
-        .map_err(|e| NetworkError::Socket(e.to_string()))?;
+        .map_err(|e| DiscoveryError::Socket(e.to_string()))?;
     let resp_tx_v4 = resp_tx.clone();
 
     let ctx_v4 = ctx.clone();
-    let metrics_v4 = metrics.clone();
-    tokio::task::spawn_blocking(move || {
+    let metrics_v4 = Arc::clone(&metrics);
+    task::spawn_blocking(move || {
         let mut buf = [0u8; 4096];
         while ctx_v4.is_running() {
             match socket_v4_clone.recv_from(&mut buf) {
@@ -195,15 +219,15 @@ async fn run_mdns_worker(
 
     let socket_v6_clone = socket_v6
         .try_clone()
-        .map_err(|e| NetworkError::Socket(e.to_string()))?;
+        .map_err(|e| DiscoveryError::Socket(e.to_string()))?;
     socket_v6_clone
         .set_read_timeout(Some(Duration::from_millis(500)))
-        .map_err(|e| NetworkError::Socket(e.to_string()))?;
+        .map_err(|e| DiscoveryError::Socket(e.to_string()))?;
     let resp_tx_v6 = resp_tx.clone();
 
     let ctx_v6 = ctx.clone();
-    let metrics_v6 = metrics.clone();
-    tokio::task::spawn_blocking(move || {
+    let metrics_v6 = Arc::clone(&metrics);
+    task::spawn_blocking(move || {
         let mut buf = [0u8; 4096];
         while ctx_v6.is_running() {
             match socket_v6_clone.recv_from(&mut buf) {
@@ -223,7 +247,7 @@ async fn run_mdns_worker(
     });
 
     let mut bus_rx = bus.subscribe_system();
-    let mut probe_timer = tokio::time::interval(Duration::from_secs(cfg.probe_interval));
+    let mut probe_timer = interval(Duration::from_secs(cfg.probe_interval));
 
     if cfg.enabled {
         let _ = tx.try_send(MdnsCommand::ProbeAll);
@@ -253,7 +277,7 @@ async fn run_mdns_worker(
                             break;
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    Err(RecvError::Lagged(n)) => {
                         warn!(service = "mDNS", lost = n, "Event bus lagged");
                     }
                     Err(_) => break,
@@ -297,23 +321,23 @@ fn handle_command(
     }
 }
 
-fn setup_multicast_socket_v4() -> Result<UdpSocket, NetworkError> {
+fn setup_multicast_socket_v4() -> Result<UdpSocket, DiscoveryError> {
     use socket2::{Domain, Protocol, Socket, Type};
     let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))
-        .map_err(|e| NetworkError::Socket(e.to_string()))?;
+        .map_err(|e| DiscoveryError::Socket(e.to_string()))?;
 
     socket
         .set_reuse_address(true)
-        .map_err(|e| NetworkError::Socket(e.to_string()))?;
+        .map_err(|e| DiscoveryError::Socket(e.to_string()))?;
     #[cfg(unix)]
     socket
         .set_reuse_port(true)
-        .map_err(|e| NetworkError::Socket(e.to_string()))?;
+        .map_err(|e| DiscoveryError::Socket(e.to_string()))?;
 
     // Bind to all interfaces on 5353
     socket
         .bind(&SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), MDNS_PORT).into())
-        .map_err(|e| NetworkError::Socket(e.to_string()))?;
+        .map_err(|e| DiscoveryError::Socket(e.to_string()))?;
 
     // Join multicast on all interfaces
     let interfaces = interfaces();
@@ -331,25 +355,25 @@ fn setup_multicast_socket_v4() -> Result<UdpSocket, NetworkError> {
     Ok(socket.into())
 }
 
-fn setup_multicast_socket_v6() -> Result<UdpSocket, NetworkError> {
+fn setup_multicast_socket_v6() -> Result<UdpSocket, DiscoveryError> {
     use socket2::{Domain, Protocol, Socket, Type};
     let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))
-        .map_err(|e| NetworkError::Socket(e.to_string()))?;
+        .map_err(|e| DiscoveryError::Socket(e.to_string()))?;
 
     socket
         .set_only_v6(true)
-        .map_err(|e| NetworkError::Socket(e.to_string()))?;
+        .map_err(|e| DiscoveryError::Socket(e.to_string()))?;
     socket
         .set_reuse_address(true)
-        .map_err(|e| NetworkError::Socket(e.to_string()))?;
+        .map_err(|e| DiscoveryError::Socket(e.to_string()))?;
     #[cfg(unix)]
     socket
         .set_reuse_port(true)
-        .map_err(|e| NetworkError::Socket(e.to_string()))?;
+        .map_err(|e| DiscoveryError::Socket(e.to_string()))?;
 
     socket
         .bind(&SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), MDNS_PORT).into())
-        .map_err(|e| NetworkError::Socket(e.to_string()))?;
+        .map_err(|e| DiscoveryError::Socket(e.to_string()))?;
 
     let interfaces = interfaces();
     for iface in interfaces {
@@ -397,7 +421,7 @@ fn send_unicast_query(
     let name_len = match target {
         IpAddr::V4(v4) => {
             let octets = v4.octets();
-            let mut cursor = std::io::Cursor::new(&mut name_buf[..]);
+            let mut cursor = Cursor::new(&mut name_buf[..]);
             let _ = write!(
                 cursor,
                 "{}.{}.{}.{}.in-addr.arpa",
@@ -406,7 +430,7 @@ fn send_unicast_query(
             usize::try_from(cursor.position()).unwrap_or(0)
         }
         IpAddr::V6(v6) => {
-            let mut cursor = std::io::Cursor::new(&mut name_buf[..]);
+            let mut cursor = Cursor::new(&mut name_buf[..]);
             for seg in v6.octets().iter().rev() {
                 let _ = write!(cursor, "{:x}.{:x}.", seg & 0xf, seg >> 4);
             }
@@ -416,7 +440,7 @@ fn send_unicast_query(
     };
 
     let name_len = name_len.min(name_buf.len());
-    let name_str = std::str::from_utf8(&name_buf[..name_len]).unwrap_or("");
+    let name_str = str::from_utf8(&name_buf[..name_len]).unwrap_or("");
     msg.questions.push(DnsQuestion {
         name: Arc::from(name_str),
         qtype: DnsRecordType::PTR,
@@ -560,7 +584,7 @@ pub(crate) fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: Socke
         updates.push(DeviceUpdate::TransientHostResolved(Box::new(
             TransientHostUpdate {
                 ip: from.ip(),
-                hostname: Hostname::new(clean_host, HostnameOrigin::Mdns),
+                hostname: Hostname::new(clean_host.to_string(), HostnameOrigin::Mdns),
                 origin: TransientOrigin::Mdns,
             },
         )));

@@ -1,34 +1,31 @@
-use lanforge_api::api::EventKind;
-use lanforge_api::rpc::{LanforgeRpcDispatcher, RpcRequest, RpcResponse};
-use lanforge_api_dispatch::ClientContext;
-
-use crate::config::ApiConfig;
-use crate::error::UdsError;
-use lanforge_core::bus::{LanforgeEvent, NetworkEvent, SystemEvent};
-use lanforge_core::context::LanforgeContext;
-use lanforge_core::error::CoreError;
 use std::fs::{self, Permissions};
 use std::io::ErrorKind;
-use std::net::Ipv6Addr;
+use std::mem;
+use std::net::{IpAddr, Ipv6Addr};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+use lanforge_api::api::EventKind;
+use lanforge_api::rpc::{LanforgeRpcDispatcher, RpcRequest, RpcResponse};
+use lanforge_api_dispatch::ClientContext;
+use lanforge_core::bus::{DnsEvent, LanforgeEvent, NetworkEvent, SystemEvent};
+use lanforge_core::context::LanforgeContext;
+use lanforge_core::error::CoreError;
+use lanforge_core::service::{
+    AsyncService, Condition, LanforgeService, RestartPolicy, RuntimeClass, ServiceCommand,
+    ServiceHandle, ServiceSpec,
+};
+use lanforge_types::system::{DormantReason, ServiceId};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, split};
 use tokio::net::UnixListener;
+use tokio::sync::broadcast::error::RecvError;
 use tracing::{debug, info, warn};
 
-use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
-use lanforge_types::system::DormantReason;
+use crate::config::ApiConfig;
+use crate::error::UdsError;
 
-#[lanforge_macros::lanforge_service(
-    id = "control",
-    name = "Control API",
-    retries = 0,
-    base_backoff = 1,
-    max_backoff = 30,
-    describe = format!("Control API at {}", self.cfg.socket_path)
-)]
 #[derive(Clone)]
 pub struct ControlService {
     cfg: Arc<ApiConfig>,
@@ -36,6 +33,9 @@ pub struct ControlService {
 }
 
 impl ControlService {
+    /// Static identifier for the service.
+    pub const SERVICE_ID: ServiceId = ServiceId::Uds;
+
     #[must_use]
     pub const fn new(cfg: Arc<ApiConfig>, ctx: LanforgeContext) -> Self {
         Self { cfg, ctx }
@@ -80,7 +80,7 @@ impl ControlService {
 
 impl AsyncService for ControlService {
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
-        let cfg = self.cfg.clone();
+        let cfg = Arc::clone(&self.cfg);
         if !cfg.enabled {
             info!("Control API: Service disabled in configuration.");
             h.dormant(DormantReason::disabled("control.enabled"));
@@ -117,7 +117,7 @@ impl AsyncService for ControlService {
                                 current_gua = details.gua.map(|p| p.to_addr());
                             }
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        Err(RecvError::Lagged(n)) => {
                             warn!(service = "ControlAPI", lost = n, "Network event bus lagged");
                         }
                         Err(_) => break,
@@ -128,12 +128,12 @@ impl AsyncService for ControlService {
                         Ok(timed_event) => match timed_event.event {
                             LanforgeEvent::System(SystemEvent::Shutdown) => break,
                             LanforgeEvent::System(SystemEvent::ConfigUpdate { password_hash }) => {
-                                let path = std::path::Path::new("/var/lib/lanforge/.password_hash");
-                                let _ = std::fs::write(path, password_hash);
+                                let path = Path::new("/var/lib/lanforge/.password_hash");
+                                let _ = fs::write(path, password_hash);
                             }
                             _ => {}
                         },
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        Err(RecvError::Lagged(n)) => {
                             warn!(service = "ControlAPI", lost = n, "System event bus lagged");
                         }
                         Err(_) => break,
@@ -147,6 +147,29 @@ impl AsyncService for ControlService {
             }
         }
         Ok(())
+    }
+}
+
+impl LanforgeService for ControlService {
+    fn spec(&self) -> ServiceSpec {
+        ServiceSpec {
+            id: Self::SERVICE_ID,
+            display_name: "Control API",
+            runtime: RuntimeClass::Shared,
+            restart: RestartPolicy {
+                base_backoff: Duration::from_secs(1),
+                max_backoff: Duration::from_secs(30),
+                max_retries: 0,
+                healthy_uptime: Duration::from_secs(30),
+            },
+            shutdown_timeout: Duration::from_secs(3),
+            deps: &[],
+            condition: Condition::ALWAYS,
+        }
+    }
+
+    fn describe(&self) -> String {
+        format!("Control API at {}", self.cfg.socket_path)
     }
 }
 
@@ -315,7 +338,7 @@ where
                             }
                         write_rpc_response(writer, &RpcResponse::Event(event), buf).await?;
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(RecvError::Lagged(_)) => {}
                     Err(_) => break,
                 }
             }
@@ -331,7 +354,7 @@ where
     Ok(())
 }
 
-/// Handles the 'DnsQueryLog' command by streaming live DNS query events.
+/// Handles the '`DnsQueryLog`' command by streaming live DNS query events.
 async fn handle_dns_query_log_stream<W, R>(
     writer: &mut W,
     mut reader: R,
@@ -343,8 +366,7 @@ where
     W: AsyncWrite + Unpin,
     R: AsyncRead + Unpin,
 {
-    let client_ip_filter: Option<std::net::IpAddr> =
-        client_filter.as_deref().and_then(|s| s.parse().ok());
+    let client_ip_filter: Option<IpAddr> = client_filter.as_deref().and_then(|s| s.parse().ok());
     let mut bus_rx = ctx.ctx.bus().subscribe_dns();
     let mut eof_buf = [0u8; 1];
 
@@ -353,7 +375,7 @@ where
             res = bus_rx.recv() => {
                 match res {
                     Ok(event) => {
-                        if let lanforge_types::events::LanforgeEvent::Dns(lanforge_types::events::DnsEvent::QueryResolved(ref q)) = event.event {
+                        if let LanforgeEvent::Dns(DnsEvent::QueryResolved(ref q)) = event.event {
                             if let Some(target_ip) = client_ip_filter
                                 && q.src_ip != target_ip {
                                     continue;
@@ -361,7 +383,7 @@ where
                             write_rpc_response(writer, &RpcResponse::Event(event), buf).await?;
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(RecvError::Lagged(_)) => {}
                     Err(_) => break,
                 }
             }
@@ -387,7 +409,7 @@ where
 {
     buf.clear();
     buf.extend_from_slice(&[0, 0, 0, 0]);
-    let buffer = std::mem::take(buf);
+    let buffer = mem::take(buf);
     let mut buffer =
         postcard::to_extend(resp, buffer).map_err(|e| UdsError::EncodingError(e.to_string()))?;
     #[allow(clippy::cast_possible_truncation)]

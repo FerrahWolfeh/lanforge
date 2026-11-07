@@ -4,6 +4,8 @@ pub mod rewrites;
 pub mod upstreams;
 
 use std::convert::Infallible;
+use std::net::IpAddr;
+use std::time::Duration;
 
 use axum::{
     Router,
@@ -19,6 +21,7 @@ use lanforge_api::api::LogMeta;
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 use lanforge_types::network::{DnsRecordType, QueryResult};
 use serde::Deserialize;
+use tokio::sync::broadcast::error::RecvError;
 
 use crate::routes::create_client_ctx;
 use crate::server::AppState;
@@ -97,7 +100,7 @@ async fn handle_dns_logs(
         Sse::new(stream)
             .keep_alive(
                 KeepAlive::default()
-                    .interval(std::time::Duration::from_secs(15))
+                    .interval(Duration::from_secs(15))
                     .text("keepalive"),
             )
             .into_response()
@@ -130,7 +133,7 @@ fn handle_dns_logs_follow(
 ) -> impl Stream<Item = Result<Event, Infallible>> {
     let mut rx = state.ctx.bus().subscribe_dns();
     let filter = params.client;
-    let filter_ip: Option<std::net::IpAddr> = filter.as_deref().and_then(|f| f.parse().ok());
+    let filter_ip: Option<IpAddr> = filter.as_deref().and_then(|f| f.parse().ok());
     let domain_filter = params.domain.map(|d| d.to_lowercase());
     let qtype_filter = params.qtype;
     let result_filter = params.result;
@@ -140,8 +143,8 @@ fn handle_dns_logs_follow(
         loop {
             let event = match rx.recv().await {
                 Ok(event) => event,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => break,
             };
 
             if let LanforgeEvent::Dns(DnsEvent::QueryResolved(entry)) = &event.event {

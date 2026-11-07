@@ -1,8 +1,9 @@
 use crate::ClientContext;
 use lanforge_api::api::{Response, SimpleSuccess, WhoisResponse};
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent};
+use lanforge_types::device::Origin;
 use lanforge_types::{identifiers::MacAddr, update::DeviceUpdate};
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 
 impl ClientContext {
     /// Gathers detailed information and history for a device.
@@ -96,7 +97,7 @@ impl ClientContext {
                     let ip_u32 = u32::from(pool.range_start);
                     let mask_u32 = u32::from(mask);
                     let broadcast = ip_u32 | !mask_u32;
-                    std::net::Ipv4Addr::from(broadcast)
+                    Ipv4Addr::from(broadcast)
                 })
             })
         });
@@ -128,7 +129,7 @@ impl ClientContext {
         let is_static = self
             .ctx
             .get_device(&mac)
-            .is_some_and(|d| d.origin == lanforge_types::device::Origin::Static);
+            .is_some_and(|d| d.origin == Origin::Static);
         if is_static && let Err(e) = self.change_hosts(|hosts| hosts.retain(|h| h.mac != mac)) {
             return e.response_in(&format!("Device {mac} not purged"));
         }

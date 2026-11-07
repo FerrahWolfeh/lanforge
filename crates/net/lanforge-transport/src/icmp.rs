@@ -1,16 +1,19 @@
 use crate::inert::{InertHandle, InertPort};
 use crate::metrics::{TransportMetrics, TransportStats};
 use crate::sys;
+use lanforge_types::network::snapshot::TransportSnapshot;
 use parking_lot::Mutex;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::collections::HashMap;
-use std::io;
+use std::future::pending;
+use std::io::{self, ErrorKind};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 use tokio::io::unix::AsyncFd;
 use tokio::sync::{oneshot, watch};
+use tokio::time;
 use tracing::{debug, warn};
 
 static IDENT_COUNTER: AtomicU16 = AtomicU16::new(1000);
@@ -125,7 +128,7 @@ impl IcmpPinger {
         else {
             return;
         };
-        let registry = self.registry.clone();
+        let registry = Arc::clone(&self.registry);
         let s_v4 = socket_v4.clone();
         let s_v6 = socket_v6.clone();
 
@@ -146,7 +149,7 @@ impl IcmpPinger {
                     guard_res = async {
                         match s_v4.as_ref() {
                             Some(fd) => fd.readable().await,
-                            None => std::future::pending().await,
+                            None => pending().await,
                         }
                     } => {
                         if let Ok(mut guard) = guard_res {
@@ -164,7 +167,7 @@ impl IcmpPinger {
                                         }
                                     }
                                 }
-                                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
                                     guard.clear_ready();
                                 }
                                 Err(_) => {
@@ -178,7 +181,7 @@ impl IcmpPinger {
                     guard_res = async {
                         match s_v6.as_ref() {
                             Some(fd) => fd.readable().await,
-                            None => std::future::pending().await,
+                            None => pending().await,
                         }
                     } => {
                         if let Ok(mut guard) = guard_res {
@@ -196,7 +199,7 @@ impl IcmpPinger {
                                         }
                                     }
                                 }
-                                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
                                     guard.clear_ready();
                                 }
                                 Err(_) => {
@@ -222,7 +225,7 @@ impl IcmpPinger {
         port: InertPort<IpAddr>,
         mut shutdown_rx: watch::Receiver<bool>,
     ) {
-        let registry = self.registry.clone();
+        let registry = Arc::clone(&self.registry);
         tokio::spawn(async move {
             loop {
                 if *shutdown_rx.borrow() {
@@ -340,7 +343,7 @@ impl IcmpPinger {
         }
         self.metrics.record_tx(PACKET_LEN);
 
-        if tokio::time::timeout(timeout, rx).await == Ok(Ok(())) {
+        if time::timeout(timeout, rx).await == Ok(Ok(())) {
             debug!("Ping response received from {ip}");
             self.metrics.record_rx(PACKET_LEN);
             Ok(true)
@@ -362,7 +365,7 @@ impl IcmpPinger {
 }
 
 impl TransportStats for IcmpPinger {
-    fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
+    fn snapshot(&self) -> TransportSnapshot {
         self.metrics.snapshot()
     }
 }

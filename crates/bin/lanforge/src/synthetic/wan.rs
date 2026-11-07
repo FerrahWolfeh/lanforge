@@ -10,6 +10,7 @@ use lanforge_core::service::{
 };
 use lanforge_types::network::snapshot::{InterfaceSnapshot, Ipv6Net, WanSnapshot, WanState};
 use lanforge_types::system::ServiceId;
+use pnet::datalink;
 use smallvec::SmallVec;
 use tracing::{debug, info};
 
@@ -158,7 +159,7 @@ impl AsyncService for WanService {
                         match timed_event.event {
                             LanforgeEvent::Pppoe(PppoeEvent::SessionUp(up)) => {
                                 generation += 1;
-                                let ifindex = pnet::datalink::interfaces()
+                                let ifindex = datalink::interfaces()
                                     .into_iter()
                                     .find(|i| i.name == up.interface)
                                     .map(|i| i.index);

@@ -1,7 +1,12 @@
-use std::net::Ipv6Addr;
+use std::io::ErrorKind;
+use std::mem::MaybeUninit;
+use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
+use std::str;
 use std::time::{Duration, Instant};
 
-use socket2::{Domain, Protocol, Socket, Type};
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+use tokio::io::unix::AsyncFd;
+use tokio::time::timeout;
 
 use crate::error::LabError;
 use crate::report::{RaDecodedInfo, RaPrefixReport};
@@ -46,12 +51,12 @@ impl RaEngine {
         let _ = sock.set_nonblocking(true);
 
         // SAFETY: `Socket` owns its descriptor and `as_raw_fd()` always returns it.
-        let async_fd = unsafe { tokio::io::unix::AsyncFd::register(sock) }
+        let async_fd = unsafe { AsyncFd::register(sock) }
             .map_err(|e| LabError::Socket(format!("AsyncFd error: {e}")))?;
 
         // Build RS packet (Type: 133, Code: 0, Checksum: 0 (kernel calculates), Reserved: 0)
         let rs_packet = [ICMPV6_TYPE_RS, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-        let dst_sa = socket2::SockAddr::from(std::net::SocketAddrV6::new(
+        let dst_sa = SockAddr::from(SocketAddrV6::new(
             Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 2),
             0,
             0,
@@ -63,14 +68,14 @@ impl RaEngine {
 
         let mut buf = [0u8; 1500];
 
-        let res = tokio::time::timeout(self.timeout_duration, async {
+        let res = timeout(self.timeout_duration, async {
             loop {
                 let mut guard = async_fd.readable().await.map_err(LabError::Io)?;
                 // SAFETY: `[u8; N]` and `[MaybeUninit<u8>; N]` have the same layout, and recvfrom
                 // only writes initialized bytes, so `buf` stays initialized.
-                let res = guard.get_inner().recv_from(unsafe {
-                    &mut *(&raw mut buf).cast::<[std::mem::MaybeUninit<u8>; 1500]>()
-                });
+                let res = guard
+                    .get_inner()
+                    .recv_from(unsafe { &mut *(&raw mut buf).cast::<[MaybeUninit<u8>; 1500]>() });
 
                 match res {
                     Ok((n, src_sa)) => {
@@ -79,8 +84,8 @@ impl RaEngine {
                             let src_ip = src_sa
                                 .as_socket()
                                 .and_then(|s| match s {
-                                    std::net::SocketAddr::V6(v6) => Some(*v6.ip()),
-                                    std::net::SocketAddr::V4(_) => None,
+                                    SocketAddr::V6(v6) => Some(*v6.ip()),
+                                    SocketAddr::V4(_) => None,
                                 })
                                 .unwrap_or(Ipv6Addr::UNSPECIFIED);
 
@@ -91,7 +96,7 @@ impl RaEngine {
                             ));
                         }
                     }
-                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
                         guard.clear_ready();
                     }
                     Err(e) => return Err(LabError::Io(e)),
@@ -162,7 +167,7 @@ impl RaEngine {
                 }
                 // DNSSL Option
                 31 if opt_len >= 8 => {
-                    if let Ok(s) = std::str::from_utf8(&opt_data[8..]) {
+                    if let Ok(s) = str::from_utf8(&opt_data[8..]) {
                         for domain in s.split('\0').filter(|d| !d.is_empty()) {
                             dnssl_domains.push(domain.to_string());
                         }

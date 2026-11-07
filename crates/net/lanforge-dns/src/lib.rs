@@ -3,6 +3,9 @@
 //! A high-performance, modular DNS server for local network orchestration.
 //! Features zero-allocation wire parsing, ad-blocking, and recursive forwarding.
 
+#[cfg(test)]
+use rcgen as _;
+
 // rustls needs a crypto provider: without one, building a TLS config panics at runtime.
 #[cfg(all(
     any(

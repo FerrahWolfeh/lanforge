@@ -50,9 +50,9 @@ use lanforge_types::{
     device::{Device, TransientHost},
     dhcp::{Dhcpv4Stats, Dhcpv6Stats},
     identifiers::{DeviceIdentifier, Duid, MacAddr},
-    network::DnsReverseResolver,
     network::dns::upstream::UpstreamTarget,
     network::firewall::ForwardAddrs,
+    network::{DnsReverseResolver, Ipv6Prefix},
     update::InterfaceState,
 };
 
@@ -184,10 +184,7 @@ impl LanforgeContext {
 
     /// Helper path to find typed GUA prefix for an interface.
     #[must_use]
-    pub fn get_interface_gua_prefix_at(
-        &self,
-        ifindex: u32,
-    ) -> Option<(lanforge_types::network::Ipv6Prefix, u32, u32)> {
+    pub fn get_interface_gua_prefix_at(&self, ifindex: u32) -> Option<(Ipv6Prefix, u32, u32)> {
         self.read().get_interface_gua_prefix_at(ifindex)
     }
 
@@ -214,13 +211,13 @@ impl LanforgeContext {
     /// Returns the `DHCPv4` stats concretely.
     #[must_use]
     pub fn dhcpv4_stats(&self) -> Arc<Dhcpv4Stats> {
-        self.inner.runtime.dhcpv4_stats.clone()
+        Arc::clone(&self.inner.runtime.dhcpv4_stats)
     }
 
     /// Returns the `DHCPv6` stats concretely.
     #[must_use]
     pub fn dhcpv6_stats(&self) -> Arc<Dhcpv6Stats> {
-        self.inner.runtime.dhcpv6_stats.clone()
+        Arc::clone(&self.inner.runtime.dhcpv6_stats)
     }
 
     /// Retrieves a cached transient host by its IP.

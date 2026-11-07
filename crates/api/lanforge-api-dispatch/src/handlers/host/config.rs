@@ -9,7 +9,7 @@ use lanforge_types::{
 use std::net::Ipv4Addr;
 
 /// The reservation `entry` asks for, keeping the device's name and boot file when it gives
-/// none (clients that do not know the boot file, like the WebUI, must not clear it).
+/// none (clients that do not know the boot file, like the `WebUI`, must not clear it).
 fn static_host(entry: &HostConfigEntry, device: Option<&Device>) -> StaticHost {
     let hostname = Hostname::sanitize(&entry.hostname);
     StaticHost {
@@ -70,7 +70,7 @@ impl ClientContext {
         Response::Hosts(HostsResponse { hosts })
     }
 
-    /// Reserves `entry` in `[hosts]` (written before it applies); its DNS log settings, WebUI
+    /// Reserves `entry` in `[hosts]` (written before it applies); its DNS log settings, `WebUI`
     /// settings, go to the device only.
     pub async fn handle_host_add(&self, entry: HostConfigEntry) -> Response {
         let mac = entry.mac;

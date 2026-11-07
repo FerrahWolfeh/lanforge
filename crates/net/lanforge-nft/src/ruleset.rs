@@ -13,6 +13,7 @@ use nftables::stmt::{Flow, Limit, Mangle, Match, NAT, NATFamily, Operator, SetOp
 use nftables::types::{NfChainPolicy, NfChainType, NfFamily, NfHook};
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::iter;
 use std::net::{IpAddr, Ipv4Addr};
 
 fn is_external_zone(name: &str) -> bool {
@@ -1430,7 +1431,7 @@ impl<'a> RulesetBuilder<'a> {
                 Statement::Match(Match {
                     left: Expression::Named(NamedExpression::Fib(Fib {
                         result: FibResult::Type,
-                        flags: std::iter::once(FibFlag::Daddr).collect(),
+                        flags: iter::once(FibFlag::Daddr).collect(),
                     })),
                     right: Expression::String("local".into()),
                     op: Operator::EQ,

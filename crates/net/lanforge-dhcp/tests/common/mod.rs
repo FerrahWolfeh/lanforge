@@ -1,21 +1,27 @@
 #![allow(dead_code)]
 
+use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 
 use dhcproto::v4::{
-    DhcpOption as Dhcpv4Option, Message as MessageV4, MessageType as MessageTypeV4,
+    DhcpOption as Dhcpv4Option, Flags as FlagsV4, Message as MessageV4,
+    MessageType as MessageTypeV4,
 };
 use dhcproto::v6::{
-    DhcpOption as Dhcpv6Option, DhcpOptions as Dhcpv6Options, IANA, Message as MessageV6,
-    MessageType as MessageTypeV6,
+    DhcpOption as Dhcpv6Option, DhcpOptions as Dhcpv6Options, IAAddr as IAAddrV6, IANA,
+    Message as MessageV6, MessageType as MessageTypeV6,
 };
 use dhcproto::{Encodable, Encoder};
 use lanforge_core::bus::EventBus;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_dhcp::v4::Dhcpv4Config;
+use lanforge_dhcp::v4::server::DhcpServer;
 use lanforge_dhcp::v6::Dhcpv6Config;
+use lanforge_dhcp::v6::pool::Ipv6Pool;
+use lanforge_dhcp::v6::server::Dhcpv6Server;
+use lanforge_types::device::Ipv6AddrOrSuffix;
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::update::{DeviceUpdate, InterfaceState};
@@ -25,7 +31,7 @@ use lanforge_types::update::{DeviceUpdate, InterfaceState};
 pub fn init_test_context() -> (LanforgeContext, Arc<EventBus>) {
     let bus = Arc::new(EventBus::new());
     let table = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), table, None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), table, None);
     (ctx, bus)
 }
 
@@ -38,7 +44,7 @@ pub fn init_test_context_with_interface(
 ) -> (LanforgeContext, Arc<EventBus>) {
     let bus = Arc::new(EventBus::new());
     let table = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), table, Some(ifindex));
+    let ctx = LanforgeContext::new(Arc::clone(&bus), table, Some(ifindex));
     ctx.set_target_interface_name(iface_name.to_string());
 
     let ula = "fd97:f00d:cafe:3731::".parse::<Ipv6Addr>().unwrap();
@@ -102,38 +108,35 @@ pub fn create_test_v6_config() -> Dhcpv6Config {
         port: 547,
         pools: vec![Dhcpv6Pool {
             name: Some("Primary IPv6 Scope".to_string()),
-            range_start: Some(lanforge_types::device::Ipv6AddrOrSuffix::Full(start)),
-            range_end: Some(lanforge_types::device::Ipv6AddrOrSuffix::Full(end)),
+            range_start: Some(Ipv6AddrOrSuffix::Full(start)),
+            range_end: Some(Ipv6AddrOrSuffix::Full(end)),
             ..Default::default()
         }],
         dns_servers: vec![ula],
         search_domains: vec!["lan".to_string()],
         boot_file: None,
-        options: std::collections::HashMap::new(),
+        options: HashMap::new(),
         ntp_servers: Vec::new(),
     }
 }
 
 /// Creates a standard test `DhcpServer` (v4) instance with isolated context.
 #[must_use]
-pub fn create_test_v4_server(ctx: LanforgeContext) -> lanforge_dhcp::v4::server::DhcpServer {
+pub fn create_test_v4_server(ctx: LanforgeContext) -> DhcpServer {
     let cfg = create_test_v4_config();
-    lanforge_dhcp::v4::server::DhcpServer::new(cfg, ctx)
+    DhcpServer::new(cfg, ctx)
 }
 
 /// Creates a standard test `Dhcpv6Server` instance with isolated context and pool.
 #[must_use]
-pub fn create_test_v6_server(
-    ctx: LanforgeContext,
-) -> (lanforge_dhcp::v6::server::Dhcpv6Server, Duid) {
+pub fn create_test_v6_server(ctx: LanforgeContext) -> (Dhcpv6Server, Duid) {
     let cfg = create_test_v6_config();
-    let pool =
-        lanforge_dhcp::v6::pool::Ipv6Pool::new(&cfg.pools, cfg.ula_prefix, cfg.ula_prefix_len);
+    let pool = Ipv6Pool::new(&cfg.pools, cfg.ula_prefix, cfg.ula_prefix_len);
     let server_duid = Duid::new(vec![
         0x00, 0x03, 0x00, 0x01, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
     ]);
     (
-        lanforge_dhcp::v6::server::Dhcpv6Server::new(cfg, pool, server_duid.clone(), ctx),
+        Dhcpv6Server::new(cfg, pool, server_duid.clone(), ctx),
         server_duid,
     )
 }
@@ -243,7 +246,7 @@ impl Dhcpv4PacketBuilder {
             &self.mac.0,
         );
         if self.broadcast {
-            msg.set_flags(dhcproto::v4::Flags::default().set_broadcast());
+            msg.set_flags(FlagsV4::default().set_broadcast());
         }
         msg.opts_mut()
             .insert(Dhcpv4Option::MessageType(self.msg_type));
@@ -366,7 +369,7 @@ impl Dhcpv6PacketBuilder {
         if let Some((iaid, maybe_ip)) = self.ia_na {
             let mut opts = Dhcpv6Options::new();
             if let Some(ip) = maybe_ip {
-                opts.insert(Dhcpv6Option::IAAddr(dhcproto::v6::IAAddr {
+                opts.insert(Dhcpv6Option::IAAddr(IAAddrV6 {
                     addr: ip,
                     preferred_life: 0,
                     valid_life: 0,

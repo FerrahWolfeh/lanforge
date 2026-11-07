@@ -1,20 +1,39 @@
 //! Test utilities and fluent builders for `lanforge-dns`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use lanforge_core::bus::EventBus;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_dns_wire::{WireDecoder, WireEncoder};
+use lanforge_transport::TransportMetrics;
 use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::dns::{
     DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecord, DnsRecordType, DnsResponseCode,
 };
-use lanforge_types::system::ServiceState;
+use lanforge_types::system::{ServiceId, ServiceState};
 use tokio::net::UdpSocket;
+use tokio::task::JoinHandle;
+use tokio::time::sleep;
+
+use crate::config::DnsConfig;
+use crate::pipeline::Pipeline;
+#[cfg(feature = "adblock")]
+use crate::pipeline::middleware::AdblockMiddleware;
+use crate::pipeline::middleware::{
+    CacheMiddleware, LocalResolverMiddleware, RewriteMiddleware, UpstreamMiddleware,
+};
+#[cfg(feature = "adblock")]
+use crate::resolver::AdBlocker;
+use crate::resolver::{
+    LocalResolver, RewriteStore,
+    recursive::{DnsCache, UpstreamStrategy},
+};
+use crate::server::{CompiledIgnoreClients, DnsContext};
+use crate::telemetry::{DnsStats, QueryRing};
 
 /// Initializes a clean, isolated `LanforgeContext` for DNS testing.
 #[must_use]
@@ -27,24 +46,21 @@ pub fn init_test_context() -> LanforgeContext {
 /// Cooperatively polls a service until its registered state is `ServiceState::Online`.
 ///
 /// Times out after 2 seconds to avoid infinite test hangs.
-pub async fn wait_for_service_online(
-    ctx: &LanforgeContext,
-    service: lanforge_types::system::ServiceId,
-) {
-    let start = std::time::Instant::now();
+pub async fn wait_for_service_online(ctx: &LanforgeContext, service: ServiceId) {
+    let start = Instant::now();
     while start.elapsed() < Duration::from_secs(2) {
         if ctx.get_service_state(service) == ServiceState::Online {
             return;
         }
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        sleep(Duration::from_millis(5)).await;
     }
     panic!("Service '{service:?}' did not reach Online state within 2 seconds");
 }
 
 /// Returns a default `DnsConfig` with `.lan` search domain.
 #[must_use]
-pub fn mock_config() -> crate::config::DnsConfig {
-    crate::config::DnsConfig {
+pub fn mock_config() -> DnsConfig {
+    DnsConfig {
         search_domains: vec!["lan".to_string()],
         ..Default::default()
     }
@@ -52,29 +68,19 @@ pub fn mock_config() -> crate::config::DnsConfig {
 
 /// Creates a fully initialized `DnsContext` wrapped in `Arc` for testing.
 #[must_use]
-pub fn create_test_dns_context(
-    ctx: LanforgeContext,
-    cfg: crate::config::DnsConfig,
-) -> Arc<crate::server::DnsContext> {
+pub fn create_test_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> Arc<DnsContext> {
     let cfg_arc = Arc::new(cfg);
-    let cache = Arc::new(crate::resolver::recursive::DnsCache::new(
-        cfg_arc.cache_size,
-        30,
-        None,
-    ));
-    let recursive = Arc::new(crate::resolver::recursive::UpstreamStrategy::new(
-        cfg_arc.upstream_mode,
-        Vec::new(),
-    ));
+    let cache = Arc::new(DnsCache::new(cfg_arc.cache_size, 30, None));
+    let recursive = Arc::new(UpstreamStrategy::new(cfg_arc.upstream_mode, Vec::new()));
 
-    let rewrites = Arc::new(crate::resolver::RewriteStore::new());
+    let rewrites = Arc::new(RewriteStore::new());
     if !cfg_arc.rewrites.is_empty() {
         rewrites.replace_rules(cfg_arc.rewrites.clone());
     }
 
     #[cfg(feature = "adblock")]
     let filter = {
-        let adblocker = crate::resolver::AdBlocker::new(cfg_arc.adblock_enabled);
+        let adblocker = AdBlocker::new(cfg_arc.adblock_enabled);
         adblocker.replace_config(
             cfg_arc.blocking_mode,
             cfg_arc.blocking_ip_v4,
@@ -83,33 +89,31 @@ pub fn create_test_dns_context(
         Some(Arc::new(adblocker))
     };
 
-    let mut pipeline = crate::pipeline::Pipeline::new();
-    pipeline.push(crate::pipeline::middleware::RewriteMiddleware::new());
-    pipeline.push(crate::pipeline::middleware::LocalResolverMiddleware::new());
+    let mut pipeline = Pipeline::new();
+    pipeline.push(RewriteMiddleware::new());
+    pipeline.push(LocalResolverMiddleware::new());
     #[cfg(feature = "adblock")]
-    pipeline.push(crate::pipeline::middleware::AdblockMiddleware::new());
-    pipeline.push(crate::pipeline::middleware::CacheMiddleware::new());
-    pipeline.push(crate::pipeline::middleware::UpstreamMiddleware::new());
+    pipeline.push(AdblockMiddleware::new());
+    pipeline.push(CacheMiddleware::new());
+    pipeline.push(UpstreamMiddleware::new());
 
-    Arc::new(crate::server::DnsContext {
-        cfg: cfg_arc.clone(),
-        stats: Arc::new(crate::telemetry::stats::DnsStats::new()),
+    Arc::new(DnsContext {
+        cfg: Arc::clone(&cfg_arc),
+        stats: Arc::new(DnsStats::new()),
         bus: ctx.bus(),
         ctx: ctx.clone(),
-        query_log: Some(Arc::new(crate::telemetry::QueryRing::new(100))),
+        query_log: Some(Arc::new(QueryRing::new(100))),
         pipeline,
-        streams: Arc::new(lanforge_transport::TransportMetrics::new()),
-        local: crate::resolver::LocalResolver::new(cfg_arc.clone(), ctx),
+        streams: Arc::new(TransportMetrics::new()),
+        local: LocalResolver::new(Arc::clone(&cfg_arc), ctx),
         recursive,
         cache,
         rewrites,
         #[cfg(feature = "adblock")]
         filter,
         reverse_managers: Arc::new(parking_lot::RwLock::new(HashMap::new())),
-        resolving_ips: Arc::new(parking_lot::Mutex::new(std::collections::HashSet::new())),
-        compiled_ignore_clients: crate::server::CompiledIgnoreClients::compile(
-            &cfg_arc.query_log.ignore_clients,
-        ),
+        resolving_ips: Arc::new(parking_lot::Mutex::new(HashSet::new())),
+        compiled_ignore_clients: CompiledIgnoreClients::compile(&cfg_arc.query_log.ignore_clients),
     })
 }
 
@@ -257,7 +261,7 @@ pub fn extract_ptr(msg: &DnsMessage) -> Vec<String> {
 pub struct MockUpstreamServer {
     /// Socket address the mock upstream is bound to (on `127.0.0.1:0`).
     pub addr: SocketAddr,
-    task: tokio::task::JoinHandle<()>,
+    task: JoinHandle<()>,
 }
 
 impl MockUpstreamServer {
@@ -292,7 +296,7 @@ impl MockUpstreamServer {
                                     IpAddr::V4(v4) => {
                                         if q.qtype == DnsRecordType::A {
                                             resp.answers.push(DnsRecord {
-                                                name: q.name.clone(),
+                                                name: Arc::clone(&q.name),
                                                 rtype: DnsRecordType::A,
                                                 rclass: DnsClass::IN,
                                                 ttl: 300,
@@ -303,7 +307,7 @@ impl MockUpstreamServer {
                                     IpAddr::V6(v6) => {
                                         if q.qtype == DnsRecordType::AAAA {
                                             resp.answers.push(DnsRecord {
-                                                name: q.name.clone(),
+                                                name: Arc::clone(&q.name),
                                                 rtype: DnsRecordType::AAAA,
                                                 rclass: DnsClass::IN,
                                                 ttl: 300,

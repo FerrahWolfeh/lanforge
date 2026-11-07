@@ -18,9 +18,10 @@ lanforge-types = { workspace = true }
 
 # Workspace
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["sync"] }
 serde = { workspace = true }
-chrono = { workspace = true }
 uuid = { workspace = true }
 redb = { workspace = true, optional = true }
 postcard = { workspace = true, optional = true }
+
+[lints]
+workspace = true

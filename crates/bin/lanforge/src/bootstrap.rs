@@ -1,7 +1,15 @@
+use std::fs;
+use std::mem;
+#[cfg(feature = "dhcp")]
+use std::net::Ipv4Addr;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
 use anyhow::Result;
 use bytesize::ByteSize;
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
+use lanforge_api::config_file::log_issues;
 use lanforge_core::bus::EventBus;
 use lanforge_core::context::state::State;
 use lanforge_core::context::{ConfigPatch, LanforgeContext};
@@ -13,7 +21,7 @@ use lanforge_discovery::refresh_interface;
 use lanforge_types::DnsListenConfig;
 use lanforge_types::build::BuildInfo;
 use lanforge_types::config::SiteDomains;
-use lanforge_types::device::Origin;
+use lanforge_types::device::{DeviceStatus, IPv4State, IPv6State, Origin};
 use lanforge_types::identifiers::MacAddr;
 #[cfg(feature = "dhcp")]
 use lanforge_types::network::dhcp::Dhcpv4Pool;
@@ -21,21 +29,24 @@ use lanforge_types::network::ra::PreviousLanPrefixes;
 use lanforge_types::network::{
     IpClassification, Ipv6AddrOrSuffix, Ipv6Prefix, classify_ipv6, is_ula,
 };
+use lanforge_types::system::Cap;
 use lanforge_types::update::InterfaceState;
 use netlink_sys::SocketAddr;
-use pnet::datalink::interfaces;
+use pnet::datalink::{NetworkInterface, interfaces};
 use pnet::ipnetwork::IpNetwork;
 #[cfg(feature = "dhcp")]
 use pnet::ipnetwork::Ipv4Network;
 use rtnetlink::new_connection;
 use rtnetlink::packet_core::NetlinkMessage;
 use rtnetlink::packet_route::RouteNetlinkMessage;
-use std::path::PathBuf;
-use std::sync::Arc;
+use smallvec::SmallVec;
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
 use crate::config::Config;
+use crate::config::boot_file::ensure_boot_config;
+#[cfg(all(feature = "dhcp", feature = "tftp"))]
+use crate::config::toml::apply_tftp_options;
 
 macro_rules! feat_flag {
     ($feat:ident, $val:expr) => {
@@ -169,20 +180,19 @@ impl Bootstrapper {
         let target_ifindex = Self::find_target_interface(&mut cfg, &host_ifaces)?;
         let (initial_table, db, log_db) = Self::init_device_table(&mut cfg, &host_ifaces)?;
         // Logged once, after the start-up configs are derived.
-        cfg.config_issues =
-            lanforge_api::config_file::log_issues(std::mem::take(&mut cfg.config_issues));
+        cfg.config_issues = log_issues(mem::take(&mut cfg.config_issues));
         let db = Arc::new(db);
         let log_db = Arc::new(log_db);
         let cfg = Arc::new(cfg);
 
-        let ctx = LanforgeContext::new(bus.clone(), initial_table, Some(target_ifindex));
+        let ctx = LanforgeContext::new(Arc::clone(&bus), initial_table, Some(target_ifindex));
         if let Some(build) = BuildInfo::parse(env!("LANFORGE_BUILD")) {
             ctx.set_build(build);
         }
         Self::populate_context(&ctx, &cfg, &db);
         // `[hosts]` is the static hosts' only source: the table follows it.
         if let Some(hosts) = cfg.static_hosts.as_ref() {
-            let issues = lanforge_api::config_file::log_issues(ctx.apply_static_hosts(hosts));
+            let issues = log_issues(ctx.apply_static_hosts(hosts));
             if !issues.is_empty() {
                 let mut all = ctx.config_issues();
                 all.extend(issues);
@@ -214,9 +224,7 @@ impl Bootstrapper {
         // stored one is only history and must never override the scanned state. Both are handed
         // to RA, which deprecates whichever is gone from the LAN by the time it starts: the
         // delegated prefix can change while we are down, or be withdrawn right after this scan.
-        let scanned = if_state
-            .gua
-            .map(lanforge_types::network::Ipv6Prefix::from_addr);
+        let scanned = if_state.gua.map(Ipv6Prefix::from_addr);
         let stored = db.load_last_gua_prefix().ok().flatten();
         if let Some(stored) = stored
             && scanned != Some(stored)
@@ -243,50 +251,50 @@ impl Bootstrapper {
         ))
     }
 
-    fn build_compiled_caps() -> smallvec::SmallVec<[lanforge_types::system::Cap; 32]> {
-        let mut compiled = smallvec::SmallVec::new();
+    fn build_compiled_caps() -> SmallVec<[Cap; 32]> {
+        let mut compiled = SmallVec::new();
         #[cfg(feature = "dns")]
-        compiled.push(lanforge_types::system::Cap::Dns);
+        compiled.push(Cap::Dns);
         #[cfg(feature = "dns")]
-        compiled.push(lanforge_types::system::Cap::UpstreamUdpTcp);
+        compiled.push(Cap::UpstreamUdpTcp);
         #[cfg(feature = "dns-dot")]
-        compiled.push(lanforge_types::system::Cap::UpstreamDoT);
+        compiled.push(Cap::UpstreamDoT);
         #[cfg(feature = "dns-doq")]
-        compiled.push(lanforge_types::system::Cap::UpstreamDoQ);
+        compiled.push(Cap::UpstreamDoQ);
         #[cfg(feature = "dns-doh")]
-        compiled.push(lanforge_types::system::Cap::UpstreamDoH);
+        compiled.push(Cap::UpstreamDoH);
         #[cfg(feature = "doh-server")]
-        compiled.push(lanforge_types::system::Cap::DohDownstream);
+        compiled.push(Cap::DohDownstream);
         #[cfg(feature = "dhcp")]
         {
-            compiled.push(lanforge_types::system::Cap::DhcpV4);
-            compiled.push(lanforge_types::system::Cap::DhcpV6);
+            compiled.push(Cap::DhcpV4);
+            compiled.push(Cap::DhcpV6);
         }
         #[cfg(feature = "ra")]
-        compiled.push(lanforge_types::system::Cap::Ra);
+        compiled.push(Cap::Ra);
         #[cfg(feature = "discovery")]
         {
-            compiled.push(lanforge_types::system::Cap::NdpDiscovery);
-            compiled.push(lanforge_types::system::Cap::MdnsProbe);
+            compiled.push(Cap::NdpDiscovery);
+            compiled.push(Cap::MdnsProbe);
         }
         #[cfg(feature = "uds")]
-        compiled.push(lanforge_types::system::Cap::Uds);
+        compiled.push(Cap::Uds);
         #[cfg(feature = "http")]
-        compiled.push(lanforge_types::system::Cap::Http);
-        compiled.push(lanforge_types::system::Cap::Zstd);
-        compiled.push(lanforge_types::system::Cap::Storage);
+        compiled.push(Cap::Http);
+        compiled.push(Cap::Zstd);
+        compiled.push(Cap::Storage);
         #[cfg(feature = "pppoe")]
-        compiled.push(lanforge_types::system::Cap::Pppoe);
+        compiled.push(Cap::Pppoe);
         #[cfg(feature = "tftp")]
-        compiled.push(lanforge_types::system::Cap::Tftp);
+        compiled.push(Cap::Tftp);
         #[cfg(feature = "nft")]
-        compiled.push(lanforge_types::system::Cap::Firewall);
+        compiled.push(Cap::Firewall);
         #[cfg(feature = "traffic")]
-        compiled.push(lanforge_types::system::Cap::Traffic);
+        compiled.push(Cap::Traffic);
         #[cfg(feature = "adblock")]
-        compiled.push(lanforge_types::system::Cap::Adblock);
+        compiled.push(Cap::Adblock);
         #[cfg(feature = "webui")]
-        compiled.push(lanforge_types::system::Cap::Webui);
+        compiled.push(Cap::Webui);
         compiled
     }
 
@@ -297,7 +305,7 @@ impl Bootstrapper {
         if Self::is_recovery(cfg, db) {
             ctx.set_recovery_mode(true);
         }
-        ctx.set_config_path(&cfg.config_path);
+        ctx.set_config_path(Path::new(&cfg.config_path));
         ctx.set_config_writable(cfg.config_writable);
         ctx.set_config_issues(cfg.config_issues.clone());
 
@@ -384,7 +392,7 @@ impl Bootstrapper {
 
     fn init_device_table(
         cfg: &mut Config,
-        host_ifaces: &[pnet::datalink::NetworkInterface],
+        host_ifaces: &[NetworkInterface],
     ) -> Result<(State, LanforgeDb, LogDb)> {
         let (db, log_db) = Self::open_databases(cfg)?;
         let user_count = db.count_users().unwrap_or(0);
@@ -392,7 +400,7 @@ impl Bootstrapper {
 
         if is_provisioned {
             let config_path = PathBuf::from(&cfg.config_path);
-            crate::config::boot_file::ensure_boot_config(&config_path, cfg.config_writable)?;
+            ensure_boot_config(&config_path, cfg.config_writable)?;
             Self::prepare_provisioned_configs(&db, cfg);
         }
 
@@ -406,25 +414,23 @@ impl Bootstrapper {
                 for mut runtime in runtime_devices {
                     if let Some(persisted) = table.devices.get(&runtime.mac) {
                         let persistent = persisted.as_ref();
-                        runtime.identity = persistent.identity.clone();
-                        if matches!(persistent.v4, lanforge_types::device::IPv4State::Dynamic(_)) {
+                        runtime.identity = Arc::clone(&persistent.identity);
+                        if matches!(persistent.v4, IPv4State::Dynamic(_)) {
                             runtime.v4 = persistent.v4.clone();
                         }
-                        runtime.v6.retain(|state| {
-                            !matches!(state, lanforge_types::device::IPv6State::Dynamic(_))
-                        });
+                        runtime
+                            .v6
+                            .retain(|state| !matches!(state, IPv6State::Dynamic(_)));
                         runtime.v6.extend(
                             persistent
                                 .v6
                                 .iter()
-                                .filter(|state| {
-                                    matches!(state, lanforge_types::device::IPv6State::Dynamic(_))
-                                })
+                                .filter(|state| matches!(state, IPv6State::Dynamic(_)))
                                 .cloned(),
                         );
                         runtime.v6_prefixes.clone_from(&persistent.v6_prefixes);
                     }
-                    runtime.status = lanforge_types::device::DeviceStatus::Offline;
+                    runtime.status = DeviceStatus::Offline;
                     table.insert_device(runtime.mac, runtime);
                 }
             }
@@ -580,7 +586,7 @@ impl Bootstrapper {
         cfg.dhcpv4_toml.range_start = None;
         cfg.dhcpv4_toml.range_end = None;
         #[cfg(feature = "tftp")]
-        crate::config::toml::apply_tftp_options(&mut cfg.tftp_toml, &cfg.dhcp.options.tftp);
+        apply_tftp_options(&mut cfg.tftp_toml, &cfg.dhcp.options.tftp);
     }
 
     /// Writes an automatic change of `cfg.dhcp` (startup sanity) to `[dhcp]`, as it used to be
@@ -589,7 +595,7 @@ impl Bootstrapper {
     fn persist_dhcp_heal(cfg: &Config) {
         use lanforge_api::config_file::{ConfigFile, SectionSet, persist_sections};
 
-        let path = std::path::Path::new(&cfg.config_path);
+        let path = Path::new(&cfg.config_path);
         if cfg.dhcp_set_aside {
             warn!(
                 "DHCPv4 Startup Sanity: [dhcp] in '{}' is unreadable (see the config issues); \
@@ -636,7 +642,7 @@ impl Bootstrapper {
                 }
             },
             |path| {
-                std::fs::metadata(path).map_or_else(
+                fs::metadata(path).map_or_else(
                     |_| "unknown".to_string(),
                     |m| ByteSize::b(m.len()).to_string(),
                 )
@@ -678,8 +684,8 @@ impl Bootstrapper {
     /// Prints the user-friendly startup banner when all services are fully initialized and ready.
     pub fn print_startup_banner(cfg: &Config, target_ifindex: u32, db: &LanforgeDb) {
         let host_ip = {
-            let interfaces = pnet::datalink::interfaces();
-            interfaces
+            let ifaces = interfaces();
+            ifaces
                 .iter()
                 .find(|i| i.index == target_ifindex)
                 .and_then(|i| i.ips.iter().find(|ip| ip.is_ipv4()))
@@ -699,13 +705,10 @@ impl Bootstrapper {
             }
         } else {
             let schema = db.schema_version().unwrap_or(1);
-            let size = db
-                .path()
-                .and_then(|p| std::fs::metadata(p).ok())
-                .map_or_else(
-                    || "unknown".to_string(),
-                    |m| ByteSize::b(m.len()).to_string(),
-                );
+            let size = db.path().and_then(|p| fs::metadata(p).ok()).map_or_else(
+                || "unknown".to_string(),
+                |m| ByteSize::b(m.len()).to_string(),
+            );
             format!("redb (schema v{schema}, {size})")
         };
 
@@ -723,12 +726,8 @@ impl Bootstrapper {
     }
 
     /// Injects the host machine as a system device in the state table.
-    fn inject_self_device(
-        table: &mut State,
-        cfg: &Config,
-        interfaces: &[pnet::datalink::NetworkInterface],
-    ) {
-        let hostname = std::fs::read_to_string("/proc/sys/kernel/hostname")
+    fn inject_self_device(table: &mut State, cfg: &Config, interfaces: &[NetworkInterface]) {
+        let hostname = fs::read_to_string("/proc/sys/kernel/hostname")
             .map_or_else(|_| "lanforge".to_string(), |s| s.trim().to_string());
 
         if let Some(iface) = interfaces.iter().find(|i| i.name == cfg.system.iface)
@@ -781,7 +780,7 @@ impl Bootstrapper {
     fn reconcile_dhcp_v4_topology_sanity(
         cfg: &mut Config,
         table: &State,
-        all_ifaces: &[pnet::datalink::NetworkInterface],
+        all_ifaces: &[NetworkInterface],
     ) {
         let target_iface = all_ifaces
             .iter()
@@ -834,9 +833,9 @@ impl Bootstrapper {
     fn audit_and_heal_dhcp_options(
         cfg: &mut Config,
         v4: Ipv4Network,
-        iface_ip: std::net::Ipv4Addr,
-        iface_mask: std::net::Ipv4Addr,
-        prev_host_ip: Option<std::net::Ipv4Addr>,
+        iface_ip: Ipv4Addr,
+        iface_mask: Ipv4Addr,
+        prev_host_ip: Option<Ipv4Addr>,
     ) -> bool {
         let opts = &mut cfg.dhcp.options;
         let mut opts_modified = false;
@@ -913,10 +912,7 @@ impl Bootstrapper {
         true
     }
 
-    fn find_target_interface(
-        cfg: &mut Config,
-        interfaces: &[pnet::datalink::NetworkInterface],
-    ) -> Result<u32> {
+    fn find_target_interface(cfg: &mut Config, interfaces: &[NetworkInterface]) -> Result<u32> {
         if !cfg.system.iface.is_empty()
             && let Some(iface) = interfaces
                 .iter()
@@ -997,9 +993,15 @@ impl Bootstrapper {
 mod tests {
     use super::*;
     use lanforge_db::redb;
+    use std::fs;
     use std::path::Path;
 
-    fn config_with_db(path: &std::path::Path) -> Config {
+    #[cfg(feature = "dhcp")]
+    use crate::config::toml::load_toml;
+    #[cfg(feature = "dhcp")]
+    use lanforge_api::config_file::DhcpSettings;
+
+    fn config_with_db(path: &Path) -> Config {
         let mut cfg = Config::default();
         cfg.database.config_path = path.display().to_string();
         cfg.database.runtime_path = "memory".to_string();
@@ -1011,7 +1013,7 @@ mod tests {
     fn unreadable_persistent_db_is_not_a_first_run() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.redb");
-        std::fs::write(&path, b"definitely not a redb file").unwrap();
+        fs::write(&path, b"definitely not a redb file").unwrap();
         let mut cfg = config_with_db(&path);
 
         let (db, _log_db) = Bootstrapper::open_databases(&cfg).unwrap();
@@ -1118,7 +1120,7 @@ mod tests {
         assert!(issues.is_empty(), "{issues:?}");
         assert_eq!(from_file, live, "the file holds the live firewall");
 
-        let mut cfg = config_with_db(std::path::Path::new("memory"));
+        let mut cfg = config_with_db(Path::new("memory"));
         cfg.system.iface = "lan0".into();
         // As on the box: SQM on (CAKE 770/380), PPPoE dataplane defaults.
         cfg.firewall_toml = from_file.effective(Some(&cfg.pppoe_toml.nftables), true, "lan0");
@@ -1139,7 +1141,7 @@ mod tests {
     /// The owner's DHCP as redb holds it (`lanforge dhcp --json`, 2026-10-28; the pools filled
     /// with the scope values by the old seed).
     #[cfg(feature = "dhcp")]
-    fn owner_stored_dhcp() -> lanforge_api::config_file::DhcpSettings {
+    fn owner_stored_dhcp() -> DhcpSettings {
         use lanforge_types::network::dhcp::Dhcpv6Pool;
 
         let options = serde_json::from_str(
@@ -1155,7 +1157,7 @@ mod tests {
         )
         .unwrap();
         let router = "192.168.3.1".parse().unwrap();
-        lanforge_api::config_file::DhcpSettings {
+        DhcpSettings {
             options,
             v4_pools: vec![Dhcpv4Pool {
                 name: Some("Primary LAN".into()),
@@ -1186,7 +1188,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("lanforge.toml");
-        std::fs::write(&path, "[system]\niface = \"lan0\"\n").unwrap();
+        fs::write(&path, "[system]\niface = \"lan0\"\n").unwrap();
         let mut cfg = config_with_db(&dir.path().join("config.redb"));
         cfg.config_path = path.display().to_string();
         cfg.config_writable = true;
@@ -1207,7 +1209,7 @@ mod tests {
         );
         Bootstrapper::persist_dhcp_heal(&cfg);
 
-        let text = std::fs::read_to_string(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
         let (dhcp, _) = ConfigFile::parse(&text).unwrap().dhcp_settings();
         assert_eq!(dhcp.options.v4.router, Some(v4.ip()));
         assert_eq!(dhcp.v4_pools, owner_stored_dhcp().v4_pools);
@@ -1244,8 +1246,8 @@ mod tests {
         let path = dir.path().join("lanforge.toml");
         let text = "[dhcp.v4.pools.lan]\nrange = \"192.168.1.100-192.168.1.200\"\n\n\
                     [dhcp.v6.pools.main]\nrange = \"::100-::1fff\"\ndns = [\"fd00::1\"]\n";
-        std::fs::write(&path, text).unwrap();
-        let toml = crate::config::toml::load_toml(&path.display().to_string());
+        fs::write(&path, text).unwrap();
+        let toml = load_toml(&path.display().to_string());
         assert!(toml.dhcp_set_aside, "{:?}", toml.config_issues);
 
         let cfg = Config {
@@ -1254,6 +1256,6 @@ mod tests {
             ..Config::default()
         };
         Bootstrapper::persist_dhcp_heal(&cfg);
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        assert_eq!(fs::read_to_string(&path).unwrap(), text);
     }
 }

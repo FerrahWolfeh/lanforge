@@ -1,4 +1,5 @@
-use std::io::IsTerminal;
+use std::fs;
+use std::io::{self, IsTerminal};
 use std::net::Ipv4Addr;
 use std::str::FromStr;
 
@@ -348,7 +349,7 @@ async fn show_host(client: &LanforgeClient, printer: &Printer, target: String) -
 }
 
 async fn add_host(client: &LanforgeClient, printer: &Printer, args: HostAddArgs) -> Result<()> {
-    let is_interactive = (std::io::stdout().is_terminal() && !printer.yes) || args.interactive;
+    let is_interactive = (io::stdout().is_terminal() && !printer.yes) || args.interactive;
 
     let (mac, hostname, v4, v6, ignore_dns_log) = if is_interactive {
         run_add_wizard(client, args).await?
@@ -592,7 +593,7 @@ async fn run_add_wizard(
 }
 
 async fn set_host(client: &LanforgeClient, printer: &Printer, args: HostSetArgs) -> Result<()> {
-    let is_interactive = std::io::stdout().is_terminal() && !printer.yes;
+    let is_interactive = io::stdout().is_terminal() && !printer.yes;
 
     let target_mac = if let Some(m) = &args.mac {
         if let Ok(mac) = MacAddr::from_str(m) {
@@ -696,7 +697,7 @@ async fn remove_host(
     printer: &Printer,
     args: HostRemoveArgs,
 ) -> Result<()> {
-    let is_interactive = std::io::stdout().is_terminal() && !printer.yes;
+    let is_interactive = io::stdout().is_terminal() && !printer.yes;
 
     let (target_mac, target_name) = if let Some(t) = &args.target {
         let resp = client.host_list().await?;
@@ -776,8 +777,7 @@ async fn export_hosts(client: &LanforgeClient, printer: &Printer, file: String) 
         return Ok(());
     }
 
-    std::fs::write(&file, json_bytes)
-        .map_err(|e| eyre!("Failed to write export file '{file}': {e}"))?;
+    fs::write(&file, json_bytes).map_err(|e| eyre!("Failed to write export file '{file}': {e}"))?;
 
     printer.success(&format!(
         "Exported {} static host reservations to '{}'",
@@ -788,8 +788,8 @@ async fn export_hosts(client: &LanforgeClient, printer: &Printer, file: String) 
 }
 
 async fn import_hosts(client: &LanforgeClient, printer: &Printer, file: String) -> Result<()> {
-    let content = std::fs::read_to_string(&file)
-        .map_err(|e| eyre!("Failed to read import file '{file}': {e}"))?;
+    let content =
+        fs::read_to_string(&file).map_err(|e| eyre!("Failed to read import file '{file}': {e}"))?;
 
     let hosts: Vec<HostConfigEntry> = serde_json::from_str(&content)
         .map_err(|e| eyre!("Failed to parse JSON host entries from '{file}': {e}"))?;
@@ -799,7 +799,7 @@ async fn import_hosts(client: &LanforgeClient, printer: &Printer, file: String) 
         return Ok(());
     }
 
-    if std::io::stdout().is_terminal() && !printer.yes {
+    if io::stdout().is_terminal() && !printer.yes {
         let confirmed = Confirm::new(&format!(
             "Import {} static host reservations from '{}'?",
             hosts.len(),

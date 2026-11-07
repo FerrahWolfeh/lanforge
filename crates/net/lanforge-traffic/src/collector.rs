@@ -1,13 +1,18 @@
 use std::collections::{HashMap, VecDeque};
+use std::fs::{self, File};
+use std::hash::BuildHasher;
+use std::str;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::sqm::tc::resolve_tc_binary;
 use lanforge_types::network::traffic::{
     CakeQdiscStats, CakeTinStats, ConntrackStats, InterfaceThroughputPoint, InterfaceTrafficStats,
     SqmTelemetryStats, TrafficHistorySample, TrafficTelemetryResponse,
 };
 use serde::Deserialize;
 use tokio::process::Command;
+use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 use tracing::debug;
 
@@ -235,7 +240,7 @@ impl TrafficCollector {
     /// Reads `/proc/net/dev` and calculates throughput rates based on elapsed time.
     fn collect_interfaces(&mut self) -> Vec<InterfaceTrafficStats> {
         self.proc_net_dev_buf.clear();
-        if let Ok(mut file) = std::fs::File::open("/proc/net/dev") {
+        if let Ok(mut file) = File::open("/proc/net/dev") {
             use std::io::Read;
             if file.read_to_string(&mut self.proc_net_dev_buf).is_ok() {
                 return parse_proc_net_dev(&self.proc_net_dev_buf, &mut self.prev_iface_snapshots);
@@ -353,7 +358,7 @@ pub fn restore_traffic_history(samples: Vec<TrafficHistorySample>) {
     match collector.try_lock() {
         Ok(mut guard) => guard.history = valid,
         Err(_) => {
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            if let Ok(handle) = Handle::try_current() {
                 handle.spawn(async move {
                     let collector = COLLECTOR.get_or_init(|| Mutex::new(TrafficCollector::new()));
                     collector.lock().await.history = valid;
@@ -370,7 +375,7 @@ pub fn restore_traffic_history(samples: Vec<TrafficHistorySample>) {
     clippy::cast_sign_loss,
     clippy::cast_possible_truncation
 )]
-pub fn parse_proc_net_dev<S: ::std::hash::BuildHasher>(
+pub fn parse_proc_net_dev<S: BuildHasher>(
     content: &str,
     prev_snapshots: &mut HashMap<String, (Instant, u64, u64), S>,
 ) -> Vec<InterfaceTrafficStats> {
@@ -479,10 +484,10 @@ pub fn parse_proc_net_dev<S: ::std::hash::BuildHasher>(
 
 fn read_sysctl_u32(path: &str) -> Option<u32> {
     use std::io::Read;
-    let mut file = std::fs::File::open(path).ok()?;
+    let mut file = File::open(path).ok()?;
     let mut buf = [0u8; 32];
     let n = file.read(&mut buf).ok()?;
-    let s = std::str::from_utf8(&buf[..n]).ok()?.trim();
+    let s = str::from_utf8(&buf[..n]).ok()?.trim();
     s.parse::<u32>().ok()
 }
 
@@ -511,7 +516,7 @@ pub fn read_conntrack_stats() -> Option<ConntrackStats> {
     };
 
     // Optionally parse /proc/net/stat/nf_conntrack if readable
-    if let Ok(stat_content) = std::fs::read_to_string("/proc/net/stat/nf_conntrack") {
+    if let Ok(stat_content) = fs::read_to_string("/proc/net/stat/nf_conntrack") {
         for line in stat_content.lines().skip(1) {
             let mut parts = [""; 12];
             let mut count = 0;
@@ -537,7 +542,7 @@ pub fn read_conntrack_stats() -> Option<ConntrackStats> {
 
 /// Runs `tc -j -s qdisc show` and parses all CAKE qdiscs.
 async fn fetch_tc_qdiscs() -> Vec<CakeQdiscStats> {
-    let tc_path = crate::sqm::tc::resolve_tc_binary();
+    let tc_path = resolve_tc_binary();
     let output = match Command::new(tc_path)
         .args(["-j", "-s", "qdisc", "show"])
         .output()
@@ -556,7 +561,7 @@ async fn fetch_tc_qdiscs() -> Vec<CakeQdiscStats> {
         }
     };
 
-    let Ok(json_str) = std::str::from_utf8(&output) else {
+    let Ok(json_str) = str::from_utf8(&output) else {
         return Vec::new();
     };
 

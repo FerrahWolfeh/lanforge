@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use colored::Colorize;
@@ -5,9 +6,11 @@ use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::DnsRecordType;
 
 use crate::cli::args::{BenchArgs, BenchTypeArg, ModeArg, RunArgs, ScenarioArg, SuiteArgs};
+use crate::engine::DiscoveryEngine;
 use crate::error::LabError;
 use crate::harness::LabHarness;
 use crate::netns::NetnsConfig;
+use crate::report::VlanSimulationResult;
 
 pub struct CliRunner;
 
@@ -15,8 +18,8 @@ impl CliRunner {
     pub async fn run_scenario(
         args: RunArgs,
         mode: ModeArg,
-        dhcp_server: std::net::SocketAddr,
-        dns_server: std::net::SocketAddr,
+        dhcp_server: SocketAddr,
+        dns_server: SocketAddr,
         iface: Option<String>,
     ) -> Result<(), LabError> {
         if args.scenario.requires_root() && !crate::is_root() {
@@ -151,7 +154,7 @@ impl CliRunner {
                 }
             }
             ScenarioArg::Discovery => {
-                let dur = crate::engine::DiscoveryEngine::probe_rtt(dhcp_server).await?;
+                let dur = DiscoveryEngine::probe_rtt(dhcp_server).await?;
                 println!(
                     "Discovery RTT against {dhcp_server}: {:.2} ms",
                     dur.as_secs_f64() * 1000.0
@@ -177,7 +180,7 @@ impl CliRunner {
                     octets[2] == (vid & 0xff) as u8
                 });
 
-                let vlan_report = crate::report::VlanSimulationResult {
+                let vlan_report = VlanSimulationResult {
                     vlan_id: vid,
                     iface: vlan_iface.clone(),
                     client_mac: res.client_mac.clone(),
@@ -258,8 +261,8 @@ impl CliRunner {
     pub async fn run_bench(
         args: BenchArgs,
         mode: ModeArg,
-        dhcp_server: std::net::SocketAddr,
-        dns_server: std::net::SocketAddr,
+        dhcp_server: SocketAddr,
+        dns_server: SocketAddr,
         iface: Option<String>,
     ) -> Result<(), LabError> {
         let harness = Self::init_harness(mode, dhcp_server, dns_server, iface.as_deref())?;
@@ -392,8 +395,8 @@ impl CliRunner {
     pub async fn run_suite(
         args: SuiteArgs,
         mode: ModeArg,
-        dhcp_server: std::net::SocketAddr,
-        dns_server: std::net::SocketAddr,
+        dhcp_server: SocketAddr,
+        dns_server: SocketAddr,
         iface: Option<String>,
     ) -> Result<(), LabError> {
         let harness = Self::init_harness(mode, dhcp_server, dns_server, iface.as_deref())?;
@@ -459,8 +462,8 @@ impl CliRunner {
 
     fn init_harness(
         mode: ModeArg,
-        dhcp_server: std::net::SocketAddr,
-        dns_server: std::net::SocketAddr,
+        dhcp_server: SocketAddr,
+        dns_server: SocketAddr,
         iface: Option<&str>,
     ) -> Result<LabHarness, LabError> {
         if mode.requires_root() && !crate::is_root() {
