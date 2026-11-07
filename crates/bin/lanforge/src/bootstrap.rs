@@ -997,9 +997,9 @@ mod tests {
     use std::path::Path;
 
     #[cfg(feature = "dhcp")]
-    use lanforge_api::config_file::DhcpSettings;
-    #[cfg(feature = "dhcp")]
     use crate::config::toml::load_toml;
+    #[cfg(feature = "dhcp")]
+    use lanforge_api::config_file::DhcpSettings;
 
     fn config_with_db(path: &Path) -> Config {
         let mut cfg = Config::default();

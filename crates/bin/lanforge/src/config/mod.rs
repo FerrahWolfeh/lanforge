@@ -50,10 +50,10 @@ use std::path::{Path, PathBuf};
 use lanforge_api::config_file::ConfigFile;
 #[cfg(feature = "dhcp")]
 use lanforge_api::config_file::DhcpSettings;
-#[cfg(feature = "ra")]
-use lanforge_api::config_file::{RaInputs, effective_ra};
 #[cfg(feature = "dns")]
 use lanforge_api::config_file::{AdblockSettings, DnsSettings};
+#[cfg(feature = "ra")]
+use lanforge_api::config_file::{RaInputs, effective_ra};
 #[cfg(feature = "pppoe")]
 use lanforge_pppoe::config::PppoeConfig as PppoeTomlConfig;
 use lanforge_types::device::StaticHost;
