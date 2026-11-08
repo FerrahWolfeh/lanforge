@@ -88,17 +88,14 @@ impl DnsService {
     pub const SERVICE_ID: ServiceId = ServiceId::Dns;
     #[must_use]
     pub fn new(cfg: DnsConfig, ctx: LanforgeContext) -> Self {
-        let lifetime = ctx
-            .get_shared::<DnsLifetimeStats>()
-            .map(|arc| (*arc).clone())
-            .unwrap_or_default();
-        Self::with_lifetime(cfg, ctx, lifetime)
-    }
-
-    #[must_use]
-    pub fn with_lifetime(cfg: DnsConfig, ctx: LanforgeContext, lifetime: DnsLifetimeStats) -> Self {
-        let stats = Arc::new(DnsStats::with_lifetime(&lifetime));
-        ctx.provide_shared(Arc::clone(&stats));
+        // The counters belong to the context (seeded from the stored lifetime totals at boot):
+        // the supervisor builds a new instance for every run, and a restart must not drop what
+        // was counted before it.
+        let stats = ctx.get_shared::<DnsStats>().unwrap_or_else(|| {
+            let stats = Arc::new(DnsStats::new());
+            ctx.provide_shared(Arc::clone(&stats));
+            stats
+        });
         Self {
             cfg: Arc::new(cfg),
             stats,
@@ -143,9 +140,12 @@ impl DnsService {
             self.cfg.cache_min_ttl,
             Some(Arc::clone(&self.stats)),
         ));
+        // Cache gauges describe this run's cache, not the lifetime totals.
         self.stats
             .cache_capacity
             .store(self.cfg.cache_size, Ordering::Relaxed);
+        self.stats.cache_entries.store(0, Ordering::Relaxed);
+        self.stats.cache_evictions.store(0, Ordering::Relaxed);
         let upstreams = build_upstreams(&effective_upstream_targets(&self.ctx), &cache).await;
 
         if upstreams.is_empty() && self.cfg.enabled && !self.cfg.search_domains.is_empty() {

@@ -18,6 +18,8 @@ use lanforge_db::{LanforgeDb, LogDb, LogStore, PrefixStore, UserStore};
 use lanforge_dhcp::v4::sanity::derive_dhcp_defaults_from_v4;
 use lanforge_discovery::refresh_interface;
 #[cfg(feature = "dns")]
+use lanforge_dns::telemetry::DnsStats;
+#[cfg(feature = "dns")]
 use lanforge_types::DnsListenConfig;
 use lanforge_types::build::BuildInfo;
 use lanforge_types::config::SiteDomains;
@@ -202,8 +204,10 @@ impl Bootstrapper {
 
         #[cfg(feature = "dns")]
         {
+            // The counters live in the context, not in a service instance: every DNS run (the
+            // supervisor builds a new instance each time) keeps counting from here.
             let dns_lifetime = log_db.load_dns_lifetime_stats().unwrap_or_default();
-            ctx.provide_shared(Arc::new(dns_lifetime));
+            ctx.provide_shared(Arc::new(DnsStats::with_lifetime(&dns_lifetime)));
         }
 
         #[cfg(feature = "traffic")]
