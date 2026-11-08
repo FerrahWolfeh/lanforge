@@ -1,6 +1,10 @@
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 #![allow(clippy::missing_panics_doc, clippy::missing_errors_doc)]
 
+// The binary initializes profiling; the library propagates its feature to services.
+#[cfg(feature = "hotpath")]
+use hotpath as _;
+
 use rustls as _;
 use toml as _;
 use tracing_subscriber as _;
@@ -9,6 +13,8 @@ use tracing_subscriber as _;
 use dhcproto as _;
 #[cfg(test)]
 use lanforge_api_dispatch as _;
+#[cfg(test)]
+use lanforge_dns_wire as _;
 #[cfg(test)]
 use lanforge_transport as _;
 #[cfg(test)]

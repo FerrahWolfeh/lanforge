@@ -27,6 +27,11 @@ use tracing_subscriber::EnvFilter;
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
+// Programmatic hotpath initialization does not install an allocator.
+#[cfg(feature = "hotpath-alloc")]
+#[global_allocator]
+static ALLOC: hotpath::CountingAllocator = hotpath::CountingAllocator::new();
+
 fn main() -> Result<()> {
     // systemd's start timeout runs from exec: the readiness deadline counts from here too.
     let started = Instant::now();
@@ -91,3 +96,6 @@ async fn async_main(started: Instant) -> Result<()> {
     let daemon = Daemon::new(bootstrap, ctx, started.into());
     daemon.run().await
 }
+
+#[cfg(all(test, feature = "hotpath-alloc"))]
+mod profiling_tests;

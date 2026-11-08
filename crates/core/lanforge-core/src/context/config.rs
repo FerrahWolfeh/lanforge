@@ -434,6 +434,9 @@ impl ConfigPatch {
         if let Some(ref rules) = self.dns_adblock_rules {
             target.dns_adblock_rules.clone_from(rules);
         }
+        if let Some(ref reverse) = self.dns_reverse {
+            target.dns_reverse.clone_from(reverse);
+        }
     }
 }
 
@@ -469,6 +472,8 @@ pub struct DynamicConfig {
     pub dns_adblock_urls: Vec<AdblockUrlEntry>,
     /// The global adblock rules file's text (manual blocks and allows).
     pub dns_adblock_rules: AdblockRules,
+    /// Per-subnet resolvers for reverse (PTR) lookups.
+    pub dns_reverse: Vec<DnsReverseResolver>,
     /// Configured `PPPoE` client runtime configuration.
     pub pppoe: Option<PppoeConfig>,
     /// Configured firewall runtime configuration.
@@ -698,19 +703,6 @@ impl LanforgeContext {
         F: FnOnce(&DynamicConfig) -> R,
     {
         f(&self.inner.config.load())
-    }
-
-    /// Executes a closure with write access to the dynamic configurations.
-    pub fn update_config<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut DynamicConfig) -> R,
-    {
-        let _guard = self.inner.config_mutex.lock();
-        let current = self.inner.config.load();
-        let mut next = (**current).clone();
-        let res = f(&mut next);
-        self.inner.config.store(Arc::new(next));
-        res
     }
 
     #[must_use]

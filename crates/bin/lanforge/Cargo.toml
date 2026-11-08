@@ -72,6 +72,8 @@ hotpath = [
     "hotpath/tokio",
     "lanforge-core/hotpath",
     "lanforge-api-dispatch/hotpath",
+    "lanforge-http?/hotpath",
+    "lanforge-uds?/hotpath",
     "lanforge-dns?/hotpath",
     "lanforge-dhcp?/hotpath",
     "lanforge-ra?/hotpath",
@@ -239,6 +241,7 @@ parking_lot = { workspace = true }
 
 
 [dev-dependencies]
+lanforge-dns-wire = { workspace = true }
 tokio = { workspace = true, features = ["full", "io-util"] }
 tempfile = "3.10.1"
 serde_json = { workspace = true }
@@ -249,3 +252,8 @@ dhcproto = "0.15.0"
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "core_baseline"
+harness = false
+required-features = ["dns", "dhcp"]

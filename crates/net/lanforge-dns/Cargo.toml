@@ -100,11 +100,12 @@ doh-upstream = [
     "dep:hyper-rustls",
     "dep:http-body-util",
 ]
-hotpath = ["dep:hotpath", "lanforge-core/hotpath"]
+hotpath = ["dep:hotpath", "lanforge-core/hotpath", "lanforge-dns-wire/hotpath"]
 hotpath-alloc = [
     "hotpath",
     "hotpath/hotpath-alloc",
     "lanforge-core/hotpath-alloc",
+    "lanforge-dns-wire/hotpath-alloc",
 ]
 default = ["adblock", "dot", "doh-upstream", "ring"]
 rkyv = ["dep:rkyv"]

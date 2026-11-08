@@ -26,7 +26,6 @@ tracing = { workspace = true }
 libc = { workspace = true }
 rtnetlink = { workspace = true }
 rand = { workspace = true }
-hotpath = { workspace = true, optional = true }
 
 # Third party protocol / low level
 nix = { version = "0.31.3", features = ["socket", "ioctl", "net", "fs"] }
@@ -34,10 +33,9 @@ md-5 = "0.11.0"
 smallvec = { workspace = true }
 
 [features]
-hotpath = ["dep:hotpath", "lanforge-core/hotpath"]
+hotpath = ["lanforge-core/hotpath"]
 hotpath-alloc = [
     "hotpath",
-    "hotpath/hotpath-alloc",
     "lanforge-core/hotpath-alloc",
 ]
 default = []

@@ -13,7 +13,6 @@ use lanforge_core::context::ConfigPatch;
 use lanforge_crypto::stable_id_or_hash;
 use lanforge_types::device::{Origin, StaticHost};
 use lanforge_types::identifiers::DeviceIdentifier;
-use lanforge_types::network::DnsReverseResolver;
 use lanforge_types::network::dns::adblock::{ClientSelector, RewriteAnswer};
 use lanforge_types::network::firewall::{FirewallConfig, ForwardTarget};
 use lanforge_types::network::ra::RaServerConfig;
@@ -360,15 +359,13 @@ impl ClientContext {
     /// Applies the parts of `dns` that differ from the live settings. The listener is bound at
     /// start-up and is not changed here.
     pub fn apply_dns_settings(&self, dns: DnsSettings) {
-        let reverse = dns.reverse.clone();
         let _ = self
             .ctx
             .apply_config(self.dns_settings_patch(ConfigPatch::new(), dns));
-        self.sync_reverse_resolvers(reverse);
     }
 
-    /// `patch` plus the upstreams, mode and rewrites of `dns` that differ from the live ones.
-    /// The reverse resolvers are not part of it: see [`Self::sync_reverse_resolvers`].
+    /// `patch` plus the upstreams, mode, rewrites and reverse resolvers of `dns` that differ from
+    /// the live ones.
     pub(crate) fn dns_settings_patch(
         &self,
         mut patch: ConfigPatch,
@@ -384,15 +381,10 @@ impl ClientContext {
         if self.ctx.get_dns_rewrites() != dns.rewrites {
             patch = patch.with_dns_rewrites(dns.rewrites);
         }
-        patch
-    }
-
-    /// The reverse resolvers live in the device state and the config store at once;
-    /// `set_reverse_resolvers` keeps both.
-    pub(crate) fn sync_reverse_resolvers(&self, reverse: Vec<DnsReverseResolver>) {
-        if self.ctx.all_reverse_resolvers() != reverse {
-            self.ctx.set_reverse_resolvers(reverse);
+        if self.ctx.all_reverse_resolvers() != dns.reverse {
+            patch = patch.with_dns_reverse(dns.reverse);
         }
+        patch
     }
 
     /// The adblock settings running now, as `[adblock]` holds them: the filter settings and the

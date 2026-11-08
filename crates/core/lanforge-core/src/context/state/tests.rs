@@ -1567,7 +1567,7 @@ fn test_reverse_resolvers_management() {
 
     // Add resolver 1
     ctx.add_reverse_resolver(res1.clone());
-    assert_eq!(ctx.read().reverse_resolvers.len(), 1);
+    assert_eq!(ctx.all_reverse_resolvers().len(), 1);
 
     // Add replacement resolver for same subnet
     let res1_replacement = DnsReverseResolver {
@@ -1575,20 +1575,20 @@ fn test_reverse_resolvers_management() {
         resolver: "192.168.1.254:53".parse().unwrap(),
     };
     ctx.add_reverse_resolver(res1_replacement.clone());
-    assert_eq!(ctx.read().reverse_resolvers.len(), 1);
+    assert_eq!(ctx.all_reverse_resolvers().len(), 1);
     assert_eq!(
-        ctx.read().reverse_resolvers[0].resolver,
+        ctx.all_reverse_resolvers()[0].resolver,
         res1_replacement.resolver
     );
 
     // Set list
     ctx.set_reverse_resolvers(vec![res1, res2]);
-    assert_eq!(ctx.read().reverse_resolvers.len(), 2);
+    assert_eq!(ctx.all_reverse_resolvers().len(), 2);
 
     // Remove resolver
     ctx.remove_reverse_resolver(subnet1);
-    assert_eq!(ctx.read().reverse_resolvers.len(), 1);
-    assert_eq!(ctx.read().reverse_resolvers[0].subnet, subnet2);
+    assert_eq!(ctx.all_reverse_resolvers().len(), 1);
+    assert_eq!(ctx.all_reverse_resolvers()[0].subnet, subnet2);
 }
 
 #[test]

@@ -17,6 +17,69 @@ use std::{
     sync::atomic::Ordering,
 };
 
+/// Names of the `hotpath` scopes of one kind of state write; empty without the feature.
+pub(crate) struct WriteScope {
+    #[cfg(feature = "hotpath")]
+    wait: &'static str,
+    #[cfg(feature = "hotpath")]
+    hold: &'static str,
+    #[cfg(feature = "hotpath")]
+    clone: &'static str,
+}
+
+macro_rules! write_scope {
+    ($prefix:literal) => {
+        WriteScope {
+            #[cfg(feature = "hotpath")]
+            wait: concat!($prefix, ".writer_wait"),
+            #[cfg(feature = "hotpath")]
+            hold: concat!($prefix, ".writer_hold"),
+            #[cfg(feature = "hotpath")]
+            clone: concat!($prefix, ".state_clone"),
+        }
+    };
+}
+
+const SINGLE_SCOPE: WriteScope = write_scope!("core.single");
+const BATCH_SCOPE: WriteScope = write_scope!("core.batch");
+const MAINTENANCE_SCOPE: WriteScope = write_scope!("core.maintenance");
+
+impl LanforgeContext {
+    /// The one way the state changes: take the writer lock, edit a copy-on-write copy of the
+    /// current state, publish it whole. Readers see the old or the new state, never a mix.
+    /// Events are the caller's to publish, after the lock is released.
+    #[cfg_attr(
+        not(feature = "hotpath"),
+        expect(
+            unused_variables,
+            reason = "the scope only names profiling measurements"
+        )
+    )]
+    fn write_state<R>(&self, scope: &WriteScope, edit: impl FnOnce(&mut State) -> R) -> R {
+        let _guard = {
+            #[cfg(feature = "hotpath")]
+            let _profile = hotpath::MeasurementGuardSync::new(scope.wait, false, false);
+            self.inner.writer_mutex.lock()
+        };
+        #[cfg(feature = "hotpath")]
+        let _hold = hotpath::MeasurementGuardSync::new(scope.hold, false, false);
+        let current = self.inner.state.load_full();
+        let mut next = {
+            #[cfg(feature = "hotpath")]
+            let _profile = hotpath::MeasurementGuardSync::new(scope.clone, false, false);
+            (*current).clone()
+        };
+        let result = edit(&mut next);
+        self.inner.state.store(Arc::new(next));
+        result
+    }
+
+    /// Edits the state outside the update protocol (maintenance, expiry, tests).
+    pub(crate) fn with_state_mut<R>(&self, edit: impl FnOnce(&mut State) -> R) -> R {
+        self.write_state(&MAINTENANCE_SCOPE, edit)
+    }
+}
+
 impl LanforgeContext {
     /// Applies a state mutation to the context.
     #[must_use]
@@ -53,18 +116,13 @@ impl LanforgeContext {
             return EventVec::new();
         }
 
-        let events = {
-            let _guard = self.inner.writer_mutex.lock();
-            let current = self.inner.state.load_full();
-            let mut new_state = (*current).clone();
+        let events = self.write_state(&BATCH_SCOPE, |state| {
             let mut all_events = EventVec::new();
             for update in filtered {
-                let evs = new_state.apply_update(update, &self.inner.discovery);
-                all_events.extend(evs);
+                all_events.extend(state.apply_update(update, &self.inner.discovery));
             }
-            self.inner.state.store(Arc::new(new_state));
             all_events
-        };
+        });
 
         if events.is_empty() {
             return EventVec::new();
@@ -91,14 +149,9 @@ impl LanforgeContext {
         };
 
         // 3. Apply to State
-        let events = {
-            let _guard = self.inner.writer_mutex.lock();
-            let current = self.inner.state.load_full();
-            let mut new_state = (*current).clone();
-            let events = new_state.apply_update(update, &self.inner.discovery);
-            self.inner.state.store(Arc::new(new_state));
-            events
-        };
+        let events = self.write_state(&SINGLE_SCOPE, |state| {
+            state.apply_update(update, &self.inner.discovery)
+        });
 
         if events.is_empty() {
             return EventVec::new();

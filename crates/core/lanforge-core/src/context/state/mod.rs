@@ -16,7 +16,7 @@ use lanforge_types::device::{
 };
 use lanforge_types::events::EventVec;
 use lanforge_types::identifiers::{Duid, MacAddr};
-use lanforge_types::network::{DnsReverseResolver, IpSubnet, Ipv6Prefix};
+use lanforge_types::network::Ipv6Prefix;
 use lanforge_types::update::{
     CliHostUpdate, DeviceUpdate, FieldUpdate, InterfaceState, LeaseTarget,
 };
@@ -189,8 +189,6 @@ pub struct State {
     #[serde(skip)]
     pub transient_hosts: HashMap<IpAddr, TransientHost>,
     #[serde(skip)]
-    pub reverse_resolvers: Vec<DnsReverseResolver>,
-    #[serde(skip)]
     pub static_registry: Arc<StaticRegistry>,
 }
 
@@ -221,6 +219,7 @@ impl State {
             .or(self.interfaces.ra_gua_fallback)
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn index_device(&mut self, mac: MacAddr, dev: &Device) {
         if self.indexing_enabled || dev.is_static() {
             let ula_prefix = self.active_ula_prefix();
@@ -239,6 +238,7 @@ impl State {
         }
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn unindex_device(&mut self, dev: &Device) {
         let ula_prefix = self.active_ula_prefix();
         let gua_prefix = self.active_gua_prefix();
@@ -688,21 +688,6 @@ impl State {
         discovery.clear();
         self.interfaces.clear();
         self.transient_hosts.clear();
-        self.reverse_resolvers.clear();
-    }
-
-    pub fn add_reverse_resolver(&mut self, resolver: DnsReverseResolver) {
-        self.reverse_resolvers
-            .retain(|r| r.subnet != resolver.subnet);
-        self.reverse_resolvers.push(resolver);
-    }
-
-    pub fn remove_reverse_resolver(&mut self, subnet: IpSubnet) {
-        self.reverse_resolvers.retain(|r| r.subnet != subnet);
-    }
-
-    pub fn set_reverse_resolvers(&mut self, resolvers: Vec<DnsReverseResolver>) {
-        self.reverse_resolvers = resolvers;
     }
 }
 

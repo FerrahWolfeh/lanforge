@@ -72,7 +72,6 @@ impl ClientContext {
         let applies = |sec: Section| !set_aside.iter().any(|(s, _)| *s == sec);
         let _serial = ctx.config_change_lock();
         let mut patch = ConfigPatch::new();
-        let mut reverse = None;
 
         if applies(Section::System) {
             let domains = SiteDomains(file.search_domains());
@@ -134,7 +133,6 @@ impl ClientContext {
                 info!("Reload: [dns] listener or enabled changed; restarting the DNS service");
                 patch = patch.with_dns_listen(listener);
             }
-            reverse = Some(dns.reverse.clone());
             patch = self.dns_settings_patch(patch, dns);
             if patch.dns_upstreams.is_some()
                 || patch.dns_upstream_mode.is_some()
@@ -181,8 +179,5 @@ impl ClientContext {
         }
 
         let _ = ctx.apply_config(patch);
-        if let Some(reverse) = reverse {
-            self.sync_reverse_resolvers(reverse);
-        }
     }
 }

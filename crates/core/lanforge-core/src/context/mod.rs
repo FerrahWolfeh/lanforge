@@ -253,19 +253,6 @@ impl LanforgeContext {
         &self.inner.discovery
     }
 
-    /// Executes a closure with exclusive write access to the state via Copy-on-Write.
-    pub(crate) fn with_state_mut<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut State) -> R,
-    {
-        let _guard = self.inner.writer_mutex.lock();
-        let current = self.inner.state.load_full();
-        let mut new_state = (*current).clone();
-        let result = f(&mut new_state);
-        self.inner.state.store(Arc::new(new_state));
-        result
-    }
-
     /// Records the daemon binary's build (startup only; a second call is ignored).
     pub fn set_build(&self, build: BuildInfo) {
         let _ = self.inner.runtime.build.set(build);

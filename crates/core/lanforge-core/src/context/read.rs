@@ -239,19 +239,17 @@ impl LanforgeContext {
     /// Finds a configured reverse DNS resolver target that contains the target IP.
     #[must_use]
     pub fn find_reverse_resolver(&self, ip: IpAddr) -> Option<UpstreamTarget> {
-        let state = self.read();
-        for resolver in &state.reverse_resolvers {
-            if resolver.subnet.contains(ip) {
-                return Some(resolver.resolver.clone());
-            }
-        }
-        drop(state);
-        None
+        self.with_config(|cfg| {
+            cfg.dns_reverse
+                .iter()
+                .find(|r| r.subnet.contains(ip))
+                .map(|r| r.resolver.clone())
+        })
     }
 
     /// Returns all configured reverse DNS resolvers.
     #[must_use]
     pub fn all_reverse_resolvers(&self) -> Vec<DnsReverseResolver> {
-        self.read().reverse_resolvers.clone()
+        self.with_config(|cfg| cfg.dns_reverse.clone())
     }
 }

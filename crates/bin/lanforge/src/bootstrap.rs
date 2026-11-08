@@ -443,11 +443,6 @@ impl Bootstrapper {
             Self::reconcile_dhcp_v4_topology_sanity(cfg, &table, host_ifaces);
         }
 
-        #[cfg(feature = "dns")]
-        {
-            table.reverse_resolvers.clone_from(&cfg.dns.reverse);
-        }
-
         Self::log_db_status(&db, &log_db, &table, cfg, user_count);
         Self::inject_self_device(&mut table, cfg, host_ifaces);
 

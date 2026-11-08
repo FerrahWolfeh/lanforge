@@ -49,6 +49,10 @@
 //!
 //! All state is protected by `parking_lot::RwLock` inside an `Arc<LanforgeContextInner>`.
 //! The [`EventBus`](bus::EventBus) uses `tokio::sync::broadcast` for async event distribution.
+// Integration tests use these development dependencies in separate targets.
+#[cfg(test)]
+use {serde_json as _, tempfile as _};
+
 pub mod bus;
 pub mod context;
 pub mod error;

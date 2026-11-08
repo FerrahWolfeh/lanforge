@@ -32,6 +32,15 @@ jobs:
       - name: Cargo Test
         run: cargo test --workspace
 
+      - name: Profiling feature checks
+        env:
+          HOTPATH_METRICS_SERVER_OFF: "1"
+        run: |
+          cargo clippy --workspace --all-targets --features lanforge/hotpath-alloc -- -D warnings
+          cargo test -p lanforge-core --test profiling --features hotpath
+          cargo test -p lanforge-core --test profiling --features hotpath-alloc
+          cargo test -p lanforge --bin lanforged --features hotpath-alloc daemon_allocator_records_core_updates
+
       - name: DNS feature matrix
         run: ./scripts/check-dns-features.sh
 

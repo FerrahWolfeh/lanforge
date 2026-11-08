@@ -1831,9 +1831,9 @@ dependencies = [
 
 [[package]]
 name = "hotpath"
-version = "0.28.6"
+version = "0.31.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2ee4f8d17ebe2400fa845f079acf9ede235be6472512876779af45f7890f934"
+checksum = "4039758c8bca06a34c475d17aaafc17ac1073ce2cecd8dba8c82e69edb300bbe"
 dependencies = [
  "arc-swap",
  "axum",
@@ -1859,15 +1859,15 @@ dependencies = [
 
 [[package]]
 name = "hotpath-drain"
-version = "0.28.6"
+version = "0.31.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd9e65572a429f44a48c360559a3f59028579b53e1df07c5f31dc147d2b94a50"
+checksum = "bbba0a3badfb9ebf95f22dc6cdb4afcd0ff07b91a85fa3196fd1060576ea3065"
 
 [[package]]
 name = "hotpath-macros"
-version = "0.28.6"
+version = "0.31.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b90aafbaf5f6af01ee9db2888644b15995f5306e5c280aec8261feb3e5e214a"
+checksum = "7d980014875338771b00ac44f1c9e2ea1a10650aa68ce54226233bc767714361"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2360,6 +2360,7 @@ dependencies = [
  "lanforge-dhcp",
  "lanforge-discovery",
  "lanforge-dns",
+ "lanforge-dns-wire",
  "lanforge-http",
  "lanforge-nft",
  "lanforge-pppoe",
@@ -2477,7 +2478,9 @@ dependencies = [
  "lanforge-types",
  "parking_lot",
  "serde",
+ "serde_json",
  "smallvec",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
@@ -2722,7 +2725,6 @@ dependencies = [
 name = "lanforge-pppoe"
 version = "0.43.1"
 dependencies = [
- "hotpath",
  "lanforge-core",
  "lanforge-transport",
  "lanforge-types",

@@ -112,7 +112,7 @@ impl ClientContext {
         let ra_dnssl = Some(self.ctx.get_ra_dnssl());
         let pppoe_config = self.ctx.get_pppoe_config().map(Box::new);
         let dhcp_options = Some(Box::new(self.ctx.get_dhcp_options()));
-        let dns_reverse_resolvers = Some(self.ctx.with_state(|s| s.reverse_resolvers.clone()));
+        let dns_reverse_resolvers = Some(self.ctx.all_reverse_resolvers());
         let firewall_config = self.ctx.get_firewall_config().map(Box::new);
         let traffic_config = self.ctx.get_traffic_config().map(Box::new);
         let system_iface = self.ctx.target_interface_name();

@@ -29,3 +29,6 @@ crates/net/lanforge-pppoe/bpf/*.o
 # Local planning docs
 docs/plans/
 AGENTS.local.md
+
+# Local benchmark results (regenerate with scripts/measure-core.py)
+docs/benchmarks/

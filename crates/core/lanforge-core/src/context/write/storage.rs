@@ -103,27 +103,23 @@ impl LanforgeContext {
         *self.inner.runtime.last_db_flush.write() = None;
     }
 
-    /// Adds or updates a custom reverse DNS resolver for a subnet.
+    /// Adds or replaces the reverse DNS resolver of a subnet.
     pub fn add_reverse_resolver(&self, resolver: DnsReverseResolver) {
-        let resolvers = self.with_state_mut(|state| {
-            state.add_reverse_resolver(resolver);
-            state.reverse_resolvers.clone()
-        });
-        let _ = self.apply_config(ConfigPatch::new().with_dns_reverse(resolvers));
+        let mut resolvers = self.all_reverse_resolvers();
+        resolvers.retain(|r| r.subnet != resolver.subnet);
+        resolvers.push(resolver);
+        self.set_reverse_resolvers(resolvers);
     }
 
-    /// Removes a custom reverse DNS resolver for a subnet.
+    /// Removes the reverse DNS resolver of a subnet.
     pub fn remove_reverse_resolver(&self, subnet: IpSubnet) {
-        let resolvers = self.with_state_mut(|state| {
-            state.remove_reverse_resolver(subnet);
-            state.reverse_resolvers.clone()
-        });
-        let _ = self.apply_config(ConfigPatch::new().with_dns_reverse(resolvers));
+        let mut resolvers = self.all_reverse_resolvers();
+        resolvers.retain(|r| r.subnet != subnet);
+        self.set_reverse_resolvers(resolvers);
     }
 
     /// Sets or replaces all custom reverse DNS resolvers.
     pub fn set_reverse_resolvers(&self, resolvers: Vec<DnsReverseResolver>) {
-        self.with_state_mut(|state| state.set_reverse_resolvers(resolvers.clone()));
         let _ = self.apply_config(ConfigPatch::new().with_dns_reverse(resolvers));
     }
 }
