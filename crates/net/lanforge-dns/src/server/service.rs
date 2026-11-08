@@ -282,10 +282,6 @@ impl AsyncService for DnsService {
         let dns_ctx = self.init_dns_context().await?;
         ctx.provide_shared(Arc::clone(&dns_ctx));
 
-        // The request queue outlives this instance: callers keep the same `DnsHandle` and wait
-        // through a restart instead of failing on a closed channel.
-        let mut mpsc_rx = ctx.take_dns_requests();
-
         let parallelism = thread::available_parallelism().map_or(1, NonZero::get);
         info!(handlers = parallelism, "Starting service");
 
@@ -310,8 +306,14 @@ impl AsyncService for DnsService {
             // One counter per UDP socket, plus the messages of TCP/DoT/DoQ together.
             let mut counters = Vec::with_capacity(addrs.len() + 1);
             counters.push(Arc::clone(&dns_ctx.streams));
-            for addr in &addrs {
-                let transport = bind_udp(*addr).map_err(CoreError::Io)?;
+            // Bind every address before spawning any worker: on a bind error the sockets already
+            // bound are dropped here, not left to detached workers that would hold the port.
+            let transports = addrs
+                .iter()
+                .map(|addr| bind_udp(*addr).map(|t| (addr, t)))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(CoreError::Io)?;
+            for (addr, transport) in transports {
                 counters.push(transport.metrics_handle());
                 info!(%addr, "UDP listening");
                 for _ in 0..parallelism {
@@ -321,6 +323,11 @@ impl AsyncService for DnsService {
             ctx.set_service_transports(Self::SERVICE_ID, counters);
             tcp_worker = Some(spawn_tcp_worker(Arc::clone(&dns_ctx)));
         }
+
+        // The request queue outlives this instance: callers keep the same `DnsHandle` and wait
+        // through a restart instead of failing on a closed channel. Taken once the sockets are
+        // bound, so a bind error does not drop it.
+        let mut mpsc_rx = ctx.take_dns_requests();
 
         #[cfg(feature = "adblock")]
         info!("Adblock feature compiled in");

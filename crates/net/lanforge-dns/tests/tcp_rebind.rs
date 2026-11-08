@@ -372,3 +372,37 @@ async fn slow_handle_request_does_not_block_others() {
         .expect("join")
         .expect("serve ok");
 }
+
+/// A listen address that cannot be bound fails the run, and the sockets already bound for the
+/// other addresses go with it. Their workers used to stay alive, detached, so every retry by the
+/// supervisor failed with "address in use" on the first address and DNS never came back (e.g. a
+/// v6 listen address not yet on the interface at boot).
+#[tokio::test]
+async fn failed_bind_releases_the_addresses_already_bound() {
+    let ctx = init_test_context();
+    let first = SocketAddr::from((Ipv4Addr::LOCALHOST, free_port()));
+    let taken = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).expect("blocker socket");
+    let second = taken.local_addr().expect("blocker addr");
+    ctx.update_dns_listen(DnsListenConfig {
+        enabled: true,
+        listen: ListenConfig::Multiple(vec![first, second]),
+        ..DnsListenConfig::default()
+    });
+    let mut service = DnsService::new(
+        DnsConfig {
+            enabled: true,
+            ..mock_config()
+        },
+        ctx.clone(),
+    );
+    let (_cmd_tx, cmd_rx) = mpsc::channel(4);
+    let h = ServiceHandle::with_command_channel(ServiceId::Dns, ctx.clone(), cmd_rx);
+    let res = timeout(Duration::from_secs(2), service.serve(&ctx, &h))
+        .await
+        .expect("serve returns on a bind error");
+    assert!(res.is_err(), "the second address cannot be bound");
+
+    sleep(Duration::from_millis(50)).await;
+    let rebind = UdpSocket::bind(first);
+    assert!(rebind.is_ok(), "UDP {first} still held: {:?}", rebind.err());
+}
