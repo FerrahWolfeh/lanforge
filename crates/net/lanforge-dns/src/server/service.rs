@@ -88,17 +88,14 @@ impl DnsService {
     pub const SERVICE_ID: ServiceId = ServiceId::Dns;
     #[must_use]
     pub fn new(cfg: DnsConfig, ctx: LanforgeContext) -> Self {
-        let lifetime = ctx
-            .get_shared::<DnsLifetimeStats>()
-            .map(|arc| (*arc).clone())
-            .unwrap_or_default();
-        Self::with_lifetime(cfg, ctx, lifetime)
-    }
-
-    #[must_use]
-    pub fn with_lifetime(cfg: DnsConfig, ctx: LanforgeContext, lifetime: DnsLifetimeStats) -> Self {
-        let stats = Arc::new(DnsStats::with_lifetime(&lifetime));
-        ctx.provide_shared(Arc::clone(&stats));
+        // The counters belong to the context (seeded from the stored lifetime totals at boot):
+        // the supervisor builds a new instance for every run, and a restart must not drop what
+        // was counted before it.
+        let stats = ctx.get_shared::<DnsStats>().unwrap_or_else(|| {
+            let stats = Arc::new(DnsStats::new());
+            ctx.provide_shared(Arc::clone(&stats));
+            stats
+        });
         Self {
             cfg: Arc::new(cfg),
             stats,
@@ -143,9 +140,12 @@ impl DnsService {
             self.cfg.cache_min_ttl,
             Some(Arc::clone(&self.stats)),
         ));
+        // Cache gauges describe this run's cache, not the lifetime totals.
         self.stats
             .cache_capacity
             .store(self.cfg.cache_size, Ordering::Relaxed);
+        self.stats.cache_entries.store(0, Ordering::Relaxed);
+        self.stats.cache_evictions.store(0, Ordering::Relaxed);
         let upstreams = build_upstreams(&effective_upstream_targets(&self.ctx), &cache).await;
 
         if upstreams.is_empty() && self.cfg.enabled && !self.cfg.search_domains.is_empty() {
@@ -280,11 +280,10 @@ impl AsyncService for DnsService {
         }
 
         let dns_ctx = self.init_dns_context().await?;
-        ctx.provide_shared(Arc::clone(&dns_ctx));
-
-        // The request queue outlives this instance: callers keep the same `DnsHandle` and wait
-        // through a restart instead of failing on a closed channel.
-        let mut mpsc_rx = ctx.take_dns_requests();
+        // Other front ends (DoH) reach the engine through the context while this run serves; the
+        // guard withdraws it on every exit, so they get "not ready" instead of a stopped run's
+        // engine, and its cache and filter are freed with the run.
+        let _published = PublishedEngine::new(ctx, &dns_ctx);
 
         let parallelism = thread::available_parallelism().map_or(1, NonZero::get);
         info!(handlers = parallelism, "Starting service");
@@ -310,8 +309,14 @@ impl AsyncService for DnsService {
             // One counter per UDP socket, plus the messages of TCP/DoT/DoQ together.
             let mut counters = Vec::with_capacity(addrs.len() + 1);
             counters.push(Arc::clone(&dns_ctx.streams));
-            for addr in &addrs {
-                let transport = bind_udp(*addr).map_err(CoreError::Io)?;
+            // Bind every address before spawning any worker: on a bind error the sockets already
+            // bound are dropped here, not left to detached workers that would hold the port.
+            let transports = addrs
+                .iter()
+                .map(|addr| bind_udp(*addr).map(|t| (addr, t)))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(CoreError::Io)?;
+            for (addr, transport) in transports {
                 counters.push(transport.metrics_handle());
                 info!(%addr, "UDP listening");
                 for _ in 0..parallelism {
@@ -321,6 +326,11 @@ impl AsyncService for DnsService {
             ctx.set_service_transports(Self::SERVICE_ID, counters);
             tcp_worker = Some(spawn_tcp_worker(Arc::clone(&dns_ctx)));
         }
+
+        // The request queue outlives this instance: callers keep the same `DnsHandle` and wait
+        // through a restart instead of failing on a closed channel. Taken once the sockets are
+        // bound, so a bind error does not drop it.
+        let mut mpsc_rx = ctx.take_dns_requests();
 
         #[cfg(feature = "adblock")]
         info!("Adblock feature compiled in");
@@ -595,6 +605,28 @@ impl AsyncService for DnsService {
         ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
 
         Ok(())
+    }
+}
+
+/// Keeps a run's `DnsContext` in the context's shared map for as long as the run lives.
+struct PublishedEngine {
+    ctx: LanforgeContext,
+    engine: Arc<DnsContext>,
+}
+
+impl PublishedEngine {
+    fn new(ctx: &LanforgeContext, engine: &Arc<DnsContext>) -> Self {
+        ctx.provide_shared(Arc::clone(engine));
+        Self {
+            ctx: ctx.clone(),
+            engine: Arc::clone(engine),
+        }
+    }
+}
+
+impl Drop for PublishedEngine {
+    fn drop(&mut self) {
+        self.ctx.withdraw_shared(&self.engine);
     }
 }
 
