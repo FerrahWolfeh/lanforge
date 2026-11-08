@@ -214,6 +214,12 @@ impl LanforgeContext {
         self.inner.runtime.provide_shared(instance);
     }
 
+    /// Removes a shared state registered with `provide_shared`, if `instance` is still the one
+    /// registered (a newer run's instance is left alone).
+    pub fn withdraw_shared<T: Any + Send + Sync + 'static>(&self, instance: &Arc<T>) {
+        self.inner.runtime.withdraw_shared(instance);
+    }
+
     /// Retrieves an arbitrary typed shared service state by type.
     #[must_use]
     pub fn get_shared<T: Any + Send + Sync + 'static>(&self) -> Option<Arc<T>> {

@@ -111,3 +111,37 @@ async fn lifetime_counters_survive_a_restart() {
     cmd_tx.send(ServiceCommand::Stop).await.expect("alive");
     let _ = timeout(Duration::from_secs(2), serve).await;
 }
+
+/// `DoH` reaches the engine through the context's shared `DnsContext`. It is published while a
+/// run serves and withdrawn when the run ends: `DoH` used to keep answering through a stopped
+/// (or disabled) DNS, and the stopped run's cache and adblock filter stayed in memory.
+#[tokio::test]
+async fn engine_is_withdrawn_when_the_run_ends() {
+    use lanforge_dns::server::DnsContext;
+
+    let ctx = init_test_context();
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, free_port()));
+    ctx.update_dns_listen(DnsListenConfig {
+        enabled: true,
+        listen: ListenConfig::Single(addr),
+        ..DnsListenConfig::default()
+    });
+
+    let (cmd_tx, serve) = start(&ctx);
+    wait_for_service_online(&ctx, ServiceId::Dns).await;
+    assert!(
+        ctx.get_shared::<DnsContext>().is_some(),
+        "published while serving"
+    );
+
+    cmd_tx.send(ServiceCommand::Stop).await.expect("alive");
+    timeout(Duration::from_secs(2), serve)
+        .await
+        .expect("serve returns on Stop")
+        .expect("join")
+        .expect("serve ok");
+    assert!(
+        ctx.get_shared::<DnsContext>().is_none(),
+        "a stopped run's engine is still published"
+    );
+}

@@ -379,6 +379,16 @@ impl ServiceRuntime {
             .insert(TypeId::of::<T>(), instance);
     }
 
+    pub fn withdraw_shared<T: Any + Send + Sync>(&self, instance: &Arc<T>) {
+        let mut shared = self.shared_by_type.write();
+        let ours = shared
+            .get(&TypeId::of::<T>())
+            .is_some_and(|any| Arc::as_ptr(any).cast::<()>() == Arc::as_ptr(instance).cast::<()>());
+        if ours {
+            shared.remove(&TypeId::of::<T>());
+        }
+    }
+
     #[must_use]
     pub fn get_shared<T: Any + Send + Sync>(&self) -> Option<Arc<T>> {
         self.shared_by_type

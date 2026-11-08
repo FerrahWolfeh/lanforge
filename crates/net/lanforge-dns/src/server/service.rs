@@ -280,7 +280,10 @@ impl AsyncService for DnsService {
         }
 
         let dns_ctx = self.init_dns_context().await?;
-        ctx.provide_shared(Arc::clone(&dns_ctx));
+        // Other front ends (DoH) reach the engine through the context while this run serves; the
+        // guard withdraws it on every exit, so they get "not ready" instead of a stopped run's
+        // engine, and its cache and filter are freed with the run.
+        let _published = PublishedEngine::new(ctx, &dns_ctx);
 
         let parallelism = thread::available_parallelism().map_or(1, NonZero::get);
         info!(handlers = parallelism, "Starting service");
@@ -602,6 +605,28 @@ impl AsyncService for DnsService {
         ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
 
         Ok(())
+    }
+}
+
+/// Keeps a run's `DnsContext` in the context's shared map for as long as the run lives.
+struct PublishedEngine {
+    ctx: LanforgeContext,
+    engine: Arc<DnsContext>,
+}
+
+impl PublishedEngine {
+    fn new(ctx: &LanforgeContext, engine: &Arc<DnsContext>) -> Self {
+        ctx.provide_shared(Arc::clone(engine));
+        Self {
+            ctx: ctx.clone(),
+            engine: Arc::clone(engine),
+        }
+    }
+}
+
+impl Drop for PublishedEngine {
+    fn drop(&mut self) {
+        self.ctx.withdraw_shared(&self.engine);
     }
 }
 
