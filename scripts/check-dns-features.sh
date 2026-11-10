@@ -16,7 +16,7 @@ FEATURE_SETS=(
     "adblock,dot,doq,doh-upstream,aws-lc"
 )
 
-# Tests (about 20 linked binaries per set) run on the two ends; the sets in between only need
+# Tests (the lib and one integration binary per set) run on the two ends; the sets in between only need
 # to type-check every target, which is where a missing gate shows up.
 TEST_SETS=("" "adblock,dot,doq,doh-upstream,aws-lc")
 

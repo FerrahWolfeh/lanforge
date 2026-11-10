@@ -1,6 +1,6 @@
 //! Fixtures for the encrypted listeners: a self-signed `localhost` certificate and a running
-//! DNS service with `DoT`/`DoQ` on loopback ports. Included with `#[path]` by the test files
-//! that need it, next to `mod common`.
+//! DNS service with `DoT`/`DoQ` on loopback ports. Built only with
+//! `dot` or `doq`; the test files reach it as `crate::common::tls`.
 #![allow(dead_code)]
 
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, UdpSocket};

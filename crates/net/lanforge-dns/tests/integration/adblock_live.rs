@@ -86,7 +86,7 @@ fn make_query(name: &str, qtype: DnsRecordType) -> Vec<u8> {
 /// and dynamic runtime toggles in a single execution.
 ///
 /// Run explicitly with:
-/// `cargo test -p lanforge-dns --test adblock_live -- --ignored --nocapture`
+/// `cargo test -p lanforge-dns --test integration adblock_live -- --ignored --nocapture`
 #[cfg(feature = "adblock")]
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires public internet access to raw.githubusercontent.com"]
