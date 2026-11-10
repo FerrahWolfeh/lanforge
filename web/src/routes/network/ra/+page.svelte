@@ -190,7 +190,8 @@
 				managed: formManaged,
 				other_config: formOtherConfig,
 				deprecate_on_renumber: formDeprecateOnRenumber,
-				hop_limit: Number(formHopLimit) || 64,
+				// 0 is a legal value (RFC 4861: unspecified); only an empty field takes the default.
+				hop_limit: Number.isFinite(formHopLimit) ? formHopLimit : 64,
 				priority: formPriority,
 				max_interval_secs: Number(formMaxInterval) || 200,
 				min_interval_secs: formMinInterval ? Number(formMinInterval) : null,

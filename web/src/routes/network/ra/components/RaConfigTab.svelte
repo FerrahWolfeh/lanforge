@@ -551,7 +551,7 @@
 							bind:value={formHopLimit}
 							class="h-9 font-mono text-xs"
 						/>
-						<p class="text-[10px] text-muted-foreground">Default 64.</p>
+						<p class="text-[10px] text-muted-foreground">Default 64. 0 = unspecified (hosts keep their own).</p>
 					</div>
 
 					<div class="flex flex-col gap-1.5">
