@@ -3,4 +3,4 @@
 //! Add new test files as modules here, never as new `tests/*.rs` files.
 
 mod postcard_dtos;
-mod struct_sizes;
+mod type_sizes;
