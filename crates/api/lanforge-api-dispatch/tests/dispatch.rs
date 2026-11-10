@@ -1010,6 +1010,52 @@ async fn ra_update_is_written_to_the_config_file_without_the_lan_interface() {
     assert_eq!(client_ctx.ctx.get_ra_server_config(), cfg);
 }
 
+/// `[pppoe]` values the client cannot run on are refused before they are written: MRU 0
+/// reached `PPPIOCSMRU`, a 0 s reconnect delay loops against the ISP, 0 PADI retries never
+/// dials. Echo 0 (off) is a legal value.
+#[tokio::test]
+async fn pppoe_update_the_client_cannot_run_on_is_refused() {
+    let client_ctx = init_test_context().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lanforge.toml");
+    fs::write(&path, "[system]\n").unwrap();
+    client_ctx.ctx.set_config_path(&path);
+    client_ctx.ctx.set_config_writable(true);
+    let before = client_ctx.ctx.get_pppoe_config();
+
+    type Edit = fn(&mut PppoeConfig);
+    let cases: [(&str, Edit); 6] = [
+        ("mru 0", |c| c.mru = 0),
+        ("mru 1279", |c| c.mru = 1279),
+        ("mru 1500", |c| c.mru = 1500),
+        ("reconnect delay 0", |c| c.reconnect_delay_secs = 0),
+        ("padi retries 0", |c| c.discovery_padi_retries = 0),
+        ("padi timeout 0", |c| c.discovery_padi_timeout_secs = 0),
+    ];
+    for (name, edit) in cases {
+        let mut cfg = PppoeConfig::default();
+        edit(&mut cfg);
+        let res = client_ctx.handle_update_pppoe_config(cfg).await;
+        assert!(matches!(res, Response::Rejected { .. }), "{name}: {res:?}");
+        assert_eq!(client_ctx.ctx.get_pppoe_config(), before, "{name}: applied");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "[system]\n",
+            "{name}: written"
+        );
+    }
+
+    let cfg = PppoeConfig {
+        mru: 1280,
+        lcp_echo_interval_secs: 0,
+        lcp_echo_max_failures: 0,
+        ..Default::default()
+    };
+    let res = client_ctx.handle_update_pppoe_config(cfg.clone()).await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    assert_eq!(client_ctx.ctx.get_pppoe_config(), Some(cfg));
+}
+
 /// RA timing outside RFC 4861 §6.2.1 (and an MTU below 1280) is refused before it is written:
 /// the RA service refuses to run on such a value, so accepting it took RA down.
 #[tokio::test]

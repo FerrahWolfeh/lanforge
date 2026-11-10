@@ -101,6 +101,12 @@ impl ClientContext {
             "PPPoE configuration updated via API"
         );
 
+        let issues = cfg.checked().1;
+        if !issues.is_empty() {
+            return Response::Rejected {
+                error: format!("PPPoE configuration not saved: {}", issues.join("; ")),
+            };
+        }
         let persisted = match self
             .persist_config_sections(SectionSet::PPPOE, |file| file.pppoe = cfg.clone())
         {

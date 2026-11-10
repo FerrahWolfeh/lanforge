@@ -259,7 +259,7 @@ impl From<&ConfigFile> for TomlConfig {
 
         #[cfg(feature = "pppoe")]
         {
-            cfg.pppoe = fc.pppoe.clone();
+            cfg.pppoe = fc.pppoe.checked().0;
         }
 
         // Entries the file gets wrong are left out (reported by `load_toml`).
@@ -323,6 +323,8 @@ pub fn load_toml(path: &str) -> TomlConfig {
             cfg.config_issues.extend(file_cfg.dhcp.to_config().1);
             #[cfg(feature = "ra")]
             cfg.config_issues.extend(file_cfg.ra.to_config().1);
+            #[cfg(feature = "pppoe")]
+            cfg.config_issues.extend(file_cfg.pppoe.checked().1);
             #[cfg(feature = "dns")]
             {
                 cfg.config_issues.extend(file_cfg.dns.to_config().1);
@@ -350,6 +352,8 @@ mod tests {
     use super::*;
     use std::env;
     use std::process::Command;
+    #[cfg(feature = "pppoe")]
+    use tempfile::tempdir;
 
     #[test]
     fn test_default_config() {
@@ -394,6 +398,26 @@ mod tests {
             out.status.success() && stdout.contains("1 passed"),
             "child failed:\n{stdout}\n{}",
             String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// At boot a hand-edited `[pppoe]` value the client cannot run on (MRU 0) is reported and
+    /// replaced by the default; the other keys still apply.
+    #[cfg(feature = "pppoe")]
+    #[test]
+    fn boot_replaces_pppoe_values_the_client_cannot_run_on() {
+        let dir = tempdir().expect("temp dir");
+        let path = dir.path().join("lanforge.toml");
+        fs::write(&path, "[pppoe]\nusername = \"u\"\nmru = 0\n").expect("write config");
+        let cfg = load_toml(path.to_str().expect("utf-8 path"));
+        assert_eq!(cfg.pppoe.username, "u");
+        assert_eq!(cfg.pppoe.mru, PppoeConfig::default().mru);
+        assert!(
+            cfg.config_issues
+                .iter()
+                .any(|i| i.starts_with("[pppoe] mru = 0")),
+            "{:?}",
+            cfg.config_issues
         );
     }
 
