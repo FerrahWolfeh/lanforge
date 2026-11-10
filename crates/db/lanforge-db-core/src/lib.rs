@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io;
 use std::marker::PhantomData;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -422,15 +422,6 @@ pub trait LogStore: Send + Sync {
         &self,
         events: &[TimedEvent],
         bytes_buf: &mut Vec<u8>,
-    ) -> Result<(), DbError>;
-
-    /// Records a blocked DNS query.
-    fn record_dns_block(
-        &self,
-        timed_event: &TimedEvent,
-        src_ip: IpAddr,
-        domain: &str,
-        src_mac: Option<String>,
     ) -> Result<(), DbError>;
 
     /// Records a batch of resolved DNS queries.

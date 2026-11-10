@@ -19,8 +19,6 @@ pub const TABLE_ADBLOCK_RULES: TableDefinition<i64, &[u8]> = TableDefinition::ne
 pub const TABLE_LOG_EVENTS: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("log_events");
 pub const TABLE_DNS_QUERIES: TableDefinition<(u64, u64), &[u8]> =
     TableDefinition::new("dns_queries");
-pub const TABLE_DNS_BLOCKED: TableDefinition<(u64, u64), &[u8]> =
-    TableDefinition::new("dns_blocked");
 pub const TABLE_DNS_TELEMETRY: TableDefinition<u64, &[u8]> = TableDefinition::new("dns_telemetry");
 pub const TABLE_DNS_STATS_HOURLY: TableDefinition<u64, &[u8]> =
     TableDefinition::new("dns_stats_hourly");

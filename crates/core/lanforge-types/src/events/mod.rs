@@ -81,12 +81,7 @@ impl TimedEvent {
                     | StorageEvent::DbReset
                     | StorageEvent::DbResetCompleted
             ),
-            LanforgeEvent::Dns(e) => match e {
-                #[cfg(feature = "adblock")]
-                DnsEvent::QueryBlocked { .. } => false,
-                DnsEvent::QueryResolved(_) => false,
-                _ => true,
-            },
+            LanforgeEvent::Dns(e) => !matches!(e, DnsEvent::QueryResolved(_)),
             LanforgeEvent::Pppoe(_) | LanforgeEvent::Firewall(_) | LanforgeEvent::Traffic(_) => {
                 true
             }

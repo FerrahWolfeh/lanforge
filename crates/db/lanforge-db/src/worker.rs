@@ -484,17 +484,6 @@ impl AsyncService for DbWorker {
                             }
                             break_loop = true;
                         }
-                        #[cfg(feature = "adblock")]
-                        LanforgeEvent::Dns(DnsEvent::QueryBlocked { src_addr, domain }) => {
-                            let src_mac = ctx
-                                .get_mac_by_ip(*src_addr)
-                                .map(|m| m.to_string());
-                            if let Err(e) = log_db
-                                .record_dns_block(&timed_event, *src_addr, domain, src_mac)
-                            {
-                                error!("DNS log record error: {e}");
-                            }
-                        }
                         LanforgeEvent::Dns(DnsEvent::QueryResolved(entry)) => {
                             if self.dns_log_buffer.len() >= MAX_DNS_LOG_BUFFER {
                                 self.dns_log_buffer.pop_front();

@@ -11,7 +11,6 @@ use std::env;
 use std::ffi::CString;
 use std::io::Error as IoError;
 use std::mem::MaybeUninit;
-use std::net::IpAddr;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -165,17 +164,6 @@ impl LogStore for LogDb {
         bytes_buf: &mut Vec<u8>,
     ) -> Result<(), DbError> {
         self.inner.record_logs_batch(events, bytes_buf)
-    }
-
-    fn record_dns_block(
-        &self,
-        timed_event: &TimedEvent,
-        src_ip: IpAddr,
-        domain: &str,
-        src_mac: Option<String>,
-    ) -> Result<(), DbError> {
-        self.inner
-            .record_dns_block(timed_event, src_ip, domain, src_mac)
     }
 
     fn record_dns_queries_batch(&self, entries: &[Arc<QueryLogEntry>]) -> Result<(), DbError> {

@@ -562,15 +562,6 @@ fn render_dns_event(time_str: &str, evt: &DnsEvent, printer: &Printer) {
                 printer,
             );
         }
-        DnsEvent::QueryBlocked { src_addr, domain } => {
-            print_log(
-                time_str,
-                "DNS",
-                "BLOCKED".red(),
-                format!("{domain} from {src_addr}"),
-                printer,
-            );
-        }
         DnsEvent::CacheFlush => {
             print_log(
                 time_str,

@@ -2,8 +2,8 @@
 //! each subscriber's slot, `ctx.apply` moves a `DeviceUpdate` and returns an `EventVec`, the state
 //! copies `Device` records on write, and the DNS engine builds `DnsMessage`/`DnsRecord` per query.
 //! A field or variant that makes one of them grow fails here: box the large payload, or raise the
-//! budget on purpose. Budgets are the 64-bit sizes with every feature on, as the daemon ships
-//! (`adblock` adds an inline event payload); slimmer builds come in under them.
+//! budget on purpose. Budgets are the 64-bit sizes with every feature on, as the daemon ships;
+//! slimmer builds come in under them.
 #![cfg(target_pointer_width = "64")]
 
 use std::mem::size_of;
@@ -24,9 +24,9 @@ fn hot_types_stay_within_their_size_budget() {
         ("Hostname", size_of::<Hostname>(), 32),
         ("Device", size_of::<Device>(), 104),
         ("DeviceUpdate", size_of::<DeviceUpdate>(), 32),
-        ("LanforgeEvent", size_of::<LanforgeEvent>(), 48),
-        ("TimedEvent", size_of::<TimedEvent>(), 64),
-        ("EventVec", size_of::<EventVec>(), 200),
+        ("LanforgeEvent", size_of::<LanforgeEvent>(), 40),
+        ("TimedEvent", size_of::<TimedEvent>(), 56),
+        ("EventVec", size_of::<EventVec>(), 168),
         ("DnsMessage", size_of::<DnsMessage>(), 120),
         ("DnsRecord", size_of::<DnsRecord>(), 64),
         ("QueryLogEntry", size_of::<QueryLogEntry>(), 112),
