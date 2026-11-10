@@ -87,6 +87,15 @@ async fn test_dhcpv4_synthetic_full_lifecycle() -> Result<(), Box<dyn Error>> {
         offer_msg.opts().get(OptionCodeV4::MessageType),
         Some(&DhcpOptionV4::MessageType(MessageTypeV4::Offer))
     );
+    // RFC 2132 §3.3 / §3.5: the client configures its subnet and gateway from these.
+    assert_eq!(
+        offer_msg.opts().get(OptionCodeV4::SubnetMask),
+        Some(&DhcpOptionV4::SubnetMask(Ipv4Addr::new(255, 255, 255, 0)))
+    );
+    assert_eq!(
+        offer_msg.opts().get(OptionCodeV4::Router),
+        Some(&DhcpOptionV4::Router(vec![Ipv4Addr::new(192, 168, 1, 1)]))
+    );
     let offered_ip = offer_msg.yiaddr();
     assert!(
         offered_ip >= Ipv4Addr::new(192, 168, 1, 100)
@@ -927,6 +936,11 @@ async fn test_dhcpv6_rapid_commit_reply_is_a_binding() -> Result<(), Box<dyn Err
     .await
     .ok_or("no Reply to the Rapid Commit Solicit")?;
     assert_eq!(rc.msg_type(), MessageTypeV6::Reply);
+    // RFC 8415 §18.3.1: a Reply that commits the Solicit carries the Rapid Commit option.
+    assert!(
+        rc.opts().get(OptionCodeV6::RapidCommit).is_some(),
+        "the Rapid Commit Reply must echo the option"
+    );
     let server_duid = match rc.opts().get(OptionCodeV6::ServerId) {
         Some(Dhcpv6Option::ServerId(d)) => Duid::new(d.clone()),
         _ => return Err("Expected ServerId in Reply".into()),
