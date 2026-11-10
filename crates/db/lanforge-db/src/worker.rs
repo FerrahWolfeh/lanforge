@@ -35,7 +35,7 @@ use lanforge_types::network::dns::{DnsRequest, DnsResponse};
 use lanforge_types::system::{DegradedReason, ServiceId};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
-use tokio::time::{Instant, Interval, interval};
+use tokio::time::{Interval, interval};
 use tracing::{debug, error, info, warn};
 
 use crate::config::DatabaseConfig;
@@ -306,7 +306,6 @@ impl AsyncService for DbWorker {
         let mut firewall_rx = ctx.bus().subscribe_firewall();
         let mut traffic_rx = ctx.bus().subscribe_traffic();
         let mut flush_interval: Interval = interval(Duration::from_secs(self.cfg.flush_interval));
-        let mut last_prune = Instant::now();
         let stores = db.stores(Arc::clone(&log_db) as _);
 
         loop {
@@ -456,9 +455,9 @@ impl AsyncService for DbWorker {
                             }
                         }
                         LanforgeEvent::Storage(StorageEvent::DbPrune) => {
-                            if let Err(e) = db.prune_zombies() {
-                                error!("Prune error: {e}");
-                            }
+                            // The prune runs on the in-memory state; its `Purged` events
+                            // delete the devices here.
+                            let _ = self.ctx.prune_zombies();
                         }
                         LanforgeEvent::Storage(StorageEvent::DbReset) => {
                             warn!("Legacy DbReset event received in worker (ignored as reset is now synchronous)");
@@ -516,13 +515,6 @@ impl AsyncService for DbWorker {
                 // Periodic flush
                 _ = flush_interval.tick() => {
                     self.flush_batch(&db, &log_db).await;
-
-                    if last_prune.elapsed() >= Duration::from_secs(600) {
-                        if let Err(e) = db.prune_zombies() {
-                            error!("Background db prune failed: {e}");
-                        }
-                        last_prune = Instant::now();
-                    }
                 }
             }
         }

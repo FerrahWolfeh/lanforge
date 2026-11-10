@@ -1,10 +1,10 @@
 #![cfg(test)]
 
-use crate::bus::{EventBus, NetworkEvent};
+use crate::bus::{EventBus, NetworkEvent, TimedEvent};
 use crate::context::LanforgeContext;
 use crate::context::state::State;
 use lanforge_types::device::{
-    Device, DeviceStatus, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, V6Lease,
+    Device, DeviceClass, DeviceStatus, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, V6Lease,
 };
 use lanforge_types::events::{DeviceEvent, LanforgeEvent, NetworkChange};
 use lanforge_types::identifiers::{Duid, MacAddr};
@@ -18,7 +18,8 @@ use std::iter;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
+use tokio::sync::broadcast::Receiver;
 
 fn setup() -> LanforgeContext {
     let bus = Arc::new(EventBus::new());
@@ -1504,48 +1505,129 @@ fn test_system_host_ipv6_precedence_ula_over_gua_no_link_local() {
     assert!(matches!(&dev.v6[0], IPv6State::Static(Ipv6AddrOrSuffix::Full(ip), _) if *ip == gua));
 }
 
-#[test]
-fn test_prune_zombies_and_caches() {
-    let ctx = setup();
-    let active_mac = MacAddr([0xaa, 0x11, 0x22, 0x33, 0x44, 0x55]);
-    let zombie_mac = MacAddr([0xbb, 0x11, 0x22, 0x33, 0x44, 0x55]);
-    let sys_mac = MacAddr([0xcc, 0x11, 0x22, 0x33, 0x44, 0x55]);
+fn device(mac_last: u8, hostname: &str) -> (MacAddr, Device) {
+    let mac = MacAddr([0x02, 0, 0, 0, 0, mac_last]);
+    let mut dev = Device::new(mac);
+    dev.identity_mut().hostname.name = hostname.to_string();
+    // The age of `last_seen` must not matter: it drops to the epoch once the addresses go.
+    dev.last_seen = SystemTime::UNIX_EPOCH;
+    (mac, dev)
+}
 
-    // Active device
-    let mut active_dev = Device::new(active_mac);
-    active_dev.identity_mut().hostname.name = "active-dev".to_string();
-    active_dev.last_seen = SystemTime::now();
-    ctx.insert_device(active_mac, active_dev);
-
-    // Zombie device (>1h old, dynamic, no active leases)
-    let mut zombie_dev = Device::new(zombie_mac);
-    zombie_dev.identity_mut().hostname.name = "zombie-dev".to_string();
-    zombie_dev.last_seen = SystemTime::now() - Duration::from_hours(2);
-    ctx.insert_device(zombie_mac, zombie_dev);
-
-    // System device (>1h old, but Origin::System)
-    let mut sys_dev = Device::new(sys_mac);
-    sys_dev.identity_mut().origin = Origin::System;
-    sys_dev.identity_mut().hostname.name = "router".to_string();
-    sys_dev.last_seen = SystemTime::now() - Duration::from_hours(2);
-    ctx.insert_device(sys_mac, sys_dev);
-
-    let mut dev_rx = ctx.bus().subscribe_device();
-    let _ = ctx.prune_zombies();
-
-    // Zombie must be pruned; active and system must remain
-    assert!(ctx.get_device(&zombie_mac).is_none());
-    assert!(ctx.get_device(&active_mac).is_some());
-    assert!(ctx.get_device(&sys_mac).is_some());
-
-    let mut purged = false;
-    while let Ok(ev) = dev_rx.try_recv() {
-        if matches!(ev.event, LanforgeEvent::Device(DeviceEvent::Purged { mac }) if mac == zombie_mac)
-        {
-            purged = true;
+fn purged(rx: &mut Receiver<TimedEvent>) -> Vec<MacAddr> {
+    let mut macs = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        if let LanforgeEvent::Device(DeviceEvent::Purged { mac }) = ev.event {
+            macs.push(mac);
         }
     }
-    assert!(purged, "Must emit DeviceEvent::Purged for zombie");
+    macs
+}
+
+#[test]
+fn prune_keeps_named_static_and_configured_devices_without_address() {
+    let ctx = setup();
+    let (named, named_dev) = device(1, "phone");
+    let (host, mut host_dev) = device(2, "printer");
+    host_dev.identity_mut().origin = Origin::Static;
+    let (classed, mut classed_dev) = device(3, "");
+    classed_dev.identity_mut().class = DeviceClass::Printer;
+    let (router, mut router_dev) = device(4, "router");
+    router_dev.identity_mut().origin = Origin::System;
+    for (mac, dev) in [
+        (named, named_dev),
+        (host, host_dev),
+        (classed, classed_dev),
+        (router, router_dev),
+    ] {
+        ctx.insert_device(mac, dev);
+    }
+    let mut rx = ctx.bus().subscribe_device();
+
+    let _ = ctx.prune_zombies();
+
+    for mac in [named, host, classed, router] {
+        assert!(ctx.get_device(&mac).is_some(), "{mac} was pruned");
+    }
+    assert_eq!(purged(&mut rx), Vec::<MacAddr>::new());
+}
+
+#[test]
+fn prune_removes_a_nameless_device_after_a_day_without_address() {
+    let ctx = setup();
+    let (mac, dev) = device(1, "");
+    ctx.insert_device(mac, dev);
+    let mut rx = ctx.bus().subscribe_device();
+    let t0 = Instant::now();
+
+    assert!(ctx.prune_zombies_at(t0).is_empty());
+    assert!(
+        ctx.prune_zombies_at(t0 + Duration::from_hours(23))
+            .is_empty()
+    );
+    assert!(ctx.get_device(&mac).is_some());
+
+    let _ = ctx.prune_zombies_at(t0 + Device::ANONYMOUS_RETENTION);
+    assert!(ctx.get_device(&mac).is_none());
+    assert_eq!(purged(&mut rx), vec![mac]);
+}
+
+#[test]
+fn prune_removes_a_named_device_after_a_week_without_address() {
+    let ctx = setup();
+    let (mac, dev) = device(1, "old-phone");
+    ctx.insert_device(mac, dev);
+    let t0 = Instant::now();
+
+    let _ = ctx.prune_zombies_at(t0);
+    let _ = ctx.prune_zombies_at(t0 + Duration::from_hours(6 * 24));
+    assert!(ctx.get_device(&mac).is_some());
+
+    let events = ctx.prune_zombies_at(t0 + Device::NAMED_RETENTION);
+    assert!(ctx.get_device(&mac).is_none());
+    assert_eq!(events.len(), 1);
+}
+
+#[test]
+fn prune_clock_restarts_when_a_device_comes_back() {
+    let ctx = setup();
+    let (mac, dev) = device(1, "");
+    ctx.insert_device(mac, dev.clone());
+    let t0 = Instant::now();
+    let _ = ctx.prune_zombies_at(t0);
+
+    // Back on the network at 20 h: its clock stops.
+    let mut online = dev.clone();
+    online.v4 = IPv4State::Discovery(Ipv4Addr::new(192, 168, 1, 50), SystemTime::now());
+    ctx.insert_device(mac, online);
+    let _ = ctx.prune_zombies_at(t0 + Duration::from_hours(20));
+
+    // Gone again at 22 h: a new day starts there.
+    ctx.insert_device(mac, dev);
+    let _ = ctx.prune_zombies_at(t0 + Duration::from_hours(22));
+    let _ = ctx.prune_zombies_at(t0 + Duration::from_hours(30));
+    assert!(ctx.get_device(&mac).is_some());
+
+    let _ = ctx.prune_zombies_at(t0 + Duration::from_hours(46));
+    assert!(ctx.get_device(&mac).is_none());
+}
+
+#[test]
+fn prune_never_removes_a_device_with_admin_settings() {
+    let ctx = setup();
+    let (logged, mut logged_dev) = device(1, "");
+    logged_dev.identity_mut().ignore_dns_log = true;
+    let (named, mut named_dev) = device(2, "");
+    named_dev.identity_mut().dns_fallback = "laptop".to_string();
+    ctx.insert_device(logged, logged_dev);
+    ctx.insert_device(named, named_dev);
+    let t0 = Instant::now();
+
+    let _ = ctx.prune_zombies_at(t0);
+    let _ = ctx.prune_zombies_at(t0 + Duration::from_hours(365 * 24));
+
+    assert!(ctx.get_device(&logged).is_some());
+    assert!(ctx.get_device(&named).is_some());
 }
 
 #[test]

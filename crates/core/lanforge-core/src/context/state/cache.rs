@@ -1,7 +1,7 @@
 use dashmap::DashMap;
 use lanforge_types::identifiers::{Duid, MacAddr};
 use std::net::Ipv6Addr;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 /// Global discovery store for volatile/ephemeral network observations.
 ///
@@ -14,6 +14,8 @@ pub struct DiscoveryStore {
     pub ndp_cache: DashMap<Ipv6Addr, (MacAddr, SystemTime)>,
     /// IPv6 leases that haven't been resolved to a MAC yet.
     pub orphaned_v6: DashMap<Ipv6Addr, (Duid, u32, SystemTime)>,
+    /// When a prune pass first saw each prunable device without an address.
+    pub prune_clock: DashMap<MacAddr, Instant>,
 }
 
 impl DiscoveryStore {
@@ -26,6 +28,20 @@ impl DiscoveryStore {
     pub fn clear(&self) {
         self.ndp_cache.clear();
         self.orphaned_v6.clear();
+        self.prune_clock.clear();
+    }
+
+    /// Runs the prune clock of one device: `retention` is `None` when the device is not
+    /// prunable (its clock stops), otherwise the clock starts at `now` if it was not running.
+    /// Returns whether the device has been prunable for at least `retention`.
+    #[must_use]
+    pub fn prune_expired(&self, mac: MacAddr, retention: Option<Duration>, now: Instant) -> bool {
+        let Some(retention) = retention else {
+            self.prune_clock.remove(&mac);
+            return false;
+        };
+        let since = *self.prune_clock.entry(mac).or_insert(now);
+        now.saturating_duration_since(since) >= retention
     }
 
     /// Retrieves a MAC address from the NDP cache for the given IPv6 address.

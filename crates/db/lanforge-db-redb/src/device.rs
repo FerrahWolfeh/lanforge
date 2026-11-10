@@ -188,30 +188,6 @@ impl DeviceStore for RedbDatabase {
         Ok(())
     }
 
-    fn prune_zombies(&self) -> Result<usize, DbError> {
-        let zombies = self.read_table_or_default(TABLE_DEVICES, |table| {
-            let mut list = Vec::new();
-            for item in table.iter()? {
-                let (k, val) = item?;
-                let device: Device = decode(val.value())?;
-                if device.hostname.name.is_empty()
-                    && matches!(device.v4, IPv4State::None)
-                    && device.v6.is_empty()
-                    && device.v6_prefixes.is_empty()
-                {
-                    list.push(MacAddr(k.value()));
-                }
-            }
-            Ok(list)
-        })?;
-
-        let count = zombies.len();
-        if count > 0 {
-            self.delete_devices(&zombies)?;
-        }
-        Ok(count)
-    }
-
     fn reset(&self) -> Result<(), DbError> {
         let write_txn = self.begin_write()?;
         {

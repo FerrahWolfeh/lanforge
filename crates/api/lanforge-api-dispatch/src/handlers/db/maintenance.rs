@@ -29,14 +29,8 @@ impl ClientContext {
             };
         };
 
-        let pruned_zombies = match storage.call(|s: &Stores| s.db().prune_zombies()).await {
-            Ok(n) => n,
-            Err(e) => {
-                return Response::Error {
-                    error: format!("Failed to prune zombie entries: {e}"),
-                };
-            }
-        };
+        // Devices are pruned in memory; each `Purged` event deletes one from the database.
+        let pruned_zombies = self.ctx.prune_zombies().len();
 
         let cutoff = (SystemTime::now()
             .duration_since(UNIX_EPOCH)

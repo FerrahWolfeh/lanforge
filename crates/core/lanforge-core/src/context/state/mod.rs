@@ -26,7 +26,7 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 pub use self::cache::DiscoveryStore;
 pub use self::indices::Indices;
@@ -647,38 +647,59 @@ impl State {
         }
     }
 
-    pub fn prune_zombies(&mut self, discovery: &DiscoveryStore) -> EventVec {
-        let max_age = Duration::from_hours(1);
+    /// How long a transient (non-device) hostname observation is kept.
+    const TRANSIENT_MAX_AGE: Duration = Duration::from_hours(4);
+
+    fn transient_is_stale(host: &TransientHost, now: SystemTime) -> bool {
+        now.duration_since(host.last_seen)
+            .is_ok_and(|age| age >= Self::TRANSIENT_MAX_AGE)
+    }
+
+    /// Advances every device's prune clock (dropping clocks of devices that are gone) and
+    /// reports whether [`Self::prune_zombies`] would remove anything.
+    #[must_use]
+    pub fn prune_due(&self, discovery: &DiscoveryStore, now: Instant) -> bool {
+        discovery
+            .prune_clock
+            .retain(|mac, _| self.devices.contains_key(mac));
+        let mut due = false;
+        for (mac, dev) in &self.devices {
+            due |= discovery.prune_expired(*mac, dev.prune_retention(), now);
+        }
+        let wall = SystemTime::now();
+        due || self
+            .transient_hosts
+            .values()
+            .any(|host| Self::transient_is_stale(host, wall))
+    }
+
+    /// Removes the devices whose prune clock ran past their retention, stale discovery caches
+    /// and old transient hosts. Returns one `DeviceEvent::Purged` per removed device.
+    pub fn prune_zombies(&mut self, discovery: &DiscoveryStore, now: Instant) -> EventVec {
         let mut removed = Vec::new();
         self.devices.retain(|mac, dev| {
-            if dev.origin != Origin::System && dev.is_zombie(max_age) {
+            let expired = discovery.prune_expired(*mac, dev.prune_retention(), now);
+            if expired {
+                discovery.prune_clock.remove(mac);
                 removed.push(*mac);
-                false
-            } else {
-                true
             }
+            !expired
         });
 
-        // Prune discovery caches
-        let cache_max_age = Duration::from_hours(2);
-        discovery.prune_stale(cache_max_age);
+        discovery.prune_stale(Duration::from_hours(2));
 
-        // Prune transient hosts older than 4 hours
-        let now = SystemTime::now();
-        let transient_max_age = Duration::from_hours(4);
-        self.transient_hosts.retain(|_, host| {
-            now.duration_since(host.last_seen)
-                .is_ok_and(|d| d < transient_max_age)
-        });
+        let wall = SystemTime::now();
+        self.transient_hosts
+            .retain(|_, host| !Self::transient_is_stale(host, wall));
 
-        if !removed.is_empty() {
-            self.rebuild_indices();
-            return removed
-                .into_iter()
-                .map(|mac| LanforgeEvent::Device(DeviceEvent::Purged { mac }))
-                .collect();
+        if removed.is_empty() {
+            return EventVec::new();
         }
-        EventVec::new()
+        self.rebuild_indices();
+        removed
+            .into_iter()
+            .map(|mac| LanforgeEvent::Device(DeviceEvent::Purged { mac }))
+            .collect()
     }
 
     pub fn reset(&mut self, discovery: &DiscoveryStore) {

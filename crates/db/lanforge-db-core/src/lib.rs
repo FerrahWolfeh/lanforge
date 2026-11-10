@@ -182,9 +182,6 @@ pub trait DeviceStore: Send + Sync {
     /// Removes a device by its MAC address.
     fn remove_device(&self, mac: MacAddr) -> Result<(), DbError>;
 
-    /// Prunes dynamic devices without hostname or active leases/addresses.
-    fn prune_zombies(&self) -> Result<usize, DbError>;
-
     /// Clears the devices tables cascade.
     fn reset(&self) -> Result<(), DbError>;
 

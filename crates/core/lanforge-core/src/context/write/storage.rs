@@ -10,6 +10,7 @@ use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::RaServerConfig;
 use lanforge_types::network::{DnsReverseResolver, IpSubnet, TrafficConfig};
+use std::time::Instant;
 
 use crate::context::LanforgeContext;
 use crate::context::config::ConfigPatch;
@@ -80,14 +81,28 @@ impl LanforgeContext {
         let _ = self.apply_config(ConfigPatch::new().with_dns_adblock_rules(text));
     }
 
-    /// Prunes stale discovery caches, transient hosts, and inactive zombie devices.
+    /// Prunes stale discovery caches, old transient hosts, and discovered devices that stayed
+    /// without an address past their retention (see [`Device::prune_retention`]). Each removed
+    /// device is published as `DeviceEvent::Purged`, which deletes it from the database.
+    ///
+    /// [`Device::prune_retention`]: lanforge_types::device::Device::prune_retention
+    ///
+    /// The retention clock lives in memory and starts when a prune pass first sees the device
+    /// without an address, so a daemon restart only delays a prune, never hastens one.
     #[must_use]
     pub fn prune_zombies(&self) -> EventVec {
-        let events = self.with_state_mut(|state| state.prune_zombies(&self.inner.discovery));
-        let bus = self.bus_ref();
-        for event in &events {
-            let _ = bus.publish(event.clone());
+        self.prune_zombies_at(Instant::now())
+    }
+
+    /// [`Self::prune_zombies`] at a given instant: the state is copied only when a pass has
+    /// something to remove.
+    pub(crate) fn prune_zombies_at(&self, now: Instant) -> EventVec {
+        let discovery = &self.inner.discovery;
+        if !self.with_state(|state| state.prune_due(discovery, now)) {
+            return EventVec::new();
         }
+        let events = self.with_state_mut(|state| state.prune_zombies(discovery, now));
+        self.publish_events(&events);
         events
     }
 

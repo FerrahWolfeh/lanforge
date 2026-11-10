@@ -665,16 +665,29 @@ impl Device {
         events
     }
 
-    #[must_use]
-    pub fn is_zombie(&self, max_age: Duration) -> bool {
-        if !matches!(self.v4, IPv4State::None)
-            || !self.v6.is_empty()
-            || !self.v6_prefixes.is_empty()
-        {
-            return false;
-        }
+    /// How long a nameless discovered device may stay without any address before it is pruned.
+    pub const ANONYMOUS_RETENTION: Duration = Duration::from_hours(24);
+    /// How long a named discovered device may stay without any address before it is pruned.
+    pub const NAMED_RETENTION: Duration = Duration::from_hours(7 * 24);
 
-        self.last_seen.elapsed().unwrap_or(Duration::ZERO) > max_age
+    /// Whether the device holds any address or delegated prefix.
+    #[must_use]
+    pub const fn has_address(&self) -> bool {
+        !matches!(self.v4, IPv4State::None) || !self.v6.is_empty() || !self.v6_prefixes.is_empty()
+    }
+
+    /// How long this device may stay without an address before the automatic prune removes
+    /// it, or `None` if it is never pruned: static and system devices, devices that hold an
+    /// address, and devices carrying admin settings.
+    #[must_use]
+    pub fn prune_retention(&self) -> Option<Duration> {
+        if self.origin != Origin::Dynamic || self.has_address() || self.has_admin_settings() {
+            None
+        } else if self.hostname.name.is_empty() {
+            Some(Self::ANONYMOUS_RETENTION)
+        } else {
+            Some(Self::NAMED_RETENTION)
+        }
     }
 
     pub fn record_v4_activity(&mut self, ip: Ipv4Addr) -> bool {
