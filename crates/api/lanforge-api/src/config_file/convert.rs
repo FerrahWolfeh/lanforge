@@ -619,6 +619,49 @@ impl RaFile {
             },
         };
 
+        // RFC 4861 §6.2.1 / §4.2 timing and RFC 8200 §5 MTU. The RA service refuses to run on
+        // a value outside these ranges, so each one is reported and falls back to the
+        // automatic value instead of taking RA down.
+        let max_interval_secs = match self.max_interval.map(|d| d.0) {
+            None => default.max_interval_secs,
+            Some(max) if (4..=1800).contains(&max) => max,
+            Some(max) => {
+                issues.push(format!(
+                    "[ra] max_interval = {max}s is outside 4..1800 s (RFC 4861 §6.2.1); using {}s",
+                    default.max_interval_secs
+                ));
+                default.max_interval_secs
+            }
+        };
+        let min_interval_secs = self.min_interval.map(|d| d.0).filter(|&min| {
+            let limit = max_interval_secs * 3 / 4;
+            let ok = (3..=limit).contains(&min);
+            if !ok {
+                issues.push(format!(
+                    "[ra] min_interval = {min}s is outside 3..{limit} s (3 s to 0.75 × max_interval, RFC 4861 §6.2.1); using the automatic value"
+                ));
+            }
+            ok
+        });
+        let lifetime_secs = self.lifetime.map(|d| d.0).filter(|&lifetime| {
+            let ok = lifetime == 0 || (max_interval_secs..=9000).contains(&lifetime);
+            if !ok {
+                issues.push(format!(
+                    "[ra] lifetime = {lifetime}s must be 0 or {max_interval_secs}..9000 s (max_interval to 9000 s, RFC 4861 §6.2.1); using 3 × max_interval"
+                ));
+            }
+            ok
+        });
+        let mtu = self.mtu.filter(|&mtu| {
+            let ok = mtu >= 1280;
+            if !ok {
+                issues.push(format!(
+                    "[ra] mtu = {mtu} is below the IPv6 minimum 1280 (RFC 8200 §5); no MTU option sent"
+                ));
+            }
+            ok
+        });
+
         let config = RaServerConfig {
             enabled: self.enabled,
             iface: self.iface.clone(),
@@ -626,12 +669,12 @@ impl RaFile {
             other_config: self.other_config,
             hop_limit: self.hop_limit.unwrap_or(default.hop_limit),
             priority,
-            max_interval_secs: self.max_interval.map_or(default.max_interval_secs, |d| d.0),
-            min_interval_secs: self.min_interval.map(|d| d.0),
-            lifetime_secs: self.lifetime.map(|d| d.0),
+            max_interval_secs,
+            min_interval_secs,
+            lifetime_secs,
             reachable_time_ms: self.reachable_time.unwrap_or(0),
             retrans_timer_ms: self.retrans_timer.unwrap_or(0),
-            mtu: self.mtu,
+            mtu,
             prefixes,
             rdnss,
             dnssl,

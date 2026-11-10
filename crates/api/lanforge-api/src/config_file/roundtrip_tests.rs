@@ -1011,3 +1011,41 @@ fn device_port_forwards_parse_and_bad_ones_are_reported() {
     let (again, _) = back.to_config();
     assert_eq!(again.port_forwards, fw.port_forwards, "round trip");
 }
+
+/// A hand-edited `[ra]` with timing outside RFC 4861 §6.2.1 (or an MTU below 1280) does not
+/// reach the RA service, which refuses to run on it: each value is reported and replaced by
+/// the automatic one, the rest of the section still applies.
+#[test]
+fn ra_file_outside_rfc_ranges_falls_back_and_reports() {
+    let text = r#"
+[ra]
+hop_limit = 32
+max_interval = "1s"
+min_interval = "1s"
+lifetime = "1s"
+mtu = 1000
+"#;
+    let (ra, issues) = ConfigFile::parse(text).unwrap().ra.to_config();
+    let default = RaServerConfig::default();
+    assert_eq!(ra.max_interval_secs, default.max_interval_secs);
+    assert_eq!(ra.min_interval_secs, None);
+    assert_eq!(ra.lifetime_secs, None);
+    assert_eq!(ra.mtu, None);
+    assert_eq!(ra.hop_limit, 32, "the valid keys still apply");
+    for key in ["max_interval", "min_interval", "lifetime", "mtu"] {
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.starts_with(&format!("[ra] {key} ="))),
+            "no issue for {key}: {issues:?}"
+        );
+    }
+
+    // min/lifetime are checked against the max_interval that applies (here the fallback).
+    let text = "[ra]\nmax_interval = \"0s\"\nmin_interval = \"150s\"\nlifetime = \"200s\"\n";
+    let (ra, issues) = ConfigFile::parse(text).unwrap().ra.to_config();
+    assert_eq!(ra.max_interval_secs, 200);
+    assert_eq!(ra.min_interval_secs, Some(150), "150 <= 0.75 x 200");
+    assert_eq!(ra.lifetime_secs, Some(200));
+    assert_eq!(issues.len(), 1, "{issues:?}");
+}

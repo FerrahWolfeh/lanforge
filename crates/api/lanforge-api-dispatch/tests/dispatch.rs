@@ -46,6 +46,7 @@ use lanforge_types::network::firewall::{
     FirewallCommitRequest, FirewallConfig, L4Protocol, PortForwardRule,
 };
 use lanforge_types::network::pppoe::PppoeConfig;
+use lanforge_types::network::ra::RaServerConfig;
 use lanforge_types::network::{DnsRecordType, TrafficConfig};
 use lanforge_types::system::ServiceId;
 use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate};
@@ -1007,6 +1008,62 @@ async fn ra_update_is_written_to_the_config_file_without_the_lan_interface() {
     let res = client_ctx.handle_update_ra_config(bad).await;
     assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
     assert_eq!(client_ctx.ctx.get_ra_server_config(), cfg);
+}
+
+/// RA timing outside RFC 4861 §6.2.1 (and an MTU below 1280) is refused before it is written:
+/// the RA service refuses to run on such a value, so accepting it took RA down.
+#[tokio::test]
+async fn ra_update_outside_rfc_ranges_is_refused() {
+    let client_ctx = init_test_context().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lanforge.toml");
+    fs::write(&path, "[system]\n").unwrap();
+    client_ctx.ctx.set_config_path(&path);
+    client_ctx.ctx.set_config_writable(true);
+    let before = client_ctx.ctx.get_ra_server_config();
+
+    type Edit = fn(&mut RaServerConfig);
+    let cases: [(&str, Edit); 7] = [
+        ("max_interval 0", |c| c.max_interval_secs = 0),
+        ("max_interval 1801", |c| c.max_interval_secs = 1801),
+        ("min_interval 2", |c| c.min_interval_secs = Some(2)),
+        ("min_interval > 0.75 max", |c| {
+            c.max_interval_secs = 100;
+            c.min_interval_secs = Some(76);
+        }),
+        ("lifetime below max_interval", |c| {
+            c.max_interval_secs = 600;
+            c.lifetime_secs = Some(300);
+        }),
+        ("lifetime 9001", |c| c.lifetime_secs = Some(9001)),
+        ("mtu 1000", |c| c.mtu = Some(1000)),
+    ];
+    for (name, edit) in cases {
+        let mut cfg = before.clone();
+        edit(&mut cfg);
+        let res = client_ctx.handle_update_ra_config(cfg).await;
+        assert!(matches!(res, Response::Rejected { .. }), "{name}: {res:?}");
+        assert_eq!(
+            client_ctx.ctx.get_ra_server_config(),
+            before,
+            "{name}: applied"
+        );
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "[system]\n",
+            "{name}: written"
+        );
+    }
+
+    // The edges are legal: lifetime 0 (not a default router), min 3 with max 4, MTU 1280.
+    let mut edge = before.clone();
+    edge.max_interval_secs = 4;
+    edge.min_interval_secs = Some(3);
+    edge.lifetime_secs = Some(0);
+    edge.mtu = Some(1280);
+    let res = client_ctx.handle_update_ra_config(edge.clone()).await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    assert_eq!(client_ctx.ctx.get_ra_server_config().max_interval_secs, 4);
 }
 
 /// Host changes reach `[hosts]` before they apply: the reservation and the boot file are
