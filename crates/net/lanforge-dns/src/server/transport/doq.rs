@@ -1,5 +1,6 @@
 use lanforge_core::error::CoreError;
 use lanforge_types::network::dns::TransportProtocol;
+use quinn::crypto::rustls::QuicServerConfig;
 use quinn::{Endpoint, Incoming, RecvStream, SendStream, ServerConfig, TransportConfig};
 use std::net::IpAddr;
 use std::net::SocketAddr;
@@ -7,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
+use tokio::time::timeout;
 use tracing::{debug, info, trace};
 
 use crate::server::DnsContext;
@@ -42,7 +44,7 @@ pub async fn run_doq_worker(
     transport_config.keep_alive_interval(Some(Duration::from_secs(10)));
 
     let mut server_config = ServerConfig::with_crypto(Arc::new(
-        quinn::crypto::rustls::QuicServerConfig::try_from(tls_config)
+        QuicServerConfig::try_from(tls_config)
             .map_err(|e| CoreError::Generic(format!("QUIC config error: {e}")))?,
     ));
     server_config.transport_config(Arc::new(transport_config));
@@ -71,10 +73,7 @@ pub async fn run_doq_worker(
     }
     endpoint.close(DOQ_NO_ERROR, b"shutdown");
     connections.shutdown().await;
-    if tokio::time::timeout(DRAIN_TIMEOUT, endpoint.wait_idle())
-        .await
-        .is_err()
-    {
+    if timeout(DRAIN_TIMEOUT, endpoint.wait_idle()).await.is_err() {
         debug!("DoQ endpoint still draining after {DRAIN_TIMEOUT:?}; port may stay bound briefly");
     }
     Ok(())
@@ -87,7 +86,7 @@ pub const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 /// Concurrent streams are bounded by quinn's `max_concurrent_bidi_streams`.
 async fn serve_connection(incoming: Incoming, ctx: Arc<DnsContext>) {
     let peer = incoming.remote_address();
-    let conn = match tokio::time::timeout(TCP_IDLE_TIMEOUT, incoming).await {
+    let conn = match timeout(TCP_IDLE_TIMEOUT, incoming).await {
         Ok(Ok(conn)) => conn,
         Ok(Err(e)) => return trace!(%peer, "DoQ handshake failed: {e}"),
         Err(_) => return trace!(%peer, "DoQ handshake timed out"),
@@ -115,12 +114,7 @@ async fn serve_query(
     peer: IpAddr,
     ctx: Arc<DnsContext>,
 ) {
-    let framed = match tokio::time::timeout(
-        TCP_IDLE_TIMEOUT,
-        recv.read_to_end(2 + MAX_STREAM_QUERY),
-    )
-    .await
-    {
+    let framed = match timeout(TCP_IDLE_TIMEOUT, recv.read_to_end(2 + MAX_STREAM_QUERY)).await {
         Ok(Ok(buf)) => buf,
         Ok(Err(e)) => return trace!(%peer, "DoQ stream read error: {e}"),
         Err(_) => return trace!(%peer, "DoQ stream read timed out"),

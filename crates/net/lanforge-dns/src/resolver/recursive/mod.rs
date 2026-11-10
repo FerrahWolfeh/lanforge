@@ -5,7 +5,11 @@ pub use cache::DnsCache;
 
 #[cfg(feature = "doh-upstream")]
 use crate::server::transport::doh::DohClient;
+#[cfg(feature = "doq")]
+use crate::server::transport::doq::unframe;
 use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
+#[cfg(feature = "doq")]
+use quinn::crypto::rustls::QuicClientConfig;
 pub use strategy::{Resolved, UpstreamMode, UpstreamStrategy};
 use tokio::task::{JoinHandle, yield_now};
 #[cfg(feature = "dot")]
@@ -89,19 +93,23 @@ impl UpstreamManager {
             tls_config.alpn_protocols = vec![b"doq".to_vec()];
 
             let mut transport_config = quinn::TransportConfig::default();
-            transport_config.max_idle_timeout(Some(Duration::from_secs(30).try_into().unwrap()));
+            transport_config.max_idle_timeout(Some(
+                Duration::from_secs(30)
+                    .try_into()
+                    .expect("30 s fits the QUIC idle timeout (a VarInt of milliseconds)"),
+            ));
             transport_config.keep_alive_interval(Some(Duration::from_secs(10)));
 
             let mut config = quinn::ClientConfig::new(Arc::new(
-                quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
+                QuicClientConfig::try_from(tls_config)
                     .map_err(|e| DnsError::Tls(format!("QUIC config error: {e}")))?,
             ));
             config.transport_config(Arc::new(transport_config));
 
             let bind_addr = if target.addr.is_ipv4() {
-                "0.0.0.0:0".parse().unwrap()
+                "0.0.0.0:0".parse().expect("literal socket address")
             } else {
-                "[::]:0".parse().unwrap()
+                "[::]:0".parse().expect("literal socket address")
             };
             let mut endpoint = quinn::Endpoint::client(bind_addr).map_err(DnsError::Io)?;
             endpoint.set_default_client_config(config);
@@ -573,20 +581,18 @@ impl UpstreamManager {
         WireHeader::patch_id(&mut framed[2..], 0);
 
         let framed_resp = timeout(Duration::from_secs(5), async {
-            let (mut send, mut recv) = conn.open_bi().await.map_err(std::io::Error::other)?;
-            send.write_all(&framed)
-                .await
-                .map_err(std::io::Error::other)?;
-            send.finish().map_err(std::io::Error::other)?;
+            let (mut send, mut recv) = conn.open_bi().await.map_err(Error::other)?;
+            send.write_all(&framed).await.map_err(Error::other)?;
+            send.finish().map_err(Error::other)?;
             recv.read_to_end(2 + usize::from(u16::MAX))
                 .await
-                .map_err(std::io::Error::other)
+                .map_err(Error::other)
         })
         .await
         .map_err(|_| DnsError::UpstreamTimeout)?
         .map_err(DnsError::Io)?;
 
-        let mut resp = crate::server::transport::doq::unframe(&framed_resp)
+        let mut resp = unframe(&framed_resp)
             .ok_or(DnsError::WireParseError)?
             .to_vec();
         WireHeader::patch_id(&mut resp, original_id);
@@ -632,8 +638,11 @@ impl Drop for UpstreamManager {
 #[cfg(all(test, feature = "doq"))]
 mod doq_tests {
     use super::UpstreamManager;
+    use lanforge_crypto::tls::load_tls_config;
     use lanforge_dns_wire::WireHeader;
+    use quinn::Endpoint;
     use quinn::crypto::rustls::{QuicClientConfig, QuicServerConfig};
+    use rustls::RootCertStore;
     use std::net::{Ipv4Addr, SocketAddr};
     use std::sync::Arc;
 
@@ -649,13 +658,13 @@ mod doq_tests {
 
     /// An RFC 9250 upstream: accepts only a framed query with Message ID 0 and answers it framed
     /// (QR set); anything else resets the stream.
-    async fn strict_upstream() -> (quinn::Endpoint, SocketAddr, rustls::RootCertStore) {
+    async fn strict_upstream() -> (Endpoint, SocketAddr, RootCertStore) {
         // `load_tls_config` below installs the compiled-in crypto provider.
         let certified =
             rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert");
-        let mut roots = rustls::RootCertStore::empty();
+        let mut roots = RootCertStore::empty();
         roots.add(certified.cert.der().clone()).expect("root");
-        let mut tls = lanforge_crypto::tls::load_tls_config(
+        let mut tls = load_tls_config(
             &certified.cert.pem(),
             &certified.signing_key.serialize_pem(),
         )
