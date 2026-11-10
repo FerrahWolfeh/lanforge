@@ -626,3 +626,6 @@ mod tests {
         assert_eq!(service.cfg.root_dir, PathBuf::from("/tmp"));
     }
 }
+
+#[cfg(test)]
+mod integration_tests;

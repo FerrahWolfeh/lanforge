@@ -44,3 +44,11 @@ pub fn is_root() -> bool {
     // SAFETY: geteuid(2) takes no arguments and cannot fail.
     unsafe { libc::geteuid() == 0 }
 }
+
+#[cfg(test)]
+#[allow(
+    clippy::pedantic,
+    clippy::nursery,
+    reason = "integration tests keep the workspace lint level they had as a test crate"
+)]
+mod integration_tests;

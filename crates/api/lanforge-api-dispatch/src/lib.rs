@@ -975,3 +975,6 @@ impl ClientContext {
         }
     }
 }
+
+#[cfg(test)]
+mod integration_tests;

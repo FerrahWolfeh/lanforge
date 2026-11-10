@@ -29,3 +29,6 @@ pub use pppoe::{PppoeInertHandle, PppoeTransport};
 pub use tcp::DualTcpListener;
 pub use udp::UdpTransport;
 pub use wol::{build_magic_packet, send_wol_magic_packet};
+
+#[cfg(test)]
+mod integration_tests;

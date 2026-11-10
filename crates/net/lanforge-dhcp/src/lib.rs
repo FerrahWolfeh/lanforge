@@ -17,3 +17,11 @@ pub use v6::{Dhcpv6Config, Dhcpv6Service, Dhcpv6Transport};
 
 #[cfg(test)]
 pub mod test_utils;
+
+#[cfg(test)]
+#[allow(
+    clippy::pedantic,
+    clippy::nursery,
+    reason = "integration tests keep the workspace lint level they had as a test crate"
+)]
+mod integration_tests;

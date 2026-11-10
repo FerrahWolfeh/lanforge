@@ -60,3 +60,11 @@ pub mod macros;
 pub mod service;
 
 pub use lanforge_types as types;
+
+#[cfg(test)]
+#[allow(
+    clippy::pedantic,
+    clippy::nursery,
+    reason = "integration tests keep the workspace lint level they had as a test crate"
+)]
+mod integration_tests;

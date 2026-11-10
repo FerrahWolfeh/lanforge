@@ -21,3 +21,11 @@ pub use network::{InterfaceSnapshot, Ipv6Net, LinkInfo, WanSnapshot, WanState};
 pub use system::{
     DegradedReason, DormantReason, ServiceBanner, ServiceId, ServiceState, StateDetail,
 };
+
+#[cfg(test)]
+#[allow(
+    clippy::pedantic,
+    clippy::nursery,
+    reason = "integration tests keep the workspace lint level they had as a test crate"
+)]
+mod integration_tests;

@@ -1,0 +1,84 @@
+// Drives the server with the crate's own remote client.
+#![cfg(all(feature = "server", feature = "client"))]
+
+use std::net::TcpListener;
+use std::sync::Arc;
+
+use crate::config::HttpConfig;
+use crate::remote::default_http_client;
+use crate::server::HttpService;
+use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
+use lanforge_core::context::LanforgeContext;
+use lanforge_core::context::state::State;
+use lanforge_core::service::{AsyncService, ServiceHandle};
+use lanforge_db::config::DatabaseConfig;
+use lanforge_db::engine::LanforgeDb;
+use lanforge_db::log_engine::LogDb;
+use lanforge_types::system::ServiceId;
+
+async fn init_test_context() -> (LanforgeContext, Arc<lanforge_db::RedbDatabase>, Arc<LogDb>) {
+    let bus = Arc::new(EventBus::new());
+    let table = State::new();
+    let db = LanforgeDb::open(&DatabaseConfig {
+        config_path: "memory".to_string(),
+        ..Default::default()
+    })
+    .unwrap();
+    let db = Arc::new(db.redb().clone());
+    let log_db = Arc::new(LogDb::open_in_memory());
+    (LanforgeContext::new(bus, table, None), db, log_db)
+}
+
+#[tokio::test]
+async fn test_http_simulation_basic() {
+    let (ctx, db, log_db) = init_test_context().await;
+
+    // Bind on :0 so the OS assigns a free port, avoiding conflicts when
+    // tests run in parallel or multiple `cargo test` processes run concurrently.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener); // HttpService will re-bind; window is negligibly small in CI
+
+    let http_cfg = HttpConfig {
+        listen: format!("127.0.0.1:{port}").parse().unwrap(),
+        enabled: true,
+        allow_plaintext_http: true,
+        ..Default::default()
+    };
+    let cfg = Arc::new(http_cfg);
+
+    let mut service = HttpService::new(cfg, ctx.clone(), db, log_db);
+    let ctrl = ServiceHandle::new(ServiceId::Http, ctx.clone());
+    let ctx_service = ctx.clone();
+
+    let mut rx = ctx.bus().subscribe();
+
+    tokio::spawn(async move {
+        service
+            .serve(&ctx_service, &ctrl)
+            .await
+            .expect("Service failed");
+    });
+
+    // Wait for ServiceReady event
+    loop {
+        let event = rx.recv().await.expect("Bus closed");
+        if let LanforgeEvent::System(SystemEvent::ServiceReady { id }) = event.event
+            && id == ServiceId::Http
+        {
+            break;
+        }
+    }
+
+    let client = default_http_client();
+    let uri: hyper::Uri = format!("http://127.0.0.1:{port}/api/v1/status")
+        .parse()
+        .unwrap();
+    let req = hyper::Request::builder()
+        .uri(uri)
+        .body(http_body_util::Full::default())
+        .unwrap();
+    let res = client.request(req).await.expect("Failed to send request");
+
+    assert_eq!(res.status(), 200);
+}
