@@ -227,6 +227,14 @@ impl Daemon {
         });
     }
 
+    #[cfg_attr(
+        not(feature = "traffic"),
+        expect(
+            clippy::unused_async,
+            clippy::unused_async_trait_impl,
+            reason = "only the traffic history save awaits"
+        )
+    )]
     async fn shutdown(self) -> Result<()> {
         sd_notify_stopping();
         info!("Starting shutdown sequence...");

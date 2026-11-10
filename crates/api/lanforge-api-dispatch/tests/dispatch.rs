@@ -8,13 +8,17 @@
     reason = "integration test crates see every dev-dependency"
 )]
 use std::fs;
+#[cfg(feature = "adblock")]
 use std::iter;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tempfile::{TempDir, tempdir};
+use tempfile::TempDir;
+#[cfg(feature = "adblock")]
+use tempfile::tempdir;
+#[cfg(feature = "adblock")]
 use tokio::sync::broadcast::Receiver;
 use tokio::task::yield_now;
 use tokio::time::sleep;
@@ -22,9 +26,13 @@ use tokio::time::sleep;
 use lanforge_api::api::{
     AllowlistEntry, DnsUpstreamConfig, HostConfigEntry, Response, SystemConfigExport,
 };
-use lanforge_api::config_file::{AdblockSettings, ConfigFile, DnsSettings};
+#[cfg(feature = "adblock")]
+use lanforge_api::config_file::AdblockSettings;
+use lanforge_api::config_file::{ConfigFile, DnsSettings};
 use lanforge_api_dispatch::ClientContext;
-use lanforge_core::bus::{DnsEvent, EventBus, LanforgeEvent, NetworkEvent, TimedEvent};
+#[cfg(feature = "adblock")]
+use lanforge_core::bus::TimedEvent;
+use lanforge_core::bus::{DnsEvent, EventBus, LanforgeEvent, NetworkEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::{AsyncService, ServiceHandle};

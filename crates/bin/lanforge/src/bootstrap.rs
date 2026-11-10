@@ -503,6 +503,13 @@ impl Bootstrapper {
     /// `/setup`. Fails toward "provisioned": an unreadable flag or user table, or recovery
     /// mode (an in-memory stand-in for a persistent DB that did not open), is not a first
     /// run — treating it as one takes the LAN offline and lets anyone on it claim the admin.
+    #[cfg_attr(
+        not(any(feature = "ra", feature = "dhcp", feature = "pppoe")),
+        expect(
+            clippy::needless_pass_by_ref_mut,
+            reason = "setup mode turns off the RA/DHCP/PPPoE services"
+        )
+    )]
     fn check_provisioning_mode(cfg: &mut Config, db: &LanforgeDb) -> bool {
         let recovery = Self::is_recovery(cfg, db);
         if recovery {
@@ -558,6 +565,13 @@ impl Bootstrapper {
     /// Warns about configuration an older binary left in the database (nothing reads it any
     /// more: the config files are the only source) and derives the start-up configs that
     /// depend on several sections.
+    #[cfg_attr(
+        not(feature = "dhcp"),
+        expect(
+            clippy::needless_pass_by_ref_mut,
+            reason = "only the DHCP start-up configs are synced"
+        )
+    )]
     fn prepare_provisioned_configs(db: &LanforgeDb, cfg: &mut Config) {
         match db.legacy_config_keys() {
             Ok(keys) if !keys.is_empty() => warn!(
