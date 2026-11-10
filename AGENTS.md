@@ -141,6 +141,8 @@ Inter-service communication is powered by a multi-topic broadcast bus:
 - `./scripts/check-dns-features.sh` - Feature matrix for `lanforge-dns` (CI runs it; run it when touching DNS features/cfgs).
 - `./scripts/check-daemon-features.sh` - Feature matrix for the daemon (`lanforge`): each service alone, the profiles,
   no services (CI runs it; run it when touching `#[cfg(feature = ...)]` in `crates/bin/lanforge`).
+- `./scripts/check-cli-features.sh` - Feature matrix for the CLI (`lanforge-cli`): without `remote`, each crypto
+  provider (CI runs it; run it when touching `#[cfg(feature = ...)]` in `crates/bin/lanforge-cli`).
 - Iterate with `cargo check --all-targets -p <crate>`; run the full `cargo test` once at the end. Feature-matrix
   runs produce many large test binaries, so prefer `-p <crate>` over `--workspace` while iterating.
 - Tests that execute the CLI binary must set `HOME`/`XDG_DATA_HOME` to a nonexistent directory and drop

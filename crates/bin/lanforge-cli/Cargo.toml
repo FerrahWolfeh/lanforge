@@ -19,6 +19,8 @@ default = ["remote", "ring"]
 ring = ["rustls/ring", "hyper-rustls?/ring"]
 aws-lc = ["rustls/aws-lc-rs", "hyper-rustls?/aws-lc-rs"]
 remote = [
+    "dep:bytes",
+    "dep:directories",
     "dep:hyper",
     "dep:hyper-util",
     "dep:hyper-rustls",
@@ -38,7 +40,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
-bytes = { workspace = true }
+bytes = { workspace = true, optional = true }
 clap = { workspace = true }
 rustls = { workspace = true }
 futures = { workspace = true, optional = true }
@@ -59,7 +61,7 @@ inquire = "0.9.4"
 comfy-table = { version = "7.1", features = ["custom_styling"] }
 duration-str = "0.21.0"
 url = { version = "2.5.4", optional = true }
-directories = "6.0.0"
+directories = { version = "6.0.0", optional = true }
 chacha20poly1305 = "0.11.0"
 libc.workspace = true
 

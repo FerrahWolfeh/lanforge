@@ -13,6 +13,7 @@ pub mod toml;
 
 pub use args::CliArgs;
 use lanforge_db::config::DatabaseConfig;
+pub use lanforge_db::sanitize_db_url;
 #[cfg(feature = "dhcp")]
 use lanforge_dhcp::v4::config::Dhcpv4Config;
 #[cfg(feature = "dhcp")]
@@ -45,11 +46,14 @@ use clap::Parser;
 use std::fs;
 use std::net::Ipv6Addr;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 #[cfg(test)]
 use lanforge_api::config_file::ConfigFile;
 #[cfg(feature = "dhcp")]
 use lanforge_api::config_file::DhcpSettings;
+#[cfg(not(feature = "discovery"))]
+use lanforge_api::config_file::MonitorFile;
 #[cfg(feature = "dns")]
 use lanforge_api::config_file::{AdblockSettings, DnsSettings};
 #[cfg(feature = "ra")]
@@ -330,6 +334,18 @@ impl Config {
         database
     }
 
+    /// How long an address seen without activity (and a device's online status) stays fresh
+    /// before the stale-expiry tick drops or demotes it. `[monitor] stale_timeout_secs` when
+    /// discovery is built in; otherwise the file default, since lease expiry runs in every build.
+    #[must_use]
+    pub const fn stale_timeout(&self) -> Duration {
+        #[cfg(feature = "discovery")]
+        let secs = self.monitor_toml.stale_timeout_secs;
+        #[cfg(not(feature = "discovery"))]
+        let secs = MonitorFile::DEFAULT_STALE_TIMEOUT_SECS;
+        Duration::from_secs(secs)
+    }
+
     /// Returns the path to the dedicated API password hash file.
     #[must_use]
     pub fn get_password_hash_path(&self) -> PathBuf {
@@ -523,6 +539,10 @@ impl Config {
     }
 
     #[cfg(not(feature = "dhcp"))]
+    #[expect(
+        clippy::unused_self,
+        reason = "stub keeps the signature of the `dhcp` build"
+    )]
     const fn calculate_dhcpv4_range_size(&self) -> u32 {
         0
     }
@@ -544,6 +564,10 @@ impl Config {
     }
 
     #[cfg(not(feature = "dhcp"))]
+    #[expect(
+        clippy::unused_self,
+        reason = "stub keeps the signature of the `dhcp` build"
+    )]
     const fn calculate_dhcpv6_pool_size(&self) -> Option<u64> {
         None
     }
@@ -554,6 +578,10 @@ impl Config {
     }
 
     #[cfg(not(feature = "dns"))]
+    #[expect(
+        clippy::unused_self,
+        reason = "stub keeps the signature of the `dns` build"
+    )]
     const fn resolve_dns_upstream(&self) -> Option<UpstreamTarget> {
         None
     }
@@ -564,6 +592,10 @@ impl Config {
     }
 
     #[cfg(not(feature = "dns"))]
+    #[expect(
+        clippy::unused_self,
+        reason = "stub keeps the signature of the `dns` build"
+    )]
     const fn resolve_dns_port(&self) -> u16 {
         53
     }
@@ -575,6 +607,10 @@ impl Config {
     }
 
     #[cfg(not(feature = "tftp"))]
+    #[expect(
+        clippy::unused_self,
+        reason = "stub keeps the signature of the `tftp` build"
+    )]
     const fn resolve_boot_dir(&self) -> Option<String> {
         None
     }
@@ -632,6 +668,67 @@ fn parse_ula_prefix(raw: &str) -> Option<Ipv6Prefix> {
     let raw = raw.split('/').next()?;
     let addr = raw.parse::<Ipv6Addr>().ok()?;
     is_ula(&addr).then(|| Ipv6Prefix::from_addr(addr))
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            system: SystemCfg::default(),
+            database: DatabaseConfig::default(),
+            #[cfg(feature = "ra")]
+            ra_enabled: true,
+            #[cfg(feature = "ra")]
+            ra: RaServerConfig::default(),
+            #[cfg(feature = "dhcp")]
+            dhcpv4_enabled: true,
+            #[cfg(feature = "dhcp")]
+            dhcpv4_toml: Dhcpv4Config::default(),
+            #[cfg(feature = "dhcp")]
+            dhcpv6_enabled: true,
+            #[cfg(feature = "dhcp")]
+            dhcpv6_toml: Dhcpv6Config::default(),
+            #[cfg(feature = "dhcp")]
+            dhcp: DhcpSettings::default(),
+            #[cfg(feature = "dns")]
+            dns_enabled: true,
+            #[cfg(feature = "dns")]
+            dns_toml: DnsConfig::default(),
+            #[cfg(feature = "dns")]
+            dns: DnsSettings::default(),
+            #[cfg(feature = "dns")]
+            adblock: AdblockSettings::default(),
+            #[cfg(feature = "dns")]
+            adblock_rules: String::new(),
+            search_domains: vec!["lan".to_string()],
+            #[cfg(feature = "discovery")]
+            monitor_toml: MonitorConfig::default(),
+            #[cfg(feature = "discovery")]
+            mdns_toml: MdnsConfig::default(),
+            #[cfg(feature = "uds")]
+            api_toml: ApiConfig::default(),
+            #[cfg(feature = "http")]
+            http_toml: HttpConfig::default(),
+            #[cfg(feature = "tftp")]
+            tftp_toml: TftpConfig::default(),
+            #[cfg(feature = "pppoe")]
+            pppoe_enabled: false,
+            #[cfg(feature = "pppoe")]
+            pppoe_toml: PppoeTomlConfig::default(),
+            #[cfg(feature = "nft")]
+            firewall_enabled: true,
+            #[cfg(feature = "nft")]
+            firewall_toml: lanforge_nft::FirewallConfig::default(),
+            #[cfg(feature = "traffic")]
+            traffic_enabled: true,
+            #[cfg(feature = "traffic")]
+            traffic_toml: lanforge_traffic::TrafficConfig::default(),
+            config_path: "/etc/lanforge/lanforge.toml".to_string(),
+            config_writable: true,
+            config_issues: Vec::new(),
+            static_hosts: None,
+            dhcp_set_aside: false,
+        }
+    }
 }
 
 /// `lanforge reload` resolves the search domains from the file (`ConfigFile::search_domains`),
@@ -751,66 +848,3 @@ mod config_default_tests {
         assert_eq!(prefixes[0].source, PrefixSource::AutoGua);
     }
 }
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            system: SystemCfg::default(),
-            database: DatabaseConfig::default(),
-            #[cfg(feature = "ra")]
-            ra_enabled: true,
-            #[cfg(feature = "ra")]
-            ra: RaServerConfig::default(),
-            #[cfg(feature = "dhcp")]
-            dhcpv4_enabled: true,
-            #[cfg(feature = "dhcp")]
-            dhcpv4_toml: Dhcpv4Config::default(),
-            #[cfg(feature = "dhcp")]
-            dhcpv6_enabled: true,
-            #[cfg(feature = "dhcp")]
-            dhcpv6_toml: Dhcpv6Config::default(),
-            #[cfg(feature = "dhcp")]
-            dhcp: DhcpSettings::default(),
-            #[cfg(feature = "dns")]
-            dns_enabled: true,
-            #[cfg(feature = "dns")]
-            dns_toml: DnsConfig::default(),
-            #[cfg(feature = "dns")]
-            dns: DnsSettings::default(),
-            #[cfg(feature = "dns")]
-            adblock: AdblockSettings::default(),
-            #[cfg(feature = "dns")]
-            adblock_rules: String::new(),
-            search_domains: vec!["lan".to_string()],
-            #[cfg(feature = "discovery")]
-            monitor_toml: MonitorConfig::default(),
-            #[cfg(feature = "discovery")]
-            mdns_toml: MdnsConfig::default(),
-            #[cfg(feature = "uds")]
-            api_toml: ApiConfig::default(),
-            #[cfg(feature = "http")]
-            http_toml: HttpConfig::default(),
-            #[cfg(feature = "tftp")]
-            tftp_toml: TftpConfig::default(),
-            #[cfg(feature = "pppoe")]
-            pppoe_enabled: false,
-            #[cfg(feature = "pppoe")]
-            pppoe_toml: PppoeTomlConfig::default(),
-            #[cfg(feature = "nft")]
-            firewall_enabled: true,
-            #[cfg(feature = "nft")]
-            firewall_toml: lanforge_nft::FirewallConfig::default(),
-            #[cfg(feature = "traffic")]
-            traffic_enabled: true,
-            #[cfg(feature = "traffic")]
-            traffic_toml: lanforge_traffic::TrafficConfig::default(),
-            config_path: "/etc/lanforge/lanforge.toml".to_string(),
-            config_writable: true,
-            config_issues: Vec::new(),
-            static_hosts: None,
-            dhcp_set_aside: false,
-        }
-    }
-}
-
-pub use lanforge_db::sanitize_db_url;

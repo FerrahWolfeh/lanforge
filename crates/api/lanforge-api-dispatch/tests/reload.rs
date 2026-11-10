@@ -90,6 +90,28 @@ async fn reload_applies_an_offline_pppoe_edit() {
     assert!(!live.nftables.bypass_dns, "nested fields are applied too");
 }
 
+/// A hand-edited `[pppoe]` value the client cannot run on (MRU 0, no PADI) does not reach it:
+/// it is reported and replaced by the default; the other keys apply, and echo 0 (off) stays.
+#[tokio::test]
+async fn reload_replaces_pppoe_values_the_client_cannot_run_on() {
+    let (client, _dir, _) = with_file(
+        "[pppoe]\nenabled = true\nusername = \"u\"\nmru = 0\ndiscovery_padi_retries = 0\nlcp_echo_interval_secs = 0\n",
+    );
+    reload(&client).await;
+    let live = client.ctx.get_pppoe_config().expect("applied");
+    let default = PppoeConfig::default();
+    assert_eq!(live.username, "u");
+    assert_eq!(live.mru, default.mru);
+    assert_eq!(live.discovery_padi_retries, default.discovery_padi_retries);
+    assert_eq!(live.lcp_echo_interval_secs, 0, "0 turns the echo off");
+    let issues = client.ctx.config_issues();
+    assert_eq!(issues.len(), 2, "{issues:?}");
+    assert!(
+        issues.iter().all(|i| i.starts_with("[pppoe]")),
+        "{issues:?}"
+    );
+}
+
 #[tokio::test]
 async fn reload_applies_an_offline_traffic_edit() {
     let (client, _dir, _) =

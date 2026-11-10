@@ -471,10 +471,18 @@ impl ClientContext {
             }
         }
         if let Some(pppoe_cfg) = pppoe_config {
-            // File-owned: imported only if it reaches the config file.
-            match self.persist_config_sections(SectionSet::PPPOE, |file| {
-                file.pppoe = (*pppoe_cfg).clone()
-            }) {
+            // File-owned: imported only if it reaches the config file, and only values the
+            // client can run on (`PppoeConfig::checked`).
+            let issues = pppoe_cfg.checked().1;
+            let saved = if issues.is_empty() {
+                self.persist_config_sections(SectionSet::PPPOE, |file| {
+                    file.pppoe = (*pppoe_cfg).clone();
+                })
+                .map_err(|e| e.to_string())
+            } else {
+                Err(issues.join("; "))
+            };
+            match saved {
                 Ok(_) => {
                     patch = patch.with_pppoe(*pppoe_cfg);
                     results.push(ImportResult {
@@ -488,7 +496,7 @@ impl ClientContext {
                     section: ImportSection::PppoeConfig,
                     success: false,
                     count: 0,
-                    error: Some(e.to_string()),
+                    error: Some(e),
                 }),
             }
         }

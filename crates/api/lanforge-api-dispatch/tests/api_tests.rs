@@ -9,13 +9,13 @@
 )]
 use lanforge_api::api::Response;
 use lanforge_api_dispatch::ClientContext;
-use lanforge_core::bus::EventBus;
+use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_types::device::Origin;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::Ipv6Prefix;
-use lanforge_types::system::SystemStatus;
+use lanforge_types::system::{ServiceAction, ServiceId, SystemStatus};
 use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
@@ -146,4 +146,52 @@ async fn test_api_status_reports_gua_and_ula() {
     } else {
         panic!("Expected Response::Status, got {resp:?}");
     }
+}
+
+/// The control socket is the recovery path (D-11): a `stop` of it is refused (4xx) and never
+/// reaches the supervisor, while a restart and other services' stops go through.
+#[tokio::test]
+async fn service_control_refuses_stopping_the_control_socket() {
+    let client = init_test_context().await;
+    let mut sys_rx = client.ctx.bus().subscribe_system();
+
+    for id in ["control", "uds"] {
+        let resp = client
+            .handle_service_control(id.to_string(), ServiceAction::Stop)
+            .await;
+        assert!(
+            matches!(resp, Response::Rejected { .. }),
+            "stop {id}: {resp:?}"
+        );
+    }
+    assert!(sys_rx.try_recv().is_err(), "a refused stop reached the bus");
+
+    for (id, action, target) in [
+        ("control", ServiceAction::Restart, ServiceId::Uds),
+        ("tftp", ServiceAction::Stop, ServiceId::Tftp),
+    ] {
+        let resp = client.handle_service_control(id.to_string(), action).await;
+        assert!(
+            matches!(resp, Response::Success(_)),
+            "{action:?} {id}: {resp:?}"
+        );
+        let event = sys_rx.try_recv().expect("control event published");
+        assert!(
+            matches!(
+                event.event,
+                LanforgeEvent::System(SystemEvent::ServiceControl { id, action: a })
+                    if id == target && a == action
+            ),
+            "unexpected event: {:?}",
+            event.event
+        );
+    }
+
+    let resp = client
+        .handle_service_control("nope".to_string(), ServiceAction::Stop)
+        .await;
+    assert!(
+        matches!(resp, Response::Rejected { .. }),
+        "bad id: {resp:?}"
+    );
 }

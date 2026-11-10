@@ -15,6 +15,8 @@ use crate::resolver::{
     LocalResolver, RewriteStore,
     recursive::{DnsCache, UpstreamManager, UpstreamStrategy},
 };
+#[cfg(feature = "doq")]
+use crate::server::transport::doq;
 #[cfg(feature = "dot")]
 use crate::server::transport::dot::run_dot_worker;
 use crate::server::transport::net::bind_udp;
@@ -369,7 +371,7 @@ impl AsyncService for DnsService {
         };
 
         #[cfg(feature = "doq")]
-        let (doq_stop, doq_stop_rx) = tokio::sync::oneshot::channel();
+        let (doq_stop, doq_stop_rx) = oneshot::channel();
         #[cfg(feature = "doq")]
         let doq_worker = if let Some(addr) = self.cfg.doq_listen {
             if let (Some(cert), Some(key)) = (&self.cfg.tls_cert, &self.cfg.tls_key) {
@@ -377,14 +379,8 @@ impl AsyncService for DnsService {
                 let key = key.clone();
                 let ctx_doq = Arc::clone(&dns_ctx);
                 Some(tokio::spawn(async move {
-                    if let Err(e) = crate::server::transport::doq::run_doq_worker(
-                        addr,
-                        &cert,
-                        &key,
-                        ctx_doq,
-                        doq_stop_rx,
-                    )
-                    .await
+                    if let Err(e) =
+                        doq::run_doq_worker(addr, &cert, &key, ctx_doq, doq_stop_rx).await
                     {
                         tracing::error!("DoQ worker error: {e}");
                     }
@@ -591,8 +587,8 @@ impl AsyncService for DnsService {
         #[cfg(feature = "doq")]
         if let Some(mut task) = doq_worker {
             let _ = doq_stop.send(());
-            let drain = crate::server::transport::doq::DRAIN_TIMEOUT + Duration::from_millis(500);
-            if tokio::time::timeout(drain, &mut task).await.is_err() {
+            let drain = doq::DRAIN_TIMEOUT + Duration::from_millis(500);
+            if time::timeout(drain, &mut task).await.is_err() {
                 task.abort();
                 let _ = task.await;
             }

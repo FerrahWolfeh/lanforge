@@ -149,3 +149,46 @@ impl Default for PppoeConfig {
         }
     }
 }
+
+impl PppoeConfig {
+    /// This config with every value the client cannot run on replaced by its default, and one
+    /// message per replaced value. An MRU must fit `PPPoE` (at most 1492, RFC 2516 §7; no
+    /// `PPP-Max-Payload`) and carry IPv6 (at least 1280, RFC 8200 §5); a reconnect delay of 0
+    /// reconnects in a tight loop (ISPs flag that); 0 `PADI` retries sends no `PADI` and a 0 s `PADI`
+    /// timeout never waits for a `PADO`. The `LCP` echo settings take 0 (off).
+    #[must_use]
+    pub fn checked(&self) -> (Self, Vec<String>) {
+        let default = Self::default();
+        let mut cfg = self.clone();
+        let mut issues = Vec::new();
+        if !(1280..=1492).contains(&cfg.mru) {
+            issues.push(format!(
+                "[pppoe] mru = {} is outside 1280..1492 (PPPoE maximum, RFC 2516 §7; IPv6 minimum, RFC 8200 §5); using {}",
+                cfg.mru, default.mru
+            ));
+            cfg.mru = default.mru;
+        }
+        if cfg.reconnect_delay_secs == 0 {
+            issues.push(format!(
+                "[pppoe] reconnect_delay_secs = 0 would reconnect in a tight loop; using {}",
+                default.reconnect_delay_secs
+            ));
+            cfg.reconnect_delay_secs = default.reconnect_delay_secs;
+        }
+        if cfg.discovery_padi_retries == 0 {
+            issues.push(format!(
+                "[pppoe] discovery_padi_retries = 0 sends no PADI; using {}",
+                default.discovery_padi_retries
+            ));
+            cfg.discovery_padi_retries = default.discovery_padi_retries;
+        }
+        if cfg.discovery_padi_timeout_secs == 0 {
+            issues.push(format!(
+                "[pppoe] discovery_padi_timeout_secs = 0 never waits for a PADO; using {}",
+                default.discovery_padi_timeout_secs
+            ));
+            cfg.discovery_padi_timeout_secs = default.discovery_padi_timeout_secs;
+        }
+        (cfg, issues)
+    }
+}

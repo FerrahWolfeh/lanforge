@@ -37,8 +37,8 @@ fn default_monitor_scan_pacing_ms() -> u64 {
     10
 }
 
-fn default_monitor_stale_timeout_secs() -> u64 {
-    3600
+const fn default_monitor_stale_timeout_secs() -> u64 {
+    MonitorFile::DEFAULT_STALE_TIMEOUT_SECS
 }
 
 fn default_mdns_probe_interval() -> HumanDuration {
@@ -216,6 +216,11 @@ pub struct MonitorFile {
     pub stale_timeout_secs: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub interfaces: Vec<String>,
+}
+
+impl MonitorFile {
+    /// `stale_timeout_secs` when the file does not set it.
+    pub const DEFAULT_STALE_TIMEOUT_SECS: u64 = 3600;
 }
 
 impl Default for MonitorFile {

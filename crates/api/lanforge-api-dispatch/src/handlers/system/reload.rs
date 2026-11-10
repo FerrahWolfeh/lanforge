@@ -81,9 +81,13 @@ impl ClientContext {
             }
         }
 
-        if applies(Section::Pppoe) && ctx.get_pppoe_config().as_ref() != Some(&file.pppoe) {
-            info!("Reload: [pppoe] changed; applying");
-            patch = patch.with_pppoe(file.pppoe.clone());
+        if applies(Section::Pppoe) {
+            let (configured, pppoe_issues) = file.pppoe.checked();
+            issues.extend(log_issues(pppoe_issues));
+            if ctx.get_pppoe_config().as_ref() != Some(&configured) {
+                info!("Reload: [pppoe] changed; applying");
+                patch = patch.with_pppoe(configured);
+            }
         }
         if applies(Section::Traffic) && ctx.get_traffic_config().as_ref() != Some(&file.traffic) {
             info!("Reload: [traffic] changed; applying");

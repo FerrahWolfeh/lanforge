@@ -18,11 +18,12 @@ mod common;
 #[path = "common/tls.rs"]
 mod tls;
 
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::time::Duration;
 
 use common::{extract_a, parse_response};
+use futures::future::join_all;
 use quinn::crypto::rustls::QuicClientConfig;
 use quinn::{ClientConfig, Connection, Endpoint};
 use tls::{NAS_IP, RunningDns, SelfSigned, client_config, nas_query, self_signed};
@@ -83,7 +84,7 @@ async fn doq_answers_length_prefixed_queries() {
 
     // Several streams on the same connection, concurrently.
     let query = framed(&nas_query(0));
-    let answers = futures::future::join_all((0..8).map(|_| exchange(&conn, &query))).await;
+    let answers = join_all((0..8).map(|_| exchange(&conn, &query))).await;
     assert!(
         answers.iter().all(|a| a.len() > 2),
         "every stream is answered"
@@ -124,7 +125,7 @@ async fn stop_closes_doq_connections_and_frees_the_port() {
         "a DoQ connection outlived the stopped service"
     );
     assert!(
-        std::net::UdpSocket::bind(doq).is_ok(),
+        UdpSocket::bind(doq).is_ok(),
         "DoQ port {doq} still held after stop"
     );
 }

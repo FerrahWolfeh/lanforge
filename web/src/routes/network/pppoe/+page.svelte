@@ -188,8 +188,20 @@
 		}
 	}
 
+	// An empty field takes the default; anything typed is sent as is, so the daemon refuses a
+	// value it cannot run on (with its reason) instead of the form swapping it silently.
+	const num = (value: unknown, fallback: number): number =>
+		value === null || value === undefined || value === "" ? fallback : Number(value);
+
 	async function handleSave() {
 		if (!isDirty) return;
+		// 0 turns the LCP keepalive off in the daemon; that stays a config-file-only choice.
+		if (num(formEchoInterval, 20) < 1 || num(formEchoMaxFailures, 5) < 1) {
+			toast.error(
+				"LCP echo interval and max failures must be at least 1 (0 = off is set in the config file)",
+			);
+			return;
+		}
 		saving = true;
 		try {
 			const payload: PppoeConfig = {
@@ -200,21 +212,21 @@
 				service_name: formServiceName.trim() ? formServiceName.trim() : null,
 				ac_name: formAcName.trim() ? formAcName.trim() : null,
 				auth: formAuth,
-				mru: Number(formMru) || 1492,
-				lcp_echo_interval_secs: Number(formEchoInterval) || 20,
-				lcp_echo_max_failures: Number(formEchoMaxFailures) || 5,
-				reconnect_delay_secs: Number(formReconnectDelay) || 10,
+				mru: num(formMru, 1492),
+				lcp_echo_interval_secs: num(formEchoInterval, 20),
+				lcp_echo_max_failures: num(formEchoMaxFailures, 5),
+				reconnect_delay_secs: num(formReconnectDelay, 10),
 				send_padt_on_shutdown: formSendPadt,
-				discovery_padi_retries: Number(formPadiRetries) || 5,
-				discovery_padi_timeout_secs: Number(formPadiTimeout) || 3,
+				discovery_padi_retries: num(formPadiRetries, 5),
+				discovery_padi_timeout_secs: num(formPadiTimeout, 3),
 				terminal_probe: {
 					enabled: formProbeEnabled,
 					target_ip: formProbeTargetIp.trim() || "192.168.1.1",
 					sender_ip: formProbeSenderIp.trim() ? formProbeSenderIp.trim() : null,
 					iface: formProbeIface.trim() ? formProbeIface.trim() : null,
-					timeout_ms: Number(formProbeTimeoutMs) || 1000,
-					poll_interval_secs: Number(formProbePollIntervalSecs) || 2,
-					max_wait_secs: Number(formProbeMaxWaitSecs) || 10,
+					timeout_ms: num(formProbeTimeoutMs, 1000),
+					poll_interval_secs: num(formProbePollIntervalSecs, 2),
+					max_wait_secs: num(formProbeMaxWaitSecs, 10),
 				},
 				nftables: config?.nftables ?? {
 					enabled: true,
@@ -231,8 +243,8 @@
 			await pppoeUpdateConfig(payload);
 			toast.success("PPPoE configuration saved and reloaded");
 			await loadAll(true);
-		} catch {
-			toast.error("Failed to save PPPoE configuration");
+		} catch (err: any) {
+			toast.error(err?.message || "Failed to save PPPoE configuration");
 		} finally {
 			saving = false;
 		}

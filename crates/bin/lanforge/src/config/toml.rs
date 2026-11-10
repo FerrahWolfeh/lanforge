@@ -259,7 +259,7 @@ impl From<&ConfigFile> for TomlConfig {
 
         #[cfg(feature = "pppoe")]
         {
-            cfg.pppoe = fc.pppoe.clone();
+            cfg.pppoe = fc.pppoe.checked().0;
         }
 
         // Entries the file gets wrong are left out (reported by `load_toml`).
@@ -323,6 +323,8 @@ pub fn load_toml(path: &str) -> TomlConfig {
             cfg.config_issues.extend(file_cfg.dhcp.to_config().1);
             #[cfg(feature = "ra")]
             cfg.config_issues.extend(file_cfg.ra.to_config().1);
+            #[cfg(feature = "pppoe")]
+            cfg.config_issues.extend(file_cfg.pppoe.checked().1);
             #[cfg(feature = "dns")]
             {
                 cfg.config_issues.extend(file_cfg.dns.to_config().1);
@@ -348,6 +350,10 @@ pub fn load_toml(path: &str) -> TomlConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
+    use std::process::Command;
+    #[cfg(feature = "pppoe")]
+    use tempfile::tempdir;
 
     #[test]
     fn test_default_config() {
@@ -357,6 +363,62 @@ mod tests {
         assert_eq!(default_cfg.ra, RaServerConfig::default());
         #[cfg(feature = "dns")]
         assert_eq!(default_cfg.dns.listen.to_string(), "[::]:53");
+    }
+
+    /// Child half of `missing_file_ignores_foreign_db_env`: runs only in the subprocess that
+    /// test spawns with the environment set (tests share one process, and `set_var` is unsafe).
+    #[test]
+    #[ignore = "spawned by missing_file_ignores_foreign_db_env"]
+    fn missing_file_db_paths_child() {
+        let cfg = load_toml("/nonexistent/lanforge-test/lanforge.toml");
+        assert_eq!(cfg.database.config_path, "/var/lib/lanforge/config.redb");
+        assert_eq!(cfg.database.runtime_path, "/run/lanforge/runtime.redb");
+    }
+
+    /// Without a config file the daemon runs on defaults; another app's `DATABASE_URL` (or a
+    /// stray legacy variable) must not become lanforge's database: a SQL URL there booted the
+    /// daemon into recovery mode, and `--dev` did not switch such a path to memory.
+    #[test]
+    fn missing_file_ignores_foreign_db_env() {
+        let out = Command::new(env::current_exe().expect("test binary path"))
+            .args([
+                "--exact",
+                "config::toml::tests::missing_file_db_paths_child",
+            ])
+            .args(["--ignored", "--test-threads=1"])
+            .env("DATABASE_URL", "postgres://other-app/db")
+            .env("LANFORGE_DB_PATH", "/tmp/legacy-config.redb")
+            .env("LANFORGE_LOG_DB_URL", "/tmp/legacy-runtime.redb")
+            .env_remove("LANFORGE_CONFIG_DB_PATH")
+            .env_remove("LANFORGE_RUNTIME_DB_PATH")
+            .output()
+            .expect("spawn the test binary");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success() && stdout.contains("1 passed"),
+            "child failed:\n{stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// At boot a hand-edited `[pppoe]` value the client cannot run on (MRU 0) is reported and
+    /// replaced by the default; the other keys still apply.
+    #[cfg(feature = "pppoe")]
+    #[test]
+    fn boot_replaces_pppoe_values_the_client_cannot_run_on() {
+        let dir = tempdir().expect("temp dir");
+        let path = dir.path().join("lanforge.toml");
+        fs::write(&path, "[pppoe]\nusername = \"u\"\nmru = 0\n").expect("write config");
+        let cfg = load_toml(path.to_str().expect("utf-8 path"));
+        assert_eq!(cfg.pppoe.username, "u");
+        assert_eq!(cfg.pppoe.mru, PppoeConfig::default().mru);
+        assert!(
+            cfg.config_issues
+                .iter()
+                .any(|i| i.starts_with("[pppoe] mru = 0")),
+            "{:?}",
+            cfg.config_issues
+        );
     }
 
     #[test]

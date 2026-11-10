@@ -42,13 +42,14 @@
 				<Input
 					id="mru"
 					type="number"
-					min="576"
-					max="1500"
+					min="1280"
+					max="1492"
 					bind:value={formMru}
 					class="h-9 font-mono text-xs"
 				/>
 				<p class="text-[11px] text-muted-foreground">
-					Default 1492 (1500 Ethernet MTU minus 8-byte PPPoE header). Use 1500 for Baby Jumbo Frames.
+					1280 to 1492. Default 1492 (1500 Ethernet MTU minus the 8-byte PPPoE header, RFC 2516);
+					1280 is the IPv6 minimum.
 				</p>
 			</div>
 
