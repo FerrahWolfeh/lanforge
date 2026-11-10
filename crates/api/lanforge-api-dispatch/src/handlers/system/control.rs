@@ -21,11 +21,20 @@ impl ClientContext {
         let service_id = match id.parse::<ServiceId>() {
             Ok(sid) => sid,
             Err(e) => {
-                return Response::Error {
+                return Response::Rejected {
                     error: format!("Invalid service id '{id}': {e}"),
                 };
             }
         };
+        // The control socket is the recovery path (D-11): stopped, nothing local can start it
+        // again short of a daemon restart. A restart brings it back, so that stays allowed.
+        if service_id == ServiceId::Uds && action == ServiceAction::Stop {
+            return Response::Rejected {
+                error: format!(
+                    "Refusing to stop '{service_id}': the control socket is the recovery path"
+                ),
+            };
+        }
         let _ = self
             .ctx
             .bus()
