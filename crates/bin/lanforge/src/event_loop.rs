@@ -199,6 +199,10 @@ where
     let mut stale_timer = interval(stale_check_interval);
     stale_timer.tick().await;
 
+    // Device retention is counted in hours and days, so a coarse tick is enough.
+    let mut prune_timer = interval(Duration::from_mins(10));
+    prune_timer.tick().await;
+
     let mut expected_sorted: Vec<_> = expected_services.iter().map(ServiceId::as_str).collect();
     expected_sorted.sort_unstable();
     info!(
@@ -218,6 +222,9 @@ where
             _ = stale_timer.tick() => {
                 #[cfg(feature = "discovery")]
                 ctx.expire_stale(Duration::from_secs(cfg.monitor_toml.stale_timeout_secs));
+            }
+            _ = prune_timer.tick() => {
+                let _ = ctx.prune_zombies();
             }
             _ = sigusr1.recv() => {
                 info!("SIGUSR1 received; re-evaluating conditions");

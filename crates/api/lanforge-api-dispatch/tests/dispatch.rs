@@ -33,7 +33,7 @@ use lanforge_db::engine::LanforgeDb;
 use lanforge_db::log_engine::LogDb;
 use lanforge_db::worker::DbWorker;
 use lanforge_db_core::Stores;
-use lanforge_types::device::{IPv4State, Ipv6AddrOrSuffix, Origin};
+use lanforge_types::device::{Device, DeviceClass, IPv4State, Ipv6AddrOrSuffix, Origin};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
@@ -48,7 +48,7 @@ use lanforge_types::network::firewall::{
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::{DnsRecordType, TrafficConfig};
 use lanforge_types::system::ServiceId;
-use lanforge_types::update::DeviceUpdate;
+use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate};
 
 async fn init_test_context() -> ClientContext {
     let bus = Arc::new(EventBus::new());
@@ -588,6 +588,49 @@ async fn removing_a_static_host_demotes_it_and_purging_forgets_it() {
     let res = client_ctx.handle_purge(mac).await;
     assert!(matches!(res, Response::Success(_)), "{res:?}");
     assert!(client_ctx.ctx.get_device(&mac).is_none());
+}
+
+/// The manual prune runs the in-memory prune (one rule, one retention clock): a device the
+/// admin classified stays in memory and in the database even without a name or an address.
+#[tokio::test]
+async fn manual_prune_keeps_a_device_with_admin_settings() {
+    let client_ctx = init_test_context().await;
+    while client_ctx.ctx.storage_handle().is_none() {
+        yield_now().await;
+    }
+    let storage = client_ctx.ctx.storage_handle().unwrap();
+    let mac = MacAddr::parse("02:00:00:00:00:31").unwrap();
+    let _ = client_ctx.ctx.apply(DeviceUpdate::CliHostUpdated {
+        mac,
+        update: Box::new(CliHostUpdate {
+            class: FieldUpdate::Set(DeviceClass::Printer),
+            origin: Origin::Dynamic,
+            ..CliHostUpdate::default()
+        }),
+    });
+    let dev = client_ctx
+        .ctx
+        .get_device(&mac)
+        .expect("the update creates it");
+    assert!(!dev.has_address() && dev.hostname.name.is_empty());
+    let dev = Device::clone(&dev);
+    storage
+        .call(move |s: &Stores| s.db().upsert_device(&dev))
+        .await
+        .unwrap();
+
+    let res = client_ctx.handle_db_prune().await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+
+    assert!(client_ctx.ctx.get_device(&mac).is_some());
+    let stored = storage
+        .call(|s: &Stores| s.db().load_all_devices())
+        .await
+        .unwrap();
+    assert!(
+        stored.iter().any(|d| d.mac == mac),
+        "deleted from the database"
+    );
 }
 
 #[tokio::test]

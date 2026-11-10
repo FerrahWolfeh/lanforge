@@ -74,6 +74,18 @@ impl LanforgeContext {
         result
     }
 
+    /// Publishes the events a state write returned, after its lock is released.
+    #[inline]
+    pub(crate) fn publish_events(&self, events: &EventVec) {
+        if events.is_empty() {
+            return;
+        }
+        let bus = self.bus_ref();
+        for event in events {
+            let _ = bus.publish(event.clone());
+        }
+    }
+
     /// Edits the state outside the update protocol (maintenance, expiry, tests).
     pub(crate) fn with_state_mut<R>(&self, edit: impl FnOnce(&mut State) -> R) -> R {
         self.write_state(&MAINTENANCE_SCOPE, edit)
@@ -124,15 +136,7 @@ impl LanforgeContext {
             all_events
         });
 
-        if events.is_empty() {
-            return EventVec::new();
-        }
-
-        let bus = self.bus_ref();
-        for event in &events {
-            let _ = bus.publish(event.clone());
-        }
-
+        self.publish_events(&events);
         events
     }
 
@@ -157,12 +161,7 @@ impl LanforgeContext {
             return EventVec::new();
         }
 
-        // 4. Publish Events
-        let bus = self.bus_ref();
-        for event in &events {
-            let _ = bus.publish(event.clone());
-        }
-
+        self.publish_events(&events);
         events
     }
 

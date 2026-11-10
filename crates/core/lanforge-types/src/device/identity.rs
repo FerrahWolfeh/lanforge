@@ -43,10 +43,7 @@ impl DeviceIdentity {
             origin: Origin::Dynamic,
             class: DeviceClass::None,
             duid: None,
-            dns_fallback: format!(
-                "host-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-                mac.0[0], mac.0[1], mac.0[2], mac.0[3], mac.0[4], mac.0[5]
-            ),
+            dns_fallback: Self::default_dns_fallback(mac),
             boot_file: None,
             iface: None,
             ignore_dns_log: false,
@@ -66,5 +63,26 @@ impl DeviceIdentity {
     #[must_use]
     pub const fn is_static(&self) -> bool {
         self.origin.is_static()
+    }
+
+    /// The DNS fallback name a device gets until an admin sets another.
+    #[must_use]
+    pub fn default_dns_fallback(mac: MacAddr) -> String {
+        format!(
+            "host-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            mac.0[0], mac.0[1], mac.0[2], mac.0[3], mac.0[4], mac.0[5]
+        )
+    }
+
+    /// Whether an admin left anything on this device that a prune would lose: a class, a DNS
+    /// fallback name, a boot file, DNS log switches, or any edit through the host form.
+    #[must_use]
+    pub fn has_admin_settings(&self) -> bool {
+        self.class != DeviceClass::None
+            || self.boot_file.is_some()
+            || self.ignore_dns_log
+            || !self.ignored_log_domains.is_empty()
+            || self.managed_at.is_some()
+            || self.dns_fallback != Self::default_dns_fallback(self.mac)
     }
 }

@@ -82,12 +82,7 @@ impl LanforgeContext {
         let events = self.with_state_mut(|state| state.expire_stale(interval));
         self.inner.discovery.prune_stale(Duration::from_hours(2));
 
-        if !events.is_empty() {
-            let bus = self.bus_ref();
-            for event in events {
-                let _ = bus.publish(event);
-            }
-        }
+        self.publish_events(&events);
     }
 
     /// Attempts a Just-In-Time lookup for a hostname.
