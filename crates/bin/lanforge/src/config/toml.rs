@@ -348,6 +348,8 @@ pub fn load_toml(path: &str) -> TomlConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
+    use std::process::Command;
 
     #[test]
     fn test_default_config() {
@@ -357,6 +359,42 @@ mod tests {
         assert_eq!(default_cfg.ra, RaServerConfig::default());
         #[cfg(feature = "dns")]
         assert_eq!(default_cfg.dns.listen.to_string(), "[::]:53");
+    }
+
+    /// Child half of `missing_file_ignores_foreign_db_env`: runs only in the subprocess that
+    /// test spawns with the environment set (tests share one process, and `set_var` is unsafe).
+    #[test]
+    #[ignore = "spawned by missing_file_ignores_foreign_db_env"]
+    fn missing_file_db_paths_child() {
+        let cfg = load_toml("/nonexistent/lanforge-test/lanforge.toml");
+        assert_eq!(cfg.database.config_path, "/var/lib/lanforge/config.redb");
+        assert_eq!(cfg.database.runtime_path, "/run/lanforge/runtime.redb");
+    }
+
+    /// Without a config file the daemon runs on defaults; another app's `DATABASE_URL` (or a
+    /// stray legacy variable) must not become lanforge's database: a SQL URL there booted the
+    /// daemon into recovery mode, and `--dev` did not switch such a path to memory.
+    #[test]
+    fn missing_file_ignores_foreign_db_env() {
+        let out = Command::new(env::current_exe().expect("test binary path"))
+            .args([
+                "--exact",
+                "config::toml::tests::missing_file_db_paths_child",
+            ])
+            .args(["--ignored", "--test-threads=1"])
+            .env("DATABASE_URL", "postgres://other-app/db")
+            .env("LANFORGE_DB_PATH", "/tmp/legacy-config.redb")
+            .env("LANFORGE_LOG_DB_URL", "/tmp/legacy-runtime.redb")
+            .env_remove("LANFORGE_CONFIG_DB_PATH")
+            .env_remove("LANFORGE_RUNTIME_DB_PATH")
+            .output()
+            .expect("spawn the test binary");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success() && stdout.contains("1 passed"),
+            "child failed:\n{stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     #[test]
