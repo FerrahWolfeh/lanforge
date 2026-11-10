@@ -1,5 +1,7 @@
 use color_eyre::Result;
-use color_eyre::eyre::{bail, eyre};
+use color_eyre::eyre::bail;
+#[cfg(feature = "remote")]
+use color_eyre::eyre::eyre;
 #[cfg(feature = "remote")]
 use directories::ProjectDirs;
 use inquire::{Password, Text};
@@ -22,6 +24,14 @@ pub struct LoginArgs {
 }
 
 impl LoginArgs {
+    #[cfg_attr(
+        not(feature = "remote"),
+        expect(
+            clippy::unused_async,
+            clippy::unused_async_trait_impl,
+            reason = "only the remote login awaits"
+        )
+    )]
     pub async fn execute(self, client: &LanforgeClient, printer: &Printer) -> Result<()> {
         let raw_url = if let Some(u) = self.url {
             u
@@ -111,6 +121,7 @@ impl LoginArgs {
             bail!("Remote feature is disabled in this build of lanforge-cli.");
         }
 
+        #[cfg(feature = "remote")]
         Ok(())
     }
 }

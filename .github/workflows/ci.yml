@@ -47,6 +47,9 @@ jobs:
       - name: Daemon feature matrix
         run: ./scripts/check-daemon-features.sh
 
+      - name: CLI feature matrix
+        run: ./scripts/check-cli-features.sh
+
   web:
     name: WebUI Build & Check
     runs-on: ubuntu-latest

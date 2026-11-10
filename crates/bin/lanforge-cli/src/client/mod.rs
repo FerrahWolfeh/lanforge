@@ -2,7 +2,6 @@ pub mod build_check;
 
 use color_eyre::eyre::{Context, Result, eyre};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::sync::Arc;
 use tokio::net::UnixStream;
 
 use lanforge_api::api::{
@@ -10,18 +9,16 @@ use lanforge_api::api::{
     DhcpOptionsResponse, DhcpPoolsConfigResponse, DhcpPoolsResponse, DhcpReconcileResponse,
     DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse, DnsCacheStatsExtResponse,
     DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse, DnsRewritesResponse,
-    DnsUpstreamsResponse, HostConfigEntry, HostsResponse, HttpErrorResponse, HttpWrappedResponse,
-    LeasesResponse, ServiceBannersResponse, SetupPayload, SetupResponse, SetupStatusResponse,
-    SimpleSuccess, StatusResponse, SystemConfigExport, SystemConfigImportResponse,
-    UserListResponse, UserResponse, WhoisResponse,
+    DnsUpstreamsResponse, HostConfigEntry, HostsResponse, LeasesResponse, ServiceBannersResponse,
+    SetupPayload, SetupResponse, SetupStatusResponse, SimpleSuccess, StatusResponse,
+    SystemConfigExport, SystemConfigImportResponse, UserListResponse, UserResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_types::auth::ApiScopes;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::adblock::{
-    AdblockRuleAction, AdblockRuleEntry, AdblockSourceFormat, AdblockUrlKind, BlockingMode,
-    RewriteRule, TimeOfDay,
+    AdblockSourceFormat, AdblockUrlKind, BlockingMode, RewriteRule, TimeOfDay,
 };
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::dns::{
@@ -59,9 +56,16 @@ use hyper_util::client::legacy::connect::HttpConnector;
 #[cfg(feature = "remote")]
 use hyper_util::rt::TokioExecutor;
 #[cfg(feature = "remote")]
+use lanforge_api::api::{HttpErrorResponse, HttpWrappedResponse};
+#[cfg(feature = "remote")]
+use lanforge_types::network::dns::adblock::{AdblockRuleAction, AdblockRuleEntry};
+#[cfg(feature = "remote")]
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 #[cfg(feature = "ring")]
 use rustls::crypto::ring;
+#[cfg(feature = "remote")]
+use std::sync::Arc;
+#[cfg(feature = "remote")]
 use url::form_urlencoded;
 
 /// Error text of a 403 that asks the session to re-enter its password.
@@ -160,12 +164,13 @@ pub struct LanforgeClient {
 }
 
 impl LanforgeClient {
-    pub fn new(
-        socket: String,
-        mut remote: Option<String>,
-        mut token: Option<String>,
-    ) -> Result<Self> {
+    pub fn new(socket: String, remote: Option<String>, token: Option<String>) -> Result<Self> {
         init_crypto();
+
+        #[cfg(not(feature = "remote"))]
+        let _ = (remote, token);
+        #[cfg(feature = "remote")]
+        let (mut remote, mut token) = (remote, token);
 
         #[cfg(feature = "remote")]
         if let Some(proj_dirs) = ProjectDirs::from("", "lanforge", "lanforge") {
@@ -1797,6 +1802,7 @@ impl LanforgeClient {
     }
 }
 
+#[cfg(feature = "remote")]
 fn urlencoding(s: &str) -> String {
     form_urlencoded::byte_serialize(s.as_bytes()).collect()
 }
