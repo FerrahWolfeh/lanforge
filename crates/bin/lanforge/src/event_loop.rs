@@ -1,5 +1,6 @@
 use crate::app::sd_notify_ready;
 use crate::bootstrap::BootstrapResult;
+use crate::config::Config;
 use crate::supervisor::GraphSupervisor;
 
 use anyhow::Result;
@@ -177,6 +178,14 @@ pub const fn is_settled_state(st: ServiceState) -> bool {
     )
 }
 
+/// The stale-expiry tick: drops expired leases and stale observed addresses.
+///
+/// Lease expiry is not a discovery concern, so this runs in every build (a DHCP-only build once
+/// kept expired leases forever, and its devices never became prunable).
+pub fn on_stale_tick(ctx: &LanforgeContext, cfg: &Config) {
+    ctx.expire_stale(cfg.stale_timeout());
+}
+
 pub async fn run_event_loop<S>(
     bootstrap: BootstrapResult,
     ctx: LanforgeContext,
@@ -220,8 +229,7 @@ where
     loop {
         tokio::select! {
             _ = stale_timer.tick() => {
-                #[cfg(feature = "discovery")]
-                ctx.expire_stale(Duration::from_secs(cfg.monitor_toml.stale_timeout_secs));
+                on_stale_tick(&ctx, &cfg);
             }
             _ = prune_timer.tick() => {
                 let _ = ctx.prune_zombies();
@@ -294,4 +302,40 @@ where
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::on_stale_tick;
+    use crate::config::Config;
+    use lanforge_core::bus::EventBus;
+    use lanforge_core::context::LanforgeContext;
+    use lanforge_core::context::state::State;
+    use lanforge_types::device::IPv4State;
+    use lanforge_types::identifiers::MacAddr;
+    use lanforge_types::update::DeviceUpdate;
+    use std::sync::Arc;
+    use std::time::{Duration, SystemTime};
+
+    /// Runs in every feature set (the daemon feature matrix tests the no-service build): an
+    /// expired `DHCPv4` lease must leave memory on the stale tick even without `discovery`.
+    #[test]
+    fn stale_tick_expires_leases_in_every_build() {
+        let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
+        let mac = MacAddr([0x02, 0, 0, 0, 0, 0x10]);
+        let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
+            mac,
+            ip: "192.168.0.10".parse().expect("valid IPv4"),
+            expires: SystemTime::now() - Duration::from_secs(60),
+        });
+
+        on_stale_tick(&ctx, &Config::default());
+
+        // A lease-only device with nothing left is dropped as a whole; either way no lease stays.
+        let v4 = ctx.get_device(&mac).map(|dev| dev.v4.clone());
+        assert!(
+            v4.as_ref().is_none_or(|v4| matches!(v4, IPv4State::None)),
+            "expired lease kept in memory: {v4:?}"
+        );
+    }
 }

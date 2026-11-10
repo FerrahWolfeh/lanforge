@@ -45,11 +45,14 @@ use clap::Parser;
 use std::fs;
 use std::net::Ipv6Addr;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 #[cfg(test)]
 use lanforge_api::config_file::ConfigFile;
 #[cfg(feature = "dhcp")]
 use lanforge_api::config_file::DhcpSettings;
+#[cfg(not(feature = "discovery"))]
+use lanforge_api::config_file::MonitorFile;
 #[cfg(feature = "dns")]
 use lanforge_api::config_file::{AdblockSettings, DnsSettings};
 #[cfg(feature = "ra")]
@@ -328,6 +331,18 @@ impl Config {
             database.runtime_path.clone_from(path);
         }
         database
+    }
+
+    /// How long an address seen without activity (and a device's online status) stays fresh
+    /// before the stale-expiry tick drops or demotes it. `[monitor] stale_timeout_secs` when
+    /// discovery is built in; otherwise the file default, since lease expiry runs in every build.
+    #[must_use]
+    pub const fn stale_timeout(&self) -> Duration {
+        #[cfg(feature = "discovery")]
+        let secs = self.monitor_toml.stale_timeout_secs;
+        #[cfg(not(feature = "discovery"))]
+        let secs = MonitorFile::DEFAULT_STALE_TIMEOUT_SECS;
+        Duration::from_secs(secs)
     }
 
     /// Returns the path to the dedicated API password hash file.
