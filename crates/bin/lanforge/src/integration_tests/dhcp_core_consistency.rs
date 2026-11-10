@@ -423,6 +423,24 @@ async fn test_dhcp_decline_quarantine_consistency() {
     let offer = dhcp_handle.recv_reply().await.unwrap();
     let declined_ip = offer.message().unwrap().yiaddr();
 
+    // RFC 2131 §3.1 (5): the client declines only after the ACK, when its ARP probe finds the
+    // address in use. A DECLINE right after the OFFER is for a lease it does not hold and is
+    // ignored, and the next DISCOVER got another address anyway (the offer stays reserved), so
+    // the test passed even with DECLINE handling broken.
+    let request = build_dhcp_packet(
+        mac,
+        MessageType::Request,
+        Some(declined_ip),
+        Some(cfg.server_id),
+        None,
+    );
+    dhcp_handle.send_packet(request, client_src).await;
+    let ack = dhcp_handle.recv_reply().await.unwrap();
+    assert_eq!(
+        ack.message().unwrap().opts().get(OptionCode::MessageType),
+        Some(&DhcpOption::MessageType(MessageType::Ack))
+    );
+
     // Client declines the IP (simulating ARP collision detected by client host)
     let decline = build_dhcp_packet(
         mac,
