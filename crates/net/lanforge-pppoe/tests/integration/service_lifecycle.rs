@@ -1,18 +1,10 @@
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    reason = "test assertions and setup"
-)]
-#![allow(
-    unused_crate_dependencies,
-    reason = "integration test crates see every dev-dependency"
-)]
-mod mock_bras;
+use crate::mock_bras;
 
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::mock_bras::{MockBrasConfig, spawn_mock_bras};
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
@@ -34,7 +26,6 @@ use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::pppoe::{AuthMethod, TerminalProbeConfig};
 use lanforge_types::network::snapshot::{WanSnapshot, WanState};
 use lanforge_types::system::{PppoeSessionState, ServiceId, ServiceState};
-use mock_bras::{MockBrasConfig, spawn_mock_bras};
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep, timeout};

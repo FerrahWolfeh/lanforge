@@ -1,6 +1,5 @@
 [package]
 name = "lanforge-pppoe"
-autotests = false
 version.workspace = true
 license.workspace = true
 edition.workspace = true
@@ -42,14 +41,6 @@ default = []
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
-
-[[test]]
-name = "service_lifecycle"
-path = "tests/service_lifecycle.rs"
-
-[[test]]
-name = "auth_handshake"
-path = "tests/auth_handshake.rs"
 
 [lints]
 workspace = true

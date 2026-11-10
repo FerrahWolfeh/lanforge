@@ -1,19 +1,8 @@
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    reason = "test assertions and setup"
-)]
-#![allow(
-    unused_crate_dependencies,
-    reason = "integration test crates see every dev-dependency"
-)]
-mod common;
-
 use std::iter;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, SystemTime};
 
-use common::{
+use crate::common::{
     Dhcpv4PacketBuilder, Dhcpv6PacketBuilder, create_test_v4_server, create_test_v6_server,
     init_test_context, init_test_context_with_interface,
 };

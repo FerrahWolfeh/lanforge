@@ -1,12 +1,3 @@
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    reason = "test assertions and setup"
-)]
-#![allow(
-    unused_crate_dependencies,
-    reason = "integration test crates see every dev-dependency"
-)]
 use lanforge_nft::ruleset::RulesetBuilder;
 use lanforge_types::network::firewall::{
     DynamicPortRequest, FirewallConfig, FirewallMode, FirewallPolicy, FirewallZone, L4Protocol,

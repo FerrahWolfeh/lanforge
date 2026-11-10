@@ -1,12 +1,3 @@
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    reason = "test assertions and setup"
-)]
-#![allow(
-    unused_crate_dependencies,
-    reason = "integration test crates see every dev-dependency"
-)]
 //! LCP → CHAP handshake against a scripted access concentrator (RFC 1661, RFC 1994).
 //!
 //! Owner logs (ISP BRAS, right after a lanforge restart): `CHAP Challenge timeout` and

@@ -1,15 +1,4 @@
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    reason = "test assertions and setup"
-)]
-#![allow(
-    unused_crate_dependencies,
-    reason = "integration test crates see every dev-dependency"
-)]
-mod common;
-
-use common::{
+use crate::common::{
     Dhcpv4PacketBuilder, Dhcpv6PacketBuilder, create_test_v4_config, create_test_v6_config,
     init_test_context, init_test_context_with_interface,
 };
