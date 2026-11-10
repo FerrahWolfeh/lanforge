@@ -31,5 +31,11 @@ hotpath = ["dep:hotpath"]
 hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc"]
 default = []
 
+# Installs its own #[global_allocator], so it stays a separate binary; without the feature it
+# would link an empty one on every `cargo test`.
+[[test]]
+name = "profiling"
+required-features = ["hotpath"]
+
 [lints]
 workspace = true
