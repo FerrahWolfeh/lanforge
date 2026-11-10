@@ -44,15 +44,16 @@ use lanforge_transport::TransportMetrics;
 use lanforge_types::config::AdblockRules;
 use lanforge_types::config::{ConfigDomain, DnsListenConfig, SiteDomains};
 use lanforge_types::network::dns::{
-    AdblockCheckResponse, DnsAdblockSourcesResponse, DnsCacheEntry, DnsCacheResponse,
-    DnsCacheStatsExtResponse, DnsClass, DnsLifetimeStats, DnsMessage, DnsQuestion, DnsRecordEntry,
-    DnsRecordType, DnsRequest, DnsResponse, DnsStatsResponse, TransportProtocol,
+    AdblockCheckResponse, DnsAdblockSourcesResponse, DnsAdblockStatusResponse, DnsCacheEntry,
+    DnsCacheResponse, DnsCacheStatsExtResponse, DnsClass, DnsLifetimeStats, DnsMessage,
+    DnsQuestion, DnsRecordEntry, DnsRecordType, DnsRequest, DnsResponse, DnsStatsResponse,
+    TransportProtocol,
     adblock::{AdblockDbConfig, RewriteRule},
     upstream::{UpstreamMode, UpstreamProtocol, UpstreamTarget},
 };
 #[cfg(feature = "adblock")]
 use lanforge_types::network::dns::{
-    AdblockSourceMatch, AdblockSourceStatus, DnsAdblockStatusResponse, FilterMatch, FilterOrigin,
+    AdblockSourceMatch, AdblockSourceStatus, FilterMatch, FilterOrigin,
 };
 use lanforge_types::system::{
     DegradedReason, DormantReason, PppoeSessionState, ServiceId, ServiceState,
@@ -859,9 +860,7 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
             }
             #[cfg(not(feature = "adblock"))]
             {
-                DnsResponse::AdblockStatus(
-                    lanforge_types::network::dns::DnsAdblockStatusResponse::default(),
-                )
+                DnsResponse::AdblockStatus(DnsAdblockStatusResponse::default())
             }
         }
         DnsRequest::AdblockSources => {
