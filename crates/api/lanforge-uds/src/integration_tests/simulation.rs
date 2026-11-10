@@ -22,12 +22,14 @@ async fn init_test_context() -> LanforgeContext {
 #[tokio::test]
 async fn dns_uds_simulation_basic() {
     let ctx = init_test_context().await;
-    let socket_path = "/tmp/lanforge_test_control.sock";
+    // A per-test directory: a fixed /tmp path collided between concurrent test runs.
+    let dir = tempfile::tempdir().unwrap();
+    let socket_path = dir.path().join("control.sock");
 
     // 1. Setup config
     let api_cfg = ApiConfig {
         enabled: true,
-        socket_path: socket_path.to_string(),
+        socket_path: socket_path.display().to_string(),
     };
     let cfg = Arc::new(api_cfg);
 
@@ -59,13 +61,13 @@ async fn dns_uds_simulation_basic() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let md = metadata(socket_path).expect("Socket file should exist");
+        let md = metadata(&socket_path).expect("Socket file should exist");
         let mode = md.permissions().mode();
         assert_eq!(mode & 0o777, 0o660);
     }
 
     // 4. Connect to socket and query
-    let mut client = UnixStream::connect(socket_path)
+    let mut client = UnixStream::connect(&socket_path)
         .await
         .expect("Failed to connect to UDS");
 

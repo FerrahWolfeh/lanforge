@@ -7,8 +7,6 @@ use lanforge_types::network::dns::{
     DnsClass, DnsMessage, DnsRData, DnsRecord, DnsRecordType, DnsResponseCode, adblock::RewriteRule,
 };
 use lanforge_types::network::{DnsReverseResolver, IpSubnet};
-#[cfg(feature = "adblock")]
-use std::env;
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -54,7 +52,8 @@ async fn pipeline_adblocking() {
 
     let mut domains = HashSet::new();
     domains.insert("doubleclick.net".to_string());
-    let temp_path = env::temp_dir().join("test_blocklist.rkyv");
+    let dir = tempfile::tempdir().unwrap();
+    let temp_path = dir.path().join("blocklist.rkyv");
     let bl =
         DiskBlocklist::build(domains, &temp_path, 100).expect("Failed to build test blocklist");
 
@@ -126,7 +125,8 @@ async fn pipeline_cached_block() {
 
     let mut domains = HashSet::new();
     domains.insert("ads.com".to_string());
-    let temp_path = env::temp_dir().join("test_cache_block.rkyv");
+    let dir = tempfile::tempdir().unwrap();
+    let temp_path = dir.path().join("blocklist.rkyv");
     let bl = DiskBlocklist::build(domains, &temp_path, 100).unwrap();
     filter.replace_blocklist(bl);
     filter.set_enabled(true);
