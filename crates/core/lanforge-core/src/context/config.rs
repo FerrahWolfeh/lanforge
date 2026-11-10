@@ -907,15 +907,17 @@ mod tests {
         ctx.hydrate_config(ConfigPatch::new().with_pppoe(initial_pppoe.clone()));
 
         let mut sub = ctx.config_subscription::<PppoeConfig>();
+        let mut sys_rx = ctx.bus().subscribe_system();
 
         // Applying identical config (defaults) must produce zero changes
         let report = ctx.apply_config(ConfigPatch::new().with_pppoe(initial_pppoe));
         assert!(report.changed.is_empty());
         assert_eq!(report.max_impact, ChangeImpact::None);
 
-        // Ensure subscription is not woken
+        // Ensure neither the subscription nor the bus is woken
         tokio::select! {
             _ = sub.next() => panic!("Subscription must not wake on noop"),
+            event = sys_rx.recv() => panic!("No bus event expected on noop, got {event:?}"),
             () = sleep(Duration::from_millis(50)) => {}
         }
     }
@@ -925,6 +927,8 @@ mod tests {
         let ctx = create_test_context();
         let mut pppoe_sub = ctx.config_subscription::<PppoeConfig>();
         let mut ra_sub = ctx.config_subscription::<RaServerConfig>();
+        let mut pools_sub = ctx.config_subscription::<Vec<Dhcpv4Pool>>();
+        let mut options_sub = ctx.config_subscription::<Dhcpv4Options>();
 
         // Change RA config only
         let ra_cfg = RaServerConfig {
@@ -944,11 +948,51 @@ mod tests {
         assert_eq!(delta.impact, ChangeImpact::Hot);
         assert_eq!(delta.new.hop_limit, 128);
 
-        // PPPoE subscription must NOT wake up
+        // Unrelated subscriptions must NOT wake up
         tokio::select! {
             _ = pppoe_sub.next() => panic!("PPPoE subscription must not wake on RA change"),
+            _ = pools_sub.next() => panic!("DHCP pools must not wake on RA change"),
+            _ = options_sub.next() => panic!("DHCP options must not wake on RA change"),
             () = sleep(Duration::from_millis(50)) => {}
         }
+    }
+
+    #[tokio::test]
+    async fn a_multi_section_patch_is_one_change_and_one_event() {
+        let ctx = create_test_context();
+        let mut sys_rx = ctx.bus().subscribe_system();
+
+        let patch = ConfigPatch::new()
+            .with_ra_prefixes(vec![RAPrefix::ula_dynamic()])
+            .with_dhcp_v4_pools(vec![Dhcpv4Pool {
+                name: Some("Scope-1".into()),
+                ..Default::default()
+            }])
+            .with_dhcp_v6_pools(vec![Dhcpv6Pool {
+                name: Some("V6-Scope-1".into()),
+                ..Default::default()
+            }])
+            .with_pppoe(PppoeConfig {
+                username: "new_user@isp.net".into(),
+                ..Default::default()
+            });
+        let report = ctx.apply_config(patch);
+
+        let expected = DomainSet::RA_PREFIXES
+            | DomainSet::DHCP_V4_POOLS
+            | DomainSet::DHCP_V6_POOLS
+            | DomainSet::PPPOE;
+        assert_eq!(report.changed, expected);
+        assert_eq!(report.max_impact, ChangeImpact::Reconnect);
+
+        // Exactly one ConfigChanged, naming every changed section and nothing else
+        let mut config_changed = Vec::new();
+        while let Ok(Ok(timed)) = timeout(Duration::from_millis(100), sys_rx.recv()).await {
+            if let LanforgeEvent::System(SystemEvent::ConfigChanged { sections }) = timed.event {
+                config_changed.push(sections);
+            }
+        }
+        assert_eq!(config_changed, vec![expected]);
     }
 
     #[tokio::test]
