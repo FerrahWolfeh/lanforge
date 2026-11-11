@@ -3,9 +3,12 @@
     reason = "binary target uses dependencies via library target"
 )]
 
+use std::env;
+use std::process::ExitCode;
+
 use clap::Parser;
-use color_eyre::Result;
 use color_eyre::config::{HookBuilder, Theme};
+use color_eyre::{Report, Result};
 use colored::control;
 use lanforge_cli::args::{Cli, Command};
 use lanforge_cli::client::LanforgeClient;
@@ -13,7 +16,7 @@ use lanforge_cli::commands::StatusArgs;
 use lanforge_cli::output::Printer;
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> ExitCode {
     // Rust ignores SIGPIPE, so printing into a closed pipe (`lanforge status | head`) panicked,
     // and with `panic = "abort"` that dumped core. Die quietly like any Unix tool instead.
     // SAFETY: restores the default disposition of one signal before any thread prints.
@@ -23,13 +26,36 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let no_color = cli.colors_off();
-    if no_color {
+    // The hook still formats panics and the `RUST_BACKTRACE` report.
+    let hook = if no_color {
         control::set_override(false);
-        HookBuilder::new().theme(Theme::new()).install()?;
+        HookBuilder::new().theme(Theme::new()).install()
     } else {
-        color_eyre::install()?;
-    }
+        color_eyre::install()
+    };
+    hook.expect("the error hook is installed once, here");
 
+    match run(cli, no_color).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            report(&e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// A failed command is one line, like any Unix tool: `error: <what>: <cause>`. A daemon refusal
+/// is an answer, not a crash, so the source location and backtrace hint are only shown when
+/// `RUST_BACKTRACE` asks for the debug report.
+fn report(e: &Report) {
+    if env::var_os("RUST_BACKTRACE").is_some() {
+        eprintln!("{e:?}");
+    } else {
+        eprintln!("error: {e:#}");
+    }
+}
+
+async fn run(cli: Cli, no_color: bool) -> Result<()> {
     let printer = Printer::new(cli.json, no_color, cli.ascii).with_yes(cli.yes);
 
     #[cfg(feature = "remote")]
