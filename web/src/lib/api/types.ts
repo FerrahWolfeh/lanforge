@@ -942,6 +942,10 @@ export interface AdblockCheckResponse {
 	matched: boolean;
 	filter?: FilterMatch | null;
 	source_matches: AdblockSourceMatch[];
+	/** The checked client is exempt from filtering (`bypass`). */
+	bypass?: boolean;
+	/** The adblock groups of the checked client. */
+	groups?: string[];
 }
 
 export interface TimeOfDay {

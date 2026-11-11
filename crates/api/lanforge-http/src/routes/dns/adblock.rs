@@ -1,4 +1,4 @@
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use axum::{
     Json, Router,
@@ -34,6 +34,9 @@ pub struct AdblockUrlRequest {
 #[derive(Debug, Deserialize)]
 pub struct AdblockCheckQuery {
     pub domain: String,
+    /// Check as this client gets it; absent = the global layer.
+    #[serde(default)]
+    pub client: Option<IpAddr>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -171,7 +174,8 @@ async fn handle_adblock_check(
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(
-        ctx.handle_dns_adblock_check(query.domain).await,
+        ctx.handle_dns_adblock_check(query.domain, query.client)
+            .await,
         AdblockCheck
     )
 }

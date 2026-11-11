@@ -9,6 +9,8 @@ use crate::pipeline::middleware::{
 #[cfg(feature = "adblock")]
 use crate::resolver::AdBlocker;
 #[cfg(feature = "adblock")]
+use crate::resolver::filter::ClientLayers;
+#[cfg(feature = "adblock")]
 use crate::resolver::filter::manifest::AdblockManifest;
 use crate::resolver::recursive::cache::CacheKey;
 use crate::resolver::{
@@ -928,12 +930,15 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
                 })
             }
         }
-        DnsRequest::AdblockCheck { domain } => {
+        DnsRequest::AdblockCheck { domain, client } => {
             #[cfg(feature = "adblock")]
             {
                 if let Some(filter) = &dns_ctx.filter {
                     let cleaned = domain.trim_end_matches('.').to_ascii_lowercase();
-                    let matched_filter = filter.check_domain(&cleaned);
+                    let layers = client.map_or(ClientLayers::GLOBAL, |ip| {
+                        filter.client_layers(&dns_ctx.ctx, ip)
+                    });
+                    let matched_filter = filter.check(&cleaned, layers);
                     let mut source_matches = Vec::new();
                     if let Some(FilterMatch {
                         origin:
@@ -963,23 +968,22 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
                         matched: matched_filter.is_some(),
                         filter: matched_filter,
                         source_matches,
+                        bypass: layers.bypass,
+                        groups: filter.group_names(layers),
                     })
                 } else {
                     DnsResponse::AdblockCheck(AdblockCheckResponse {
                         domain,
-                        matched: false,
-                        filter: None,
-                        source_matches: Vec::new(),
+                        ..Default::default()
                     })
                 }
             }
             #[cfg(not(feature = "adblock"))]
             {
+                let _ = client;
                 DnsResponse::AdblockCheck(AdblockCheckResponse {
                     domain,
-                    matched: false,
-                    filter: None,
-                    source_matches: Vec::new(),
+                    ..Default::default()
                 })
             }
         }

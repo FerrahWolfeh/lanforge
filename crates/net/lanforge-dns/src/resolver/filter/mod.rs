@@ -307,6 +307,19 @@ impl AdBlocker {
             .is_some_and(|m| m.action == FilterAction::Block)
     }
 
+    /// The names of the groups set in `client`, in group order.
+    #[must_use]
+    pub fn group_names(&self, client: ClientLayers) -> Vec<String> {
+        self.layers
+            .read()
+            .groups
+            .iter()
+            .enumerate()
+            .filter(|(bit, _)| client.groups & (1 << bit) != 0)
+            .map(|(_, g)| g.name.to_string())
+            .collect()
+    }
+
     /// The layers of the client at `ip`. Without groups or `bypass` every client gets the global
     /// layer and nothing is looked up; a `dev:` selector looks the client's device up by its
     /// address (lease, static host, neighbour cache). An address no device is known for gets

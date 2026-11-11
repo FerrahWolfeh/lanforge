@@ -8,7 +8,7 @@ use lanforge_dhcp as _;
 #[cfg(test)]
 use tempfile as _;
 
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
@@ -577,8 +577,9 @@ impl LanforgeRpc for ClientContext {
     async fn dns_adblock_check(
         &self,
         domain: String,
+        client: Option<IpAddr>,
     ) -> Result<Box<AdblockCheckResponse>, RpcCallError> {
-        match self.handle_dns_adblock_check(domain).await {
+        match self.handle_dns_adblock_check(domain, client).await {
             Response::AdblockCheck(r) => Ok(r),
             other => Err(Self::map_failure(other)),
         }

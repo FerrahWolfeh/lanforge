@@ -11,11 +11,11 @@ use lanforge_core::context::{ConfigPatch, LanforgeContext};
 use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::AdblockUrlEntry;
-use lanforge_types::network::dns::DnsRecordType;
 use lanforge_types::network::dns::adblock::{
     AdblockDbConfig, AdblockGroupPolicy, AdblockPolicy, AdblockSourceFormat, AdblockUrlKind,
     BlockingMode, FilterAction, FilterOrigin,
 };
+use lanforge_types::network::dns::{DnsRecordType, DnsRequest, DnsResponse};
 use lanforge_types::system::ServiceId;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -275,6 +275,40 @@ async fn groups_and_bypass_apply_per_client() {
         Ipv4Addr::new(192, 168, 1, 51),
     );
     assert_eq!(dns.ask("192.168.1.51", "app-measurement.com").await, ANSWER);
+
+    // `dns adblock check --client`: the verdict and the groups that client gets.
+    let check = |client: Option<&str>| {
+        let handle = ctx.dns_handle().expect("DNS handle");
+        let client = client.map(|c| c.parse().unwrap());
+        async move {
+            let res = handle
+                .send_request(DnsRequest::AdblockCheck {
+                    domain: "app-measurement.com".into(),
+                    client,
+                })
+                .await;
+            let Ok(DnsResponse::AdblockCheck(res)) = res else {
+                panic!("check: {res:?}");
+            };
+            res
+        }
+    };
+    let phone = check(Some(pixel)).await;
+    assert_eq!(phone.groups, ["bradesco"]);
+    assert_eq!(
+        phone.filter.map(|m| (m.action, m.origin)),
+        Some((
+            FilterAction::Allow,
+            FilterOrigin::GroupAllowlist {
+                group: "bradesco".into()
+            }
+        ))
+    );
+    let global = check(None).await;
+    assert!(global.groups.is_empty() && !global.bypass);
+    assert_eq!(global.filter.map(|m| m.action), Some(FilterAction::Block));
+    let notebook = check(Some("192.168.1.30")).await;
+    assert!(notebook.bypass && !notebook.matched);
 
     // Out of the group (a config change, applied in place): blocked again.
     let mut policy = owner_policy(port);

@@ -36,7 +36,7 @@ use lanforge_types::{
 
 use std::{
     future::Future,
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -259,6 +259,7 @@ pub trait LanforgeRpc {
     fn dns_adblock_check(
         &self,
         domain: String,
+        client: Option<IpAddr>,
     ) -> impl Future<Output = Result<Box<AdblockCheckResponse>, RpcCallError>> + Send;
     fn context_dump(
         &self,

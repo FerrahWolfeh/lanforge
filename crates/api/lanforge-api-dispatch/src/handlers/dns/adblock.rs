@@ -27,7 +27,7 @@ use lanforge_types::network::dns::adblock::{
 use lanforge_types::network::dns::{
     AdblockCheckResponse, AdblockUrlEntry, DnsAdblockSourcesResponse, DnsRequest, DnsResponse,
 };
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 /// The rules text with `line` active and its opposite (the same rule with `@@` added or
 /// removed) gone: a domain is blocked or allowed, not both. `None` when nothing changes.
@@ -170,11 +170,16 @@ impl ClientContext {
     }
 
     #[cfg(feature = "adblock")]
-    pub async fn handle_dns_adblock_check(&self, domain: String) -> Response {
+    pub async fn handle_dns_adblock_check(
+        &self,
+        domain: String,
+        client: Option<IpAddr>,
+    ) -> Response {
         if let Some(handle) = self.ctx.dns_handle()
             && let Ok(DnsResponse::AdblockCheck(res)) = handle
                 .send_request(DnsRequest::AdblockCheck {
                     domain: domain.clone(),
+                    client,
                 })
                 .await
         {
@@ -182,14 +187,16 @@ impl ClientContext {
         }
         Response::AdblockCheck(Box::new(AdblockCheckResponse {
             domain,
-            matched: false,
-            filter: None,
-            source_matches: Vec::new(),
+            ..Default::default()
         }))
     }
 
     #[cfg(not(feature = "adblock"))]
-    pub async fn handle_dns_adblock_check(&self, _domain: String) -> Response {
+    pub async fn handle_dns_adblock_check(
+        &self,
+        _domain: String,
+        _client: Option<IpAddr>,
+    ) -> Response {
         Response::Error {
             error: "Adblock support not enabled in this build. Recompile with --features adblock."
                 .to_string(),

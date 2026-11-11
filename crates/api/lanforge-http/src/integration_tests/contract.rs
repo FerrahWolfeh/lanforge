@@ -953,6 +953,23 @@ async fn test_adblock_rule_by_text_works_for_a_javascript_client() {
     assert!(listed(&body).is_empty());
 }
 
+/// `GET /dns/adblock/check?client=<ip>`: a client that is not an address is bad input (4xx),
+/// never a server error; a valid one is accepted.
+#[cfg(feature = "adblock")]
+#[tokio::test]
+async fn test_adblock_check_client_contract() {
+    let app = TestApp::no_auth().await;
+    let (status, body) = app
+        .get("/api/v1/dns/adblock/check?domain=ads.example&client=192.168.1.50")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["domain"], "ads.example");
+    let (status, _) = app
+        .get("/api/v1/dns/adblock/check?domain=ads.example&client=not-an-ip")
+        .await;
+    assert!(status.is_client_error(), "got {status}");
+}
+
 // ---------------------------------------------------------------------------
 // Group 4 — DNS Upstreams contract
 // ---------------------------------------------------------------------------

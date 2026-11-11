@@ -559,8 +559,11 @@ export const dnsAllow = (domain: string) => dnsAdblockRuleAdd(domain, 'allow');
 export const dnsAdblockUrls = async (): Promise<DnsAdblockUrlEntry[]> =>
 	extractList<DnsAdblockUrlEntry>(await get<any>('/dns/adblock/urls'), 'urls');
 export const dnsAdblockSources = () => get<DnsAdblockSourcesResponse>('/dns/adblock/sources');
-export const dnsAdblockCheck = (domain: string) =>
-	get<AdblockCheckResponse>(`/dns/adblock/check?domain=${encodeURIComponent(domain)}`);
+export const dnsAdblockCheck = (domain: string, client?: string) =>
+	get<AdblockCheckResponse>(
+		`/dns/adblock/check?domain=${encodeURIComponent(domain)}` +
+			(client ? `&client=${encodeURIComponent(client)}` : '')
+	);
 export const dnsAdblockUrlAdd = (entry: DnsAdblockUrlEntry) =>
 	post<void>('/dns/adblock/sources', entry);
 export const dnsAdblockUrlRemove = (entry: DnsAdblockUrlEntry) =>

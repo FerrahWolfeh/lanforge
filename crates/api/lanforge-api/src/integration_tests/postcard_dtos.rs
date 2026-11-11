@@ -100,6 +100,8 @@ fn dns_dtos_with_empty_optional_fields_cross_the_socket() {
             rule: None,
             important: false,
         }],
+        bypass: false,
+        groups: vec!["kids".into()],
     });
 }
 

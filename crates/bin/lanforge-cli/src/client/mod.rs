@@ -1,7 +1,7 @@
 pub mod build_check;
 
 use color_eyre::eyre::{Context, Result, eyre};
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use tokio::net::UnixStream;
 
 use lanforge_api::api::{
@@ -1260,19 +1260,25 @@ impl LanforgeClient {
         rpc.dns_allowlist().await.map_err(|e| eyre!("{e}"))
     }
 
-    pub async fn dns_adblock_check(&self, domain: String) -> Result<Box<AdblockCheckResponse>> {
+    pub async fn dns_adblock_check(
+        &self,
+        domain: String,
+        client: Option<IpAddr>,
+    ) -> Result<Box<AdblockCheckResponse>> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
+            let client = client.map(|ip| format!("&client={}", urlencoding(&ip.to_string())));
             return Ok(Box::new(
                 self.http_get(&format!(
-                    "/dns/adblock/check?domain={}",
-                    urlencoding(&domain)
+                    "/dns/adblock/check?domain={}{}",
+                    urlencoding(&domain),
+                    client.unwrap_or_default()
                 ))
                 .await?,
             ));
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.dns_adblock_check(domain)
+        rpc.dns_adblock_check(domain, client)
             .await
             .map_err(|e| eyre!("{e}"))
     }

@@ -819,7 +819,7 @@ pub struct AdblockSourceMatch {
 }
 
 /// Diagnostic check response for a domain against adblock rules and sources.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct AdblockCheckResponse {
     pub domain: String,
     pub matched: bool,
@@ -827,6 +827,12 @@ pub struct AdblockCheckResponse {
     pub filter: Option<FilterMatch>,
     #[serde(default)]
     pub source_matches: Vec<AdblockSourceMatch>,
+    /// The check was for a client that `bypass` exempts from filtering.
+    #[serde(default)]
+    pub bypass: bool,
+    /// The adblock groups of the client the check was for.
+    #[serde(default)]
+    pub groups: Vec<String>,
 }
 
 /// In-depth DNS cache statistics.
@@ -871,6 +877,8 @@ pub enum DnsRequest {
     AdblockSources,
     AdblockCheck {
         domain: String,
+        /// Check as this client gets it (its groups, `bypass`); `None` = the global layer.
+        client: Option<IpAddr>,
     },
     AdblockSet {
         enabled: bool,

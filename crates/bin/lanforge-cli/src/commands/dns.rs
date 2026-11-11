@@ -276,6 +276,9 @@ pub enum DnsAdblockAction {
     Check {
         /// Domain name to check
         domain: Option<String>,
+        /// Check as this client gets it (its adblock groups and bypass); default: the global layer
+        #[arg(long, value_name = "IP")]
+        client: Option<IpAddr>,
     },
     /// Manage remote adblock filter list sources
     #[command(alias = "lists")]
@@ -1673,7 +1676,10 @@ async fn execute_adblock(
         DnsAdblockAction::Allow { domain } => add_adblock_allow(domain, client, printer).await,
         DnsAdblockAction::Unallow { domain } => remove_adblock_allow(domain, client, printer).await,
         DnsAdblockAction::Allowlist => show_adblock_allowlist(client, printer).await,
-        DnsAdblockAction::Check { domain } => check_adblock_domain(domain, client, printer).await,
+        DnsAdblockAction::Check {
+            domain,
+            client: client_ip,
+        } => check_adblock_domain(domain, client_ip, client, printer).await,
         DnsAdblockAction::Sources(src_args) => {
             execute_adblock_sources(src_args, client, printer).await
         }
@@ -1841,6 +1847,7 @@ async fn show_adblock_allowlist(client: &LanforgeClient, printer: &Printer) -> R
 
 async fn check_adblock_domain(
     domain_opt: Option<String>,
+    client_ip: Option<IpAddr>,
     client: &LanforgeClient,
     printer: &Printer,
 ) -> Result<()> {
@@ -1849,7 +1856,7 @@ async fn check_adblock_domain(
         None => Text::new("Domain name to check:").prompt()?,
     };
 
-    let resp = client.dns_adblock_check(domain.clone()).await?;
+    let resp = client.dns_adblock_check(domain.clone(), client_ip).await?;
 
     if printer.json {
         return printer.print_json(&resp);
@@ -1861,6 +1868,16 @@ async fn check_adblock_domain(
         printer.status_badge(true),
         domain.bold().white()
     );
+    if let Some(ip) = client_ip {
+        let layers = if resp.bypass {
+            "bypass (never filtered)".to_string()
+        } else if resp.groups.is_empty() {
+            "global layer only".to_string()
+        } else {
+            format!("groups {}", resp.groups.join(", "))
+        };
+        println!("    {:<18} {ip}: {layers}", "Client:".dimmed());
+    }
 
     if let Some(ref m) = resp.filter {
         let action_str = match m.action {
