@@ -3,6 +3,7 @@
 	import * as Card from "$lib/components/ui/card";
 	import * as Table from "$lib/components/ui/table";
 	import * as Tabs from "$lib/components/ui/tabs";
+	import * as Select from "$lib/components/ui/select";
 	import { Button } from "$lib/components/ui/button";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Input } from "$lib/components/ui/input";
@@ -18,13 +19,14 @@
 	import PowerIcon from "@lucide/svelte/icons/power";
 	import { toast } from "svelte-sonner";
 	import {
-		dnsAllow,
+		dnsAdblockGroups,
 		dnsAdblockRules,
 		dnsAdblockRuleAdd,
 		dnsAdblockRuleRemove,
 		dnsAdblockRuleStatus,
 	} from "$lib/api/client";
 	import { page } from "$app/state";
+	import { goto } from "$app/navigation";
 	import type { AdblockRuleEntry } from "$lib/api/types";
 	import DnsAdblockImportRulesDialog from "./components/DnsAdblockImportRulesDialog.svelte";
 
@@ -36,12 +38,15 @@
 	let adding = $state(false);
 	let importDialogOpen = $state(false);
 	let copiedDomain = $state<string | null>(null);
+	/** The rules file shown: a group's (`?group=<name>`), or the global one (`null`). */
+	let group = $state<string | null>(null);
+	let groupNames = $state<string[]>([]);
 
-	// Both tabs list the global rules file, disabled rules included; a rule is addressed by its text.
+	// Both tabs list one rules file, disabled rules included; a rule is addressed by its text.
 	async function loadAll() {
 		loading = true;
 		try {
-			customRules = (await dnsAdblockRules()) ?? [];
+			customRules = (await dnsAdblockRules(group)) ?? [];
 		} catch {
 			toast.error("Failed to load DNS rules");
 		} finally {
@@ -60,11 +65,11 @@
 		adding = true;
 		try {
 			if (activeTab === "allow") {
-				await dnsAllow(domain);
-				toast.success(`Domain "${domain}" added to Allowlist`);
+				await dnsAdblockRuleAdd(domain, "allow", group);
+				toast.success(`Domain "${domain}" added to ${scopeLabel} allowlist`);
 			} else {
-				await dnsAdblockRuleAdd(domain, "block");
-				toast.success(`Domain "${domain}" added to Blacklist`);
+				await dnsAdblockRuleAdd(domain, "block", group);
+				toast.success(`Domain "${domain}" added to ${scopeLabel} blocklist`);
 			}
 			newDomain = "";
 			await loadAll();
@@ -83,7 +88,7 @@
 
 	async function handleRemoveRule(rule: AdblockRuleEntry) {
 		try {
-			await dnsAdblockRuleRemove(rule.domain);
+			await dnsAdblockRuleRemove(rule.domain, group);
 			toast.success(`Removed "${ruleLabel(rule)}" from ${rule.action === "allow" ? "allowlist" : "blacklist"}`);
 			await loadAll();
 		} catch (err: any) {
@@ -93,7 +98,7 @@
 
 	async function handleToggleStatus(rule: AdblockRuleEntry) {
 		try {
-			await dnsAdblockRuleStatus(rule.domain, !rule.enabled);
+			await dnsAdblockRuleStatus(rule.domain, !rule.enabled, group);
 			rule.enabled = !rule.enabled;
 			toast.success(`Rule "${ruleLabel(rule)}" ${rule.enabled ? "enabled" : "disabled"}`);
 		} catch (err: any) {
@@ -125,16 +130,52 @@
 	const filteredAllowlist = $derived(matching(allowRules));
 	const filteredCustomBlocks = $derived(matching(customBlocks));
 
+	const scopeLabel = $derived(group ? `group "${group}"` : "global");
+
+	async function selectScope(value: string) {
+		group = value === "" ? null : value;
+		const url = new URL(page.url);
+		if (group) url.searchParams.set("group", group);
+		else url.searchParams.delete("group");
+		await goto(url, { replaceState: true, keepFocus: true, noScroll: true });
+		await loadAll();
+	}
+
 	onMount(() => {
 		const tabParam = page.url.searchParams.get("tab");
 		if (tabParam === "block" || tabParam === "allow") {
 			activeTab = tabParam;
 		}
+		group = page.url.searchParams.get("group");
+		dnsAdblockGroups()
+			.then((g) => (groupNames = (g?.groups ?? []).map((x) => x.name)))
+			.catch(() => {});
 		loadAll();
 	});
 </script>
 
 <div class="space-y-6">
+	<!-- Which rules file: the global one or a group's -->
+	<div class="flex flex-col sm:flex-row sm:items-center gap-2 text-xs">
+		<span class="font-medium text-muted-foreground">Rules of</span>
+		<Select.Root type="single" value={group ?? ""} onValueChange={selectScope}>
+			<Select.Trigger class="h-8 w-full sm:w-64 text-xs">
+				{group ? `Group: ${group}` : "Global (every client)"}
+			</Select.Trigger>
+			<Select.Content>
+				<Select.Item value="" class="text-xs">Global (every client)</Select.Item>
+				{#each groupNames as name (name)}
+					<Select.Item value={name} class="text-xs font-mono">Group: {name}</Select.Item>
+				{/each}
+			</Select.Content>
+		</Select.Root>
+		{#if group}
+			<span class="text-muted-foreground">
+				Overrides the global layer for this group's clients.
+			</span>
+		{/if}
+	</div>
+
 	<!-- Tabbed Rules View -->
 	<Tabs.Root bind:value={activeTab} class="space-y-4">
 		<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -400,6 +441,7 @@
 <DnsAdblockImportRulesDialog
 	bind:open={importDialogOpen}
 	action={activeTab === "block" ? "block" : "allow"}
+	{group}
 	onImported={() => {
 		loadAll();
 	}}

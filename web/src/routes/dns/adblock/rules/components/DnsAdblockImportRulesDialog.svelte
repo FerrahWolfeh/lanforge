@@ -10,10 +10,13 @@
 	let {
 		open = $bindable(false),
 		action = "allow",
+		group = null,
 		onImported = () => {},
 	}: {
 		open?: boolean;
 		action?: "allow" | "block";
+		/** A group's rules file; `null` for the global one. */
+		group?: string | null;
 		onImported?: () => void;
 	} = $props();
 
@@ -42,7 +45,7 @@
 		}
 		importing = true;
 		try {
-			const r = await dnsAdblockRulesImport(rawText, action);
+			const r = await dnsAdblockRulesImport(rawText, action, group);
 			toast.success(summary(r));
 			if (r.added && !r.saved) {
 				toast.warning("Applied in memory only: the configuration file is read-only or not set");

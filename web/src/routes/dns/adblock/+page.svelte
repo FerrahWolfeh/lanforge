@@ -34,6 +34,8 @@
 	let sources = $state<DnsAdblockUrlEntry[]>([]);
 
 	let checkDomainInput = $state("");
+	/** Optional client address: the check then applies its groups and bypass. */
+	let checkClientInput = $state("");
 	let checking = $state(false);
 	let checkResult = $state<AdblockCheckResponse | null>(null);
 
@@ -78,7 +80,7 @@
 		checking = true;
 		checkResult = null;
 		try {
-			const res = await dnsAdblockCheck(domain);
+			const res = await dnsAdblockCheck(domain, checkClientInput.trim() || undefined);
 			checkResult = res;
 		} catch (err: any) {
 			toast.error(err?.message ?? "Failed to check domain");
@@ -140,6 +142,13 @@
 						class="pl-9 h-9 font-mono text-xs"
 					/>
 				</div>
+				<Input
+					type="text"
+					placeholder="as client IP (optional)"
+					title="Check as this client gets it: its adblock groups and bypass. Empty: the global layer."
+					bind:value={checkClientInput}
+					class="h-9 sm:w-48 font-mono text-xs"
+				/>
 				<Button type="submit" size="sm" class="h-9 px-4 gap-1.5" disabled={checking}>
 					{#if checking}
 						<span class="animate-spin text-xs">⟳</span>
@@ -179,6 +188,19 @@
 			</div>
 
 			<!-- Diagnostic Verdict Display -->
+			{#if checkResult && checkClientInput.trim()}
+				<div class="text-xs text-muted-foreground">
+					Client <span class="font-mono text-foreground">{checkClientInput.trim()}</span>:
+					{#if checkResult.bypass}
+						bypass (never filtered)
+					{:else if checkResult.groups && checkResult.groups.length > 0}
+						global layer + groups
+						<span class="font-mono text-foreground">{checkResult.groups.join(", ")}</span>
+					{:else}
+						global layer only
+					{/if}
+				</div>
+			{/if}
 			{#if checkResult}
 				<div class="rounded-lg border p-4 space-y-3 {checkResult.matched && checkResult.filter?.action === 'block' ? 'bg-rose-500/5 border-rose-500/20' : 'bg-emerald-500/5 border-emerald-500/20'}">
 					<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">

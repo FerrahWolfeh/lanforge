@@ -17,6 +17,7 @@
 	import AlertCircleIcon from "@lucide/svelte/icons/alert-circle";
 	import { toast } from "svelte-sonner";
 	import {
+		dnsAdblockGroups,
 		dnsAdblockUrls,
 		dnsAdblockSources,
 		dnsAdblockUrlAdd,
@@ -34,6 +35,8 @@
 	interface MergedSource {
 		id?: number | null;
 		source_id?: string;
+		/** "Global", or the groups that add this list. */
+		usedBy: string[];
 		name?: string | null;
 		url: string;
 		kind: "blocklist" | "allowlist";
@@ -54,6 +57,7 @@
 	let dialogOpen = $state(false);
 	let copiedUrl = $state<string | null>(null);
 	let updatingAll = $state(false);
+	let groupNames = $state<string[]>([]);
 
 	function formatTimestamp(ts?: number | null): string {
 		if (!ts) return "Pending";
@@ -70,10 +74,13 @@
 	async function loadSources() {
 		loading = true;
 		try {
-			const [urlsRes, statusRes] = await Promise.allSettled([
+			const [urlsRes, statusRes, groupsRes] = await Promise.allSettled([
 				dnsAdblockUrls(),
 				dnsAdblockSources(),
+				dnsAdblockGroups(),
 			]);
+			const groups = groupsRes.status === "fulfilled" ? (groupsRes.value?.groups ?? []) : [];
+			groupNames = groups.map((g) => g.name);
 
 			const urls = urlsRes.status === "fulfilled" ? urlsRes.value : [];
 			const statuses =
@@ -88,10 +95,25 @@
 				statusMap.set(st.url, st);
 			}
 
-			sources = urls.map((u) => {
+			// Every downloaded list (the global layer's and the groups'), plus global ones not
+			// reported yet.
+			const globalUrls = new Set(urls.map((u) => u.url));
+			const rows: DnsAdblockUrlEntry[] = [
+				...urls,
+				...statuses
+					.filter((st) => !globalUrls.has(st.url))
+					.map((st) => ({ name: st.name, url: st.url, kind: st.kind, format: st.format })),
+			];
+			sources = rows.map((u) => {
 				const st = statusMap.get(u.url);
+				const name = u.name ?? st?.name ?? null;
+				const usedBy = [
+					...(globalUrls.has(u.url) ? ["Global"] : []),
+					...groups.filter((g) => name && g.lists.includes(name)).map((g) => g.name),
+				];
 				return {
 					id: u.id,
+					usedBy,
 					source_id: st?.id,
 					name: u.name ?? st?.name ?? null,
 					url: u.url,
@@ -320,6 +342,16 @@
 												{/if}
 											</button>
 										</div>
+										<div class="flex flex-wrap gap-1 pt-0.5">
+											{#each source.usedBy as layer (layer)}
+												<Badge
+													variant="outline"
+													class="px-1.5 py-0 text-[10px] {layer === 'Global' ? '' : 'font-mono bg-primary/5'}"
+												>
+													{layer === "Global" ? "Global" : `Group: ${layer}`}
+												</Badge>
+											{/each}
+										</div>
 									</div>
 								</Table.Cell>
 
@@ -443,5 +475,6 @@
 <!-- Add Custom Source Dialog -->
 <DnsAdblockAddSourceDialog
 	bind:open={dialogOpen}
+	groups={groupNames}
 	onAdded={() => loadSources()}
 />

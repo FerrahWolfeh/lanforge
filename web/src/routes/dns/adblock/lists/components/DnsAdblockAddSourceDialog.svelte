@@ -11,11 +11,17 @@
 
 	let {
 		open = $bindable(false),
+		groups = [],
 		onAdded = () => {},
 	}: {
 		open?: boolean;
+		/** Groups a list can be added to instead of the global layer. */
+		groups?: string[];
 		onAdded?: () => void;
 	} = $props();
+
+	/** "" = the global layer (every client). */
+	let target = $state("");
 
 	let name = $state("");
 	let url = $state("");
@@ -39,12 +45,15 @@
 		submitting = true;
 		try {
 			const trimmedName = name.trim();
-			await dnsAdblockUrlAdd({
-				name: trimmedName || undefined,
-				url: trimmedUrl,
-				kind,
-				format,
-			});
+			await dnsAdblockUrlAdd(
+				{
+					name: trimmedName || undefined,
+					url: trimmedUrl,
+					kind,
+					format,
+				},
+				target || null,
+			);
 			toast.success(`Added ${kind}: ${trimmedName || trimmedUrl}. Compiling rules in background...`);
 			name = "";
 			url = "";
@@ -106,6 +115,24 @@
 					Must be publicly accessible via HTTP/HTTPS.
 				</p>
 			</div>
+
+			{#if groups.length > 0}
+				<!-- Layer -->
+				<div class="flex flex-col gap-1.5">
+					<Label for="source-target" class="text-xs font-semibold">Applies to</Label>
+					<Select.Root type="single" value={target} onValueChange={(val) => (target = val)}>
+						<Select.Trigger class="w-full text-xs">
+							{target ? `Group: ${target}` : "Global (every client)"}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="" class="text-xs">Global (every client)</Select.Item>
+							{#each groups as g (g)}
+								<Select.Item value={g} class="text-xs font-mono">Group: {g}</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+				</div>
+			{/if}
 
 			<!-- List Type -->
 			<div class="flex flex-col gap-1.5">
