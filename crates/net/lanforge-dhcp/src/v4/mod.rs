@@ -32,6 +32,7 @@ pub mod pool;
 pub mod raw;
 pub mod sanity;
 pub mod server;
+pub(crate) mod system_dns;
 
 use dhcproto::v4::{DhcpOption, Message, MessageType, Opcode, OptionCode};
 use dhcproto::{Decodable, Decoder};
@@ -44,7 +45,7 @@ use lanforge_core::service::{
     Activation, AsyncService, Condition, Edge, LanforgeService, LossPolicy, RestartPolicy,
     RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
 };
-use lanforge_types::config::{ChangeImpact, ConfigDomain};
+use lanforge_types::config::{ChangeImpact, ConfigDomain, DnsListenConfig};
 use lanforge_types::device::IPv4State;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::MacAddr;
@@ -250,17 +251,13 @@ impl Dhcpv4Service {
 
         // Audit network topology against physical interface and auto-heal if needed
         sanity::audit_and_auto_heal_dhcpv4(&mut current_cfg);
-        // No router or DNS configured: announce this server (its live LAN address, healed
-        // above), never a guessed one. Without a DNS server here, the ISP's resolvers.
+        // No router configured: announce this server (its live LAN address, healed above),
+        // never a guessed one. No DNS configured: the nearest resolver that works.
         if current_cfg.router.is_unspecified() {
             current_cfg.router = current_cfg.server_id;
         }
         if current_cfg.dns.is_empty() {
-            current_cfg.dns = if current_cfg.local_dns {
-                vec![current_cfg.server_id]
-            } else {
-                self.wan_dns()
-            };
+            current_cfg.dns = self.nearest_dns(&current_cfg);
         }
         Some(current_cfg)
     }
@@ -275,6 +272,25 @@ impl Dhcpv4Service {
         Ok(t)
     }
 
+    /// The resolvers to announce when `[dhcp.v4]` names none, nearest first: this server when
+    /// its DNS server is built in and enabled; else the ISP's from the live `PPPoE` session;
+    /// else the host's own upstreams. None at all: no option 6 rather than a guess.
+    fn nearest_dns(&self, cfg: &Dhcpv4Config) -> Vec<Ipv4Addr> {
+        let listen = self.ctx.get_dns_listen();
+        if cfg.local_dns && listen.enabled && !listen.listen.as_slice().is_empty() {
+            return vec![cfg.server_id];
+        }
+        let wan = self.wan_dns();
+        if !wan.is_empty() {
+            return wan;
+        }
+        let host = system_dns::host_resolvers(cfg.server_id);
+        if host.is_empty() {
+            warn!("No DNS server to announce: set `dns` in [dhcp.v4]");
+        }
+        host
+    }
+
     /// Whether `event` can change the ISP's resolvers in the `PPPoE` status.
     const fn moves_wan_dns(event: &LanforgeEvent) -> bool {
         matches!(
@@ -287,11 +303,11 @@ impl Dhcpv4Service {
         )
     }
 
-    /// Re-applies the config in place so new replies carry the ISP's current resolvers.
-    fn resync_wan_dns(&self, server: &mut DhcpServer, current_cfg: &mut Dhcpv4Config) {
+    /// Re-applies the config in place so new replies carry the nearest resolvers.
+    fn resync_dns(&self, server: &mut DhcpServer, current_cfg: &mut Dhcpv4Config) {
         if let Some(new_cfg) = self.prepare_config(self.ctx.get_dhcp_v4_pools()) {
             if new_cfg.dns != current_cfg.dns {
-                info!("DNS servers follow the WAN: {:?}", new_cfg.dns);
+                info!("DNS servers announced: {:?}", new_cfg.dns);
             }
             *current_cfg = new_cfg;
             server.cfg = current_cfg.clone();
@@ -378,8 +394,9 @@ impl Dhcpv4Service {
         let mut pools_sub = self.ctx.config_subscription::<Vec<Dhcpv4Pool>>();
         let mut options_sub = self.ctx.config_subscription::<Dhcpv4Options>();
         let mut cleanup_timer = interval(Duration::from_mins(1));
-        // Without a DNS server here, clients get the ISP's resolvers: follow the session.
-        let mut pppoe_rx = (!current_cfg.local_dns).then(|| self.ctx.bus().subscribe_pppoe());
+        // The announced DNS follows the local DNS server being switched and the WAN session.
+        let mut dns_listen_sub = self.ctx.config_subscription::<DnsListenConfig>();
+        let mut pppoe_rx = self.ctx.bus().subscribe_pppoe();
 
         loop {
             tokio::select! {
@@ -449,13 +466,12 @@ impl Dhcpv4Service {
                 _ = cleanup_timer.tick() => {
                     self.reconcile_and_report(&mut server, &transport, &current_cfg);
                 }
-                event = async {
-                    pppoe_rx.as_mut().expect("arm guarded by is_some").recv().await
-                }, if pppoe_rx.is_some() => match event {
+                event = pppoe_rx.recv() => match event {
                     Err(RecvError::Closed) => return Ok(RunResult::Shutdown),
                     Ok(e) if !Self::moves_wan_dns(&e.event) => {}
-                    _ => self.resync_wan_dns(&mut server, &mut current_cfg),
+                    _ => self.resync_dns(&mut server, &mut current_cfg),
                 },
+                Some(_) = dns_listen_sub.next() => self.resync_dns(&mut server, &mut current_cfg),
             }
         }
     }
