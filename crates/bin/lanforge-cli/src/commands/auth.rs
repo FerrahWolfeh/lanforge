@@ -30,7 +30,7 @@ pub enum AuthSubcommand {
         /// Human-readable label or service name (e.g. 'homeassistant', 'prometheus')
         name: Option<String>,
         /// Comma-separated list of capabilities/scopes (`admin`, `monitoring`, `upstream_write`, `dns_query`, `device_write`, `config_write`)
-        #[arg(short, long)]
+        #[arg(long)]
         scopes: Option<String>,
         /// Token expiration duration (e.g. '30d', '24h', '1y', 'never')
         #[arg(short, long)]

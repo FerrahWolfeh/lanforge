@@ -116,3 +116,16 @@ pub enum Command {
     /// Save remote daemon credentials for CLI management
     Login(LoginArgs),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::CommandFactory;
+
+    /// Clap checks the whole command tree (unique short flags across globals and subcommands,
+    /// valid groups); a clash only shows up when that subcommand runs in a debug build.
+    #[test]
+    fn cli_definition_is_valid() {
+        Cli::command().debug_assert();
+    }
+}
