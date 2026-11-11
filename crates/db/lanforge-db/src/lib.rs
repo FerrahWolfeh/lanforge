@@ -67,3 +67,6 @@ pub use lanforge_db_core::{
 pub use lanforge_db_redb::{RedbDatabase, redb};
 pub use log_engine::LogDb;
 pub use worker::DbWorker;
+
+#[cfg(test)]
+mod integration_tests;

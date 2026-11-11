@@ -232,8 +232,6 @@ impl EventKind {
             Self::DnsQuery => matches!(event, LanforgeEvent::Dns(DnsEvent::QueryResolved(_))),
             Self::DnsBlocked => match event {
                 #[cfg(feature = "adblock")]
-                LanforgeEvent::Dns(DnsEvent::QueryBlocked { .. }) => true,
-                #[cfg(feature = "adblock")]
                 LanforgeEvent::Dns(DnsEvent::AdblockBlock(_)) => true,
                 _ => false,
             },

@@ -14,22 +14,6 @@ name = "lanforged"
 path = "src/main.rs"
 
 # Integration tests that drive service crates need those services compiled in (slim builds).
-[[test]]
-name = "db_reset"
-required-features = ["uds"]
-
-[[test]]
-name = "dhcp_core_consistency"
-required-features = ["dhcp"]
-
-[[test]]
-name = "eventbus_reactivity"
-required-features = ["dhcp", "nft", "ra", "traffic"]
-
-[[test]]
-name = "rootless_pipeline"
-required-features = ["dhcp", "nft", "ra", "traffic"]
-
 [features]
 default = [
     "dhcp",

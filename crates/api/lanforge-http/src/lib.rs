@@ -33,3 +33,11 @@ mod tests;
 use tempfile as _;
 #[cfg(test)]
 use tower as _;
+
+#[cfg(test)]
+#[allow(
+    clippy::pedantic,
+    clippy::nursery,
+    reason = "integration tests keep the workspace lint level they had as a test crate"
+)]
+mod integration_tests;

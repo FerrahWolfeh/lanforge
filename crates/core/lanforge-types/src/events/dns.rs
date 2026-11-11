@@ -1,6 +1,3 @@
-#[cfg(feature = "adblock")]
-use std::net::IpAddr;
-
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -19,8 +16,6 @@ pub enum DnsEvent {
     AdblockBlock(String),
     #[cfg(feature = "adblock")]
     AdblockAllow(String),
-    #[cfg(feature = "adblock")]
-    QueryBlocked { src_addr: IpAddr, domain: String },
     /// A DNS query was resolved.
     QueryResolved(Arc<QueryLogEntry>),
     /// Flush the DNS cache.
@@ -43,8 +38,6 @@ impl DnsEvent {
             Self::AdblockBlock(..) => "AdblockBlock",
             #[cfg(feature = "adblock")]
             Self::AdblockAllow(..) => "AdblockAllow",
-            #[cfg(feature = "adblock")]
-            Self::QueryBlocked { .. } => "QueryBlocked",
             Self::QueryResolved(..) => "QueryResolved",
             Self::CacheFlush => "CacheFlush",
         }

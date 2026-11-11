@@ -627,6 +627,13 @@ mod tests {
             ChangeImpact::Reconnect
         );
 
+        let mut rec_password = base.clone();
+        rec_password.password = "pwd2".into();
+        assert_eq!(
+            PppoeConfig::classify(&base, &rec_password),
+            ChangeImpact::Reconnect
+        );
+
         let mut rec_mru = base.clone();
         rec_mru.mru = 1480;
         assert_eq!(

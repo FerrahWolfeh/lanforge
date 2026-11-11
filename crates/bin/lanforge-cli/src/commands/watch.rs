@@ -15,6 +15,8 @@ use lanforge_types::events::{
     AdminChange, DeviceEvent, DnsEvent, FirewallEvent, LanforgeEvent, NetworkChange, NetworkEvent,
     PppoeEvent, StorageEvent, SystemEvent, TimedEvent,
 };
+use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::Ipv6Prefix;
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq, Default)]
 pub struct WatchArgs {
@@ -308,12 +310,11 @@ fn render_device_event(time_str: &str, evt: &DeviceEvent, printer: &Printer, ver
             msg_type,
             details,
         } => {
-            let det = details.as_deref().unwrap_or("");
             print_log(
                 time_str,
                 "DHCPv4",
-                format!("{msg_type:?}").magenta().bold(),
-                format!("{mac} {det}"),
+                format!("{msg_type:?}").to_uppercase().magenta().bold(),
+                with_details(*mac, details.as_deref()),
                 printer,
             );
         }
@@ -322,12 +323,11 @@ fn render_device_event(time_str: &str, evt: &DeviceEvent, printer: &Printer, ver
             msg_type,
             details,
         } => {
-            let det = details.as_deref().unwrap_or("");
             print_log(
                 time_str,
                 "DHCPv6",
-                format!("{msg_type:?}").magenta().bold(),
-                format!("{mac} {det}"),
+                format!("{msg_type:?}").to_uppercase().magenta().bold(),
+                with_details(*mac, details.as_deref()),
                 printer,
             );
         }
@@ -562,15 +562,6 @@ fn render_dns_event(time_str: &str, evt: &DnsEvent, printer: &Printer) {
                 printer,
             );
         }
-        DnsEvent::QueryBlocked { src_addr, domain } => {
-            print_log(
-                time_str,
-                "DNS",
-                "BLOCKED".red(),
-                format!("{domain} from {src_addr}"),
-                printer,
-            );
-        }
         DnsEvent::CacheFlush => {
             print_log(
                 time_str,
@@ -635,8 +626,9 @@ fn render_network_event(time_str: &str, evt: &NetworkEvent, printer: &Printer) {
                 "NETWORK",
                 "PREFIX".magenta(),
                 format!(
-                    "IPv6 prefix changed (GUA: {:?}, ULA: {:?})",
-                    prefix.gua, prefix.ula
+                    "IPv6 prefix changed (GUA: {}, ULA: {})",
+                    prefix_or_none(prefix.gua.as_ref()),
+                    prefix_or_none(prefix.ula.as_ref())
                 ),
                 printer,
             );
@@ -696,6 +688,17 @@ fn render_storage_event(time_str: &str, evt: &StorageEvent, printer: &Printer) {
     }
 }
 
+/// `mac` alone, or `mac details` when the event carries any (no trailing blank).
+fn with_details(mac: MacAddr, details: Option<&str>) -> String {
+    details
+        .filter(|d| !d.is_empty())
+        .map_or_else(|| mac.to_string(), |d| format!("{mac} {d}"))
+}
+
+fn prefix_or_none(prefix: Option<&Ipv6Prefix>) -> String {
+    prefix.map_or_else(|| "none".to_string(), ToString::to_string)
+}
+
 fn print_log(
     time_str: &str,
     domain: &str,
@@ -721,6 +724,22 @@ mod tests {
     use super::*;
     use lanforge_types::events::PppoeSessionUp;
     use lanforge_types::identifiers::MacAddr;
+    use std::net::Ipv6Addr;
+
+    #[test]
+    fn dhcp_and_prefix_lines_are_readable() {
+        let mac = MacAddr::from([0xbc, 0xfc, 0xe7, 0x8a, 0xa9, 0x73]);
+        assert_eq!(with_details(mac, None), "bc:fc:e7:8a:a9:73");
+        assert_eq!(with_details(mac, Some("")), "bc:fc:e7:8a:a9:73");
+        assert_eq!(
+            with_details(mac, Some("asks for 192.168.1.50")),
+            "bc:fc:e7:8a:a9:73 asks for 192.168.1.50"
+        );
+
+        let gua = Ipv6Prefix::from("2804:bdc:5011:2700::1".parse::<Ipv6Addr>().unwrap());
+        assert_eq!(prefix_or_none(Some(&gua)), "2804:bdc:5011:2700::/64");
+        assert_eq!(prefix_or_none(None), "none");
+    }
 
     #[test]
     fn test_render_various_events() {

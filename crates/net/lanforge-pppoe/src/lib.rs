@@ -25,3 +25,11 @@ pub use error::PppoeError;
 pub use host::{KernelHost, PppoeHost};
 pub use lanforge_transport::PppoeTransport;
 pub use service::PppoeService;
+
+#[cfg(test)]
+#[allow(
+    clippy::pedantic,
+    clippy::nursery,
+    reason = "integration tests keep the workspace lint level they had as a test crate"
+)]
+mod integration_tests;

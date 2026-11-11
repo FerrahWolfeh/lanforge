@@ -103,8 +103,6 @@ pub struct EventCounters {
     pub dhcp_v4_leases: AtomicU64,
     pub dhcp_v6_leases: AtomicU64,
     pub dns_auth_hits: AtomicU64,
-    #[cfg(feature = "adblock")]
-    pub dns_blocked: AtomicU64,
 }
 
 /// Lightweight handle for service interaction with the event bus.
@@ -483,16 +481,6 @@ impl LanforgeContext {
     #[must_use]
     pub fn service_handle_traffic(&self) -> BusHandle {
         self.service_handle_topic(EventTopic::Traffic)
-    }
-
-    /// Increments the DNS blocked queries counter.
-    #[cfg(feature = "adblock")]
-    pub fn inc_dns_blocked(&self) {
-        self.inner
-            .runtime
-            .event_counters
-            .dns_blocked
-            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// Captures a snapshot of the device registry for database persistence.

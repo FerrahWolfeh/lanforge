@@ -406,13 +406,22 @@ impl Dhcpv4Service {
                 8 => stats.informs.fetch_add(1, Ordering::Relaxed),
                 _ => 0,
             };
+            // A REQUEST names its address: option 50 while selecting, ciaddr while renewing
+            // (RFC 2131 §4.3.2). Shown by `lanforge watch`.
+            let details = (msg_type == 3)
+                .then(|| match msg.opts().get(OptionCode::RequestedIpAddress) {
+                    Some(DhcpOption::RequestedIpAddress(ip)) => Some(*ip),
+                    _ => Some(msg.ciaddr()).filter(|ip| !ip.is_unspecified()),
+                })
+                .flatten()
+                .map(|ip| format!("asks for {ip}"));
             let _ = self
                 .ctx
                 .bus()
                 .publish(LanforgeEvent::Device(DeviceEvent::DhcpV4Transaction {
                     mac,
                     msg_type: DhcpV4MessageType::from(msg_type),
-                    details: None,
+                    details,
                 }));
         }
     }

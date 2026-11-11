@@ -23,3 +23,11 @@ pub use host::{KernelTraffic, TrafficHost};
 pub use lanforge_types::events::traffic::*;
 pub use lanforge_types::network::traffic::*;
 pub use service::TrafficService;
+
+#[cfg(test)]
+#[allow(
+    clippy::pedantic,
+    clippy::nursery,
+    reason = "integration tests keep the workspace lint level they had as a test crate"
+)]
+mod integration_tests;

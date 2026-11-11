@@ -1,0 +1,550 @@
+use lanforge_core::context::ConfigPatch;
+use lanforge_types::network::dhcp::DhcpOptionsConfig;
+use lanforge_types::network::dns::adblock::RewriteRule;
+use std::fs;
+use std::net::Ipv4Addr;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+
+use crate::config::DatabaseConfig;
+use crate::{DbWorker, DeviceStore, LanforgeDb, LogDb, Stores};
+use lanforge_core::bus::{EventBus, LanforgeEvent, StorageEvent, SystemEvent};
+use lanforge_core::context::LanforgeContext;
+use lanforge_core::context::state::State;
+use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
+use lanforge_types::auth::{ApiScope, UserRole};
+use lanforge_types::device::{DeviceStatus, Origin};
+use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::dhcp::Dhcpv4Pool;
+use lanforge_types::network::dns::DnsRecordType;
+use lanforge_types::network::dns::adblock::RewriteAnswer;
+use lanforge_types::network::firewall::FirewallConfig;
+use lanforge_types::system::{ServiceId, ServiceState};
+use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate};
+use smallvec::smallvec;
+use tempfile::tempdir;
+use tokio::sync::mpsc;
+use tokio::time::{sleep, timeout};
+
+fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
+    let bus = Arc::new(EventBus::new());
+    let state = State::new();
+    let ctx = LanforgeContext::new(Arc::clone(&bus), state, None);
+    (ctx, bus)
+}
+
+#[tokio::test]
+async fn test_db_worker_init_and_clean_shutdown() {
+    let (ctx, bus) = create_test_context();
+    let _sys_sub = bus.subscribe_system();
+
+    let db = Arc::new(LanforgeDb::open_in_memory().unwrap());
+    let log_db = Arc::new(LogDb::open_in_memory());
+
+    let cfg = DatabaseConfig {
+        flush_interval: 1,
+        ..DatabaseConfig::default()
+    };
+
+    assert_ne!(ctx.get_service_state(ServiceId::Db), ServiceState::Online);
+
+    let mut worker = DbWorker::new(cfg, ctx.clone(), db, log_db);
+
+    // 1. Initialize worker
+    worker.init(&ctx).await.expect("init failed");
+
+    // 2. Spawn serve loop
+    let ctx_clone = ctx.clone();
+    let h = ServiceHandle::new(ServiceId::Db, ctx_clone.clone());
+    let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
+    timeout(Duration::from_secs(1), ctx.wait_for_service(ServiceId::Db))
+        .await
+        .expect("db worker must become Online")
+        .expect("wait aborted");
+
+    // Verify storage handle works
+    let storage = ctx.storage_handle().expect("storage handle present");
+    let res = storage
+        .call(|s: &Stores| s.db.is_provisioned())
+        .await
+        .expect("query error");
+    assert!(!res);
+    storage.flush_now().await.expect("flush_now error");
+
+    // 3. Graceful shutdown
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+
+    let res = timeout(Duration::from_secs(1), handle)
+        .await
+        .expect("join timeout")
+        .expect("join handle error");
+    assert!(res.is_ok());
+}
+
+#[tokio::test]
+async fn test_db_worker_batches_and_flushes_devices() {
+    let (ctx, bus) = create_test_context();
+
+    let db = Arc::new(LanforgeDb::open_in_memory().unwrap());
+    let log_db = Arc::new(LogDb::open_in_memory());
+
+    let cfg = DatabaseConfig {
+        flush_interval: 1,
+        ..DatabaseConfig::default()
+    };
+
+    let mut worker = DbWorker::new(cfg, ctx.clone(), Arc::clone(&db), log_db);
+    worker.init(&ctx).await.unwrap();
+
+    let ctx_clone = ctx.clone();
+    let h = ServiceHandle::new(ServiceId::Db, ctx_clone.clone());
+    let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
+
+    // Synchronization barrier: ensure worker.serve() has subscribed to the event bus
+    let storage = ctx.storage_handle().expect("storage handle present");
+    let _ = storage
+        .call(|s: &Stores| s.db.is_provisioned())
+        .await
+        .expect("worker ready");
+
+    // Add 3 devices via real context state updates
+    for i in 1..=3u8 {
+        let mac = MacAddr([0x00, 0x11, 0x22, 0x33, 0x44, i]);
+        let ip = Ipv4Addr::new(192, 168, 1, 10 + i);
+        let _ = ctx.apply(DeviceUpdate::ArpSeen {
+            mac,
+            ip,
+            is_active: true,
+        });
+        let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
+            mac,
+            update: Box::new(CliHostUpdate {
+                hostname: FieldUpdate::Set(format!("host-{i}")),
+                ..CliHostUpdate::default()
+            }),
+        });
+    }
+
+    assert_eq!(ctx.with_state(|s| s.devices.len()), 3);
+
+    timeout(Duration::from_secs(3), async {
+        while ctx.db_metrics().devices_written.load(Ordering::Relaxed) < 3 {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("worker did not persist the device batch");
+
+    // Shutdown after the independent device-topic batch has been persisted.
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let res = timeout(Duration::from_secs(1), handle)
+        .await
+        .expect("timeout")
+        .expect("join error");
+    assert!(res.is_ok());
+
+    // Verify atomic metrics
+    let metrics = ctx.db_metrics();
+    assert!(metrics.devices_written.load(Ordering::Relaxed) >= 3);
+
+    // Verify devices exist in redb
+    let saved_devices = db.load_all_devices().expect("load devices");
+    assert_eq!(saved_devices.len(), 3);
+    for i in 1..=3u8 {
+        let mac = MacAddr([0x00, 0x11, 0x22, 0x33, 0x44, i]);
+        assert!(
+            saved_devices
+                .iter()
+                .any(|d| d.mac == mac && d.display_hostname() == format!("host-{i}"))
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_db_worker_purges_device_immediately() {
+    let (ctx, bus) = create_test_context();
+
+    let db = Arc::new(LanforgeDb::open_in_memory().unwrap());
+    let log_db = Arc::new(LogDb::open_in_memory());
+
+    let cfg = DatabaseConfig {
+        flush_interval: 60, // long interval to prove purge flushes immediately
+        ..DatabaseConfig::default()
+    };
+
+    let mut worker = DbWorker::new(cfg, ctx.clone(), Arc::clone(&db), log_db);
+    worker.init(&ctx).await.unwrap();
+
+    let ctx_clone = ctx.clone();
+    let h = ServiceHandle::new(ServiceId::Db, ctx_clone.clone());
+    let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
+
+    // Synchronization barrier
+    let storage = ctx.storage_handle().expect("storage handle present");
+    let _ = storage
+        .call(|s: &Stores| s.db.is_provisioned())
+        .await
+        .expect("worker ready");
+
+    // 1. Add device
+    let mac = MacAddr([0x00, 0xaa, 0xbb, 0xcc, 0xdd, 0x01]);
+    let ip = Ipv4Addr::new(192, 168, 1, 99);
+    let _ = ctx.apply(DeviceUpdate::ArpSeen {
+        mac,
+        ip,
+        is_active: true,
+    });
+    let _ = ctx.apply(DeviceUpdate::DhcpHostnameHint {
+        mac,
+        hostname: "to-be-purged".into(),
+    });
+
+    // Send TableDirty to flush it
+    let _ = bus.publish(LanforgeEvent::Storage(StorageEvent::TableDirty));
+    sleep(Duration::from_millis(50)).await;
+
+    // Purge the device (DeviceEvent::Purged causes immediate flush)
+    let _ = ctx.apply(DeviceUpdate::HostRemoved { mac });
+
+    // Give worker time to process immediate purge flush
+    sleep(Duration::from_millis(50)).await;
+
+    // Verify it is purged from redb
+    let remaining = db.load_all_devices().expect("load devices");
+    assert!(!remaining.iter().any(|d| d.mac == mac));
+
+    // Clean exit
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = handle.await;
+}
+
+#[tokio::test]
+async fn test_db_worker_full_persistence_and_bootstrap_roundtrip() {
+    let dir = tempdir().expect("tempdir");
+    let config_db_file = dir.path().join("config.redb");
+    let runtime_db_file = dir.path().join("runtime.redb");
+
+    let cfg = DatabaseConfig {
+        config_path: config_db_file.to_string_lossy().to_string(),
+        runtime_path: runtime_db_file.to_string_lossy().to_string(),
+        flush_interval: 60,
+        ..DatabaseConfig::default()
+    };
+
+    let mac1 = MacAddr([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]);
+    let mac2 = MacAddr([0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]);
+
+    // === RUN 1: System Online, state updates and configurations applied ===
+    {
+        let (ctx, bus) = create_test_context();
+        let db = Arc::new(LanforgeDb::open(&cfg).expect("open redb"));
+        let log_db = Arc::new(LogDb::open(&cfg.runtime_path).expect("open logdb"));
+
+        let mut worker = DbWorker::new(cfg.clone(), ctx.clone(), Arc::clone(&db), log_db);
+        worker.init(&ctx).await.unwrap();
+
+        let ctx_clone = ctx.clone();
+        let h = ServiceHandle::new(ServiceId::Db, ctx_clone.clone());
+        let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
+
+        // Synchronization barrier: ensure worker is active and subscribed
+        let storage = ctx.storage_handle().expect("storage handle present");
+        let _ = storage
+            .call(|s: &Stores| s.db.is_provisioned())
+            .await
+            .expect("worker ready");
+
+        // 1. Add 2 devices
+        let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
+            mac: mac1,
+            update: Box::new(CliHostUpdate {
+                hostname: FieldUpdate::from(Some("nas.lan".to_string())),
+                duid: FieldUpdate::NoChange,
+                v4_static: FieldUpdate::from(Some(Ipv4Addr::new(192, 168, 1, 50))),
+                v6_suffix: FieldUpdate::NoChange,
+                origin: Origin::Static,
+                boot_file: FieldUpdate::NoChange,
+                dns_fallback: FieldUpdate::NoChange,
+                class: FieldUpdate::NoChange,
+            }),
+        });
+
+        let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
+            mac: mac2,
+            update: Box::new(CliHostUpdate {
+                hostname: FieldUpdate::from(Some("printer.lan".to_string())),
+                duid: FieldUpdate::NoChange,
+                v4_static: FieldUpdate::from(Some(Ipv4Addr::new(192, 168, 1, 60))),
+                v6_suffix: FieldUpdate::NoChange,
+                origin: Origin::Static,
+                boot_file: FieldUpdate::NoChange,
+                dns_fallback: FieldUpdate::NoChange,
+                class: FieldUpdate::NoChange,
+            }),
+        });
+
+        // Signal table dirty to persist both devices
+        let _ = bus.publish(LanforgeEvent::Storage(StorageEvent::TableDirty));
+
+        // Allow worker to process events
+        sleep(Duration::from_millis(100)).await;
+
+        // Send Shutdown to trigger flush and clean worker exit
+        let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+        let res = handle.await.expect("join handle");
+        assert!(res.is_ok());
+    }
+
+    // === RUN 2: Router Reboot Simulation, hydration from persistent redb ===
+    {
+        let db = LanforgeDb::open(&cfg).expect("re-open redb");
+
+        // 1. Verify devices persisted and hydrated as Offline on boot
+        let restored_state = db.load_table().expect("load_table");
+        assert_eq!(restored_state.devices.len(), 2);
+
+        let dev1 = restored_state.devices.get(&mac1).expect("mac1 restored");
+        assert_eq!(dev1.display_hostname(), "nas.lan");
+        assert_eq!(dev1.primary_v4(), Some(Ipv4Addr::new(192, 168, 1, 50)));
+        assert_eq!(
+            dev1.status,
+            DeviceStatus::Offline,
+            "Rebooted devices must initialize as Offline"
+        );
+
+        let dev2 = restored_state.devices.get(&mac2).expect("mac2 restored");
+        assert_eq!(dev2.display_hostname(), "printer.lan");
+        assert_eq!(dev2.primary_v4(), Some(Ipv4Addr::new(192, 168, 1, 60)));
+        assert_eq!(dev2.status, DeviceStatus::Offline);
+    }
+}
+
+#[tokio::test]
+async fn test_db_worker_storage_query_dispatch() {
+    let (ctx, bus) = create_test_context();
+
+    let db = Arc::new(LanforgeDb::open_in_memory().unwrap());
+    let log_db = Arc::new(LogDb::open_in_memory());
+
+    let cfg = DatabaseConfig {
+        flush_interval: 10,
+        ..DatabaseConfig::default()
+    };
+
+    let mut worker = DbWorker::new(cfg, ctx.clone(), Arc::clone(&db), log_db);
+    worker.init(&ctx).await.unwrap();
+
+    let ctx_clone = ctx.clone();
+    let h = ServiceHandle::new(ServiceId::Db, ctx_clone.clone());
+    let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
+    let storage = ctx.storage_handle().expect("storage handle present");
+
+    // 1. Provisioning queries
+    let is_prov = storage
+        .call(|s: &Stores| s.db.is_provisioned())
+        .await
+        .unwrap();
+    assert!(!is_prov);
+
+    storage
+        .call(|s: &Stores| s.db.set_provisioned(true))
+        .await
+        .unwrap();
+    let is_prov = storage
+        .call(|s: &Stores| s.db.is_provisioned())
+        .await
+        .unwrap();
+    assert!(is_prov);
+
+    // 2. User management queries
+    storage
+        .call(|s: &Stores| {
+            s.auth().create_user(
+                "admin",
+                "$argon2id$v=19$mockhash",
+                UserRole::Admin,
+                1_700_000_000,
+            )
+        })
+        .await
+        .unwrap();
+
+    let user_res = storage
+        .call(|s: &Stores| s.auth().get_user_by_username("admin"))
+        .await
+        .unwrap();
+    if let Some(user) = user_res {
+        assert_eq!(user.username, "admin");
+        assert_eq!(user.role, UserRole::Admin);
+    } else {
+        panic!("User not found");
+    }
+
+    let count_res = storage
+        .call(|s: &Stores| s.auth().count_users())
+        .await
+        .unwrap();
+    assert_eq!(count_res, 1);
+
+    // 3. API Token queries
+    storage
+        .call(|s: &Stores| {
+            s.auth().store_api_token(
+                "tok_test_secret_123",
+                "test-token",
+                &smallvec![ApiScope::Admin],
+                None,
+                1_700_000_000,
+            )
+        })
+        .await
+        .unwrap();
+
+    let tokens_res = storage
+        .call(|s: &Stores| s.auth().load_api_tokens())
+        .await
+        .unwrap();
+    assert_eq!(tokens_res.len(), 1);
+    assert_eq!(tokens_res[0].name, "test-token");
+
+    storage
+        .call(|s: &Stores| s.auth().delete_api_token("tok_test_secret_123"))
+        .await
+        .unwrap();
+    let tokens_res2 = storage
+        .call(|s: &Stores| s.auth().load_api_tokens())
+        .await
+        .unwrap();
+    assert!(tokens_res2.is_empty());
+
+    // Clean exit
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = handle.await;
+}
+
+#[tokio::test]
+async fn test_db_worker_service_control_and_restart_resilience() {
+    let (ctx, bus) = create_test_context();
+
+    let db = Arc::new(LanforgeDb::open_in_memory().unwrap());
+    let log_db = Arc::new(LogDb::open_in_memory());
+
+    let cfg = DatabaseConfig {
+        flush_interval: 10,
+        ..DatabaseConfig::default()
+    };
+
+    let mut worker = DbWorker::new(cfg, ctx.clone(), Arc::clone(&db), log_db);
+    worker.init(&ctx).await.unwrap();
+
+    let ctx_clone = ctx.clone();
+    // Run 1 receives commands from the supervisor, as an admin `lanforge service restart db` does.
+    let (cmd_tx, cmd_rx) = mpsc::channel(8);
+    let handle = tokio::spawn(async move {
+        let h1 = ServiceHandle::with_command_channel(ServiceId::Db, ctx_clone.clone(), cmd_rx);
+        // Run 1
+        worker.serve(&ctx_clone, &h1).await.unwrap();
+        assert!(
+            h1.is_restart_requested(),
+            "restart must be requested before serve returns"
+        );
+        let h2 = ServiceHandle::new(ServiceId::Db, ctx_clone.clone());
+        // Run 2 (Supervisor re-invokes serve on same worker instance)
+        worker.serve(&ctx_clone, &h2).await
+    });
+
+    // Barrier 1: ensure Run 1 is active and subscribed
+    let storage = ctx.storage_handle().expect("storage handle present");
+    let _ = storage
+        .call(|s: &Stores| s.db.is_provisioned())
+        .await
+        .unwrap();
+
+    // 1. Issue a restart command
+    cmd_tx
+        .send(ServiceCommand::Restart)
+        .await
+        .expect("worker alive");
+
+    // Barrier 2: give worker a moment to enter Run 2, then query storage
+    sleep(Duration::from_millis(50)).await;
+    let storage2 = ctx
+        .storage_handle()
+        .expect("storage handle present after restart");
+    let res = storage2
+        .call(|s: &Stores| s.db.is_provisioned())
+        .await
+        .unwrap();
+    assert!(!res);
+
+    // Clean exit
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let res = timeout(Duration::from_secs(1), handle)
+        .await
+        .expect("timeout")
+        .expect("join error");
+    assert!(res.is_ok());
+}
+
+/// Configuration lives in the config files, written by the API before a change applies: the
+/// worker never writes the file (it used to render sections back from memory on every flush)
+/// nor keeps configuration in redb.
+#[tokio::test]
+async fn the_worker_never_writes_configuration() {
+    let (ctx, bus) = create_test_context();
+    let dir = tempdir().unwrap();
+    let config_path = dir.path().join("lanforge.toml");
+    let original =
+        "# Keep this operator comment\n[system]\niface = \"test0\"\n\n[http]\nenabled = false\n";
+    fs::write(&config_path, original).unwrap();
+    ctx.set_config_path(&config_path);
+    ctx.set_config_writable(true);
+
+    let db = Arc::new(LanforgeDb::open_in_memory().unwrap());
+    let log_db = Arc::new(LogDb::open_in_memory());
+    let cfg = DatabaseConfig {
+        flush_interval: 60,
+        ..DatabaseConfig::default()
+    };
+    let mut worker = DbWorker::new(cfg, ctx.clone(), Arc::clone(&db), log_db);
+    worker.init(&ctx).await.unwrap();
+
+    let ctx_clone = ctx.clone();
+    let h = ServiceHandle::new(ServiceId::Db, ctx_clone.clone());
+    let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
+    let storage = ctx.storage_handle().expect("storage handle present");
+    let _ = storage
+        .call(|s: &Stores| s.db.is_provisioned())
+        .await
+        .unwrap();
+
+    ctx.update_dhcp_v4_pools(vec![Dhcpv4Pool {
+        range_start: Ipv4Addr::new(192, 168, 1, 100),
+        range_end: Ipv4Addr::new(192, 168, 1, 200),
+        ..Default::default()
+    }]);
+    let _ = ctx.apply_config(ConfigPatch::new().with_dhcp_options(DhcpOptionsConfig::default()));
+    ctx.update_firewall_config(FirewallConfig::default());
+    ctx.update_dns_adblock_rules("@@||bank.example^\n".to_string());
+    let _ = ctx.apply_config(ConfigPatch::new().with_dns_rewrites(vec![RewriteRule {
+        id: None,
+        domain: "router.lan".into(),
+        rtype: DnsRecordType::A,
+        answer: RewriteAnswer::A(Ipv4Addr::new(192, 0, 2, 1)),
+    }]));
+    let _ = bus.publish(LanforgeEvent::Storage(StorageEvent::TableDirty));
+    sleep(Duration::from_millis(20)).await;
+    storage.flush_now().await.expect("flush_now");
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    timeout(Duration::from_secs(1), handle)
+        .await
+        .expect("worker shutdown timed out")
+        .expect("worker task panicked")
+        .expect("worker failed");
+
+    let written = fs::read_to_string(&config_path).unwrap();
+    assert_eq!(written, original, "the worker wrote the config file");
+    assert_eq!(db.legacy_config_keys().unwrap(), Vec::<String>::new());
+}

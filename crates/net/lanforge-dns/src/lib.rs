@@ -31,3 +31,6 @@ pub mod utils;
 
 #[cfg(test)]
 pub mod test_utils;
+
+#[cfg(test)]
+mod integration_tests;

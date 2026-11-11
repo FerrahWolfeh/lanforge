@@ -897,6 +897,64 @@ fn format_log_entry(
     }
 }
 
+/// One `--follow` line in the `lanforge watch` grammar:
+/// `[time] client [OUTCOME] TYPE domain → answer latency`. Columns are padded before they are
+/// coloured (escape codes would count towards the width), and empty parts are left out.
+fn format_follow_line(
+    entry: &DnsQueryLogEntry,
+    ip_to_host: &HashMap<String, String>,
+    printer: &Printer,
+) -> String {
+    let mut cols = format_log_entry(entry, ip_to_host, &Printer::new(false, true, false));
+    let latency = (entry.upstream_us > 0).then(|| cols.pop().unwrap_or_default());
+    let answer = entry
+        .answer
+        .as_deref()
+        .filter(|a| !a.is_empty() && *a != "—");
+    let (label, paint): (&str, fn(String) -> String) = match entry.result {
+        QueryResult::Forwarded => ("FORWARD", |s| s.green().to_string()),
+        QueryResult::Cached => ("CACHED", |s| s.cyan().to_string()),
+        QueryResult::Coalesced => ("COALESCE", |s| s.cyan().to_string()),
+        QueryResult::Local => ("LOCAL", |s| s.green().to_string()),
+        QueryResult::Rewritten => ("REWRITE", |s| s.cyan().bold().to_string()),
+        QueryResult::Blocked => ("BLOCKED", |s| s.red().bold().to_string()),
+        QueryResult::CachedBlock => ("CACHEBLK", |s| s.red().to_string()),
+        QueryResult::NxDomain => ("NXDOMAIN", |s| s.yellow().to_string()),
+        QueryResult::Error => ("ERROR", |s| s.red().to_string()),
+    };
+    let time = format!("[{}]", cols[0]);
+    let client = format!("{:<14}", cols[1]);
+    let tag = format!("{:<10}", format!("[{label}]"));
+    let qtype = format!("{:<5}", cols[2]);
+    let domain = &cols[3];
+    let mut line = if printer.no_color {
+        format!("{time} {client} {tag} {qtype} {domain}")
+    } else {
+        format!(
+            "{} {} {} {} {domain}",
+            time.dimmed(),
+            client.bright_blue(),
+            paint(tag),
+            qtype.cyan()
+        )
+    };
+    if let Some(answer) = answer {
+        let _ = write!(line, " → {answer}");
+    }
+    if let Some(latency) = latency {
+        let slow = entry.upstream_us >= 10_000;
+        let latency = if printer.no_color {
+            latency
+        } else if slow {
+            latency.yellow().to_string()
+        } else {
+            latency.dimmed().to_string()
+        };
+        let _ = write!(line, "  {latency}");
+    }
+    line
+}
+
 async fn execute_logs(args: DnsLogsArgs, client: &LanforgeClient, printer: &Printer) -> Result<()> {
     if !args.follow {
         let result_filter = if args.blocked {
@@ -1019,8 +1077,7 @@ async fn follow_dns_logs(
                             coalesce_id: q.coalesce_id,
                             repeats: q.repeats,
                         };
-                        let cols = format_log_entry(&entry, &ip_to_host, printer);
-                        println!("{}", cols.join(" │ "));
+                        println!("{}", format_follow_line(&entry, &ip_to_host, printer));
                     }
                 }
             }
@@ -1078,8 +1135,7 @@ async fn follow_dns_logs(
                         coalesce_id: q.coalesce_id,
                         repeats: q.repeats,
                     };
-                    let cols = format_log_entry(&entry, &ip_to_host, printer);
-                    println!("{}", cols.join(" │ "));
+                    println!("{}", format_follow_line(&entry, &ip_to_host, printer));
                 }
             }
             Ok(_) => {}
@@ -2296,6 +2352,50 @@ mod tests {
         };
         let cols = format_log_entry(&grouped, &host_map, &printer);
         assert_eq!(cols[3], "example.com ×340");
+    }
+
+    #[test]
+    fn follow_lines_read_like_watch_and_stay_aligned() {
+        let entry = DnsQueryLogEntry {
+            timestamp: 1_700_000_000,
+            src_ip: "192.168.1.50".parse().unwrap(),
+            domain: "example.com".into(),
+            src_hostname: Some("archie".to_string()),
+            answer: Some("93.184.216.34".to_string()),
+            src_mac: None,
+            result: QueryResult::Forwarded,
+            cached: false,
+            qtype: DnsRecordType::A,
+            upstream_us: 15_400,
+            filter: None,
+            coalesce_id: None,
+            repeats: 1,
+        };
+        let host_map = HashMap::new();
+        let printer = Printer::new(false, true, false);
+        let line = format_follow_line(&entry, &host_map, &printer);
+        let (time, rest) = line.split_at(line.find(' ').unwrap());
+        assert!(time.starts_with('[') && time.ends_with(']'), "{line}");
+        assert_eq!(
+            rest,
+            " archie         [FORWARD]  A     example.com → 93.184.216.34  15.4ms"
+        );
+
+        // Nothing to answer and no upstream: the line ends at the domain.
+        let blocked = DnsQueryLogEntry {
+            src_hostname: Some("S25-de-Adriane".to_string()),
+            answer: None,
+            result: QueryResult::Blocked,
+            qtype: DnsRecordType::HTTPS,
+            upstream_us: 0,
+            domain: "ads.example".into(),
+            ..entry
+        };
+        let line = format_follow_line(&blocked, &host_map, &printer);
+        assert!(
+            line.ends_with(" S25-de-Adriane [BLOCKED]  HTTPS ads.example"),
+            "{line}"
+        );
     }
 
     #[test]

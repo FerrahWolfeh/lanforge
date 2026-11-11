@@ -1069,7 +1069,7 @@ mod tests {
         srv.last_assigned_ip = Some(ip);
         assert_eq!(srv.last_assignment_for(), Some(ip));
 
-        // Envia o Release informando o IP no ciaddr (Client IP Address)
+        // The RELEASE carries the address in ciaddr (Client IP Address)
         let raw_msg = build_raw_msg(MessageType::Release, mac, None, Some(ip), None);
         let res = srv.handle_packet(&raw_msg, None);
 
@@ -1097,7 +1097,7 @@ mod tests {
             expires: SystemTime::now() + Duration::from_hours(1),
         });
 
-        // Cliente detectou conflito de ARP e enviou DECLINE
+        // The client found an ARP conflict and sent a DECLINE
         let raw_msg = build_raw_msg(MessageType::Decline, mac, Some(ip), None, None);
         let res = srv.handle_packet(&raw_msg, None);
 

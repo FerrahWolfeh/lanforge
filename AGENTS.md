@@ -145,6 +145,13 @@ Inter-service communication is powered by a multi-topic broadcast bus:
   provider (CI runs it; run it when touching `#[cfg(feature = ...)]` in `crates/bin/lanforge-cli`).
 - Iterate with `cargo check --all-targets -p <crate>`; run the full `cargo test` once at the end. Feature-matrix
   runs produce many large test binaries, so prefer `-p <crate>` over `--workspace` while iterating.
+- **One test binary per crate.** Integration tests live in the lib as `#[cfg(test)] mod integration_tests`
+  (`src/integration_tests/`, shared helpers in its `common/`), not in `tests/`: every file under `tests/` is a
+  separate executable linking the whole dependency graph (≈100–400 MB each), and the RAM-disk target fills up.
+  They still go through the public entry points (`serve`, API handlers), never private internals. Gate a module
+  that needs features with `#[cfg(feature = ...)]` on its `mod` line. Run one area with
+  `cargo test -p <crate> integration_tests::<module>::`. Only tests that must run the built binary
+  (`CARGO_BIN_EXE_*`) or install their own `#[global_allocator]` stay in `tests/`.
 - Tests that execute the CLI binary must set `HOME`/`XDG_DATA_HOME` to a nonexistent directory and drop
   `LANFORGE_REMOTE_URL`/`LANFORGE_TOKEN`: the CLI has a remote mode with a saved login, and a test can otherwise reach
   a live instance.

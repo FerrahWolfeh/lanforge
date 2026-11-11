@@ -19,3 +19,11 @@ pub use lanforge_types::events::firewall::*;
 pub use lanforge_types::network::firewall::*;
 pub use ruleset::RulesetBuilder;
 pub use service::NftService;
+
+#[cfg(test)]
+#[allow(
+    clippy::pedantic,
+    clippy::nursery,
+    reason = "integration tests keep the workspace lint level they had as a test crate"
+)]
+mod integration_tests;

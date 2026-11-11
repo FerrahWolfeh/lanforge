@@ -1,8 +1,8 @@
 //! `LogStore` implementation for `RedbDatabase`.
 
 use crate::tables::{
-    TABLE_CONFIG, TABLE_DNS_BLOCKED, TABLE_DNS_QUERIES, TABLE_DNS_STATS_HOURLY,
-    TABLE_DNS_TELEMETRY, TABLE_LOG_EVENTS, TABLE_RUNTIME_DEVICES,
+    TABLE_CONFIG, TABLE_DNS_QUERIES, TABLE_DNS_STATS_HOURLY, TABLE_DNS_TELEMETRY, TABLE_LOG_EVENTS,
+    TABLE_RUNTIME_DEVICES,
 };
 use crate::{RedbDatabase, decode, encode, encode_into};
 use lanforge_core::bus::TimedEvent;
@@ -252,38 +252,6 @@ impl RedbDatabase {
         }
         Ok(())
     }
-
-    /// Retrieves the most recent blocked DNS queries.
-    pub fn get_dns_block_history(&self, limit: usize) -> Result<Vec<serde_json::Value>, DbError> {
-        let read_txn = self
-            .db
-            .begin_read()
-            .map_err(|e| DbError::Backend(e.to_string()))?;
-        let table = match read_txn.open_table(TABLE_DNS_BLOCKED) {
-            Ok(t) => t,
-            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
-            Err(e) => return Err(DbError::Backend(e.to_string())),
-        };
-
-        let mut result = Vec::new();
-        for item in table
-            .iter()
-            .map_err(|e| DbError::Backend(e.to_string()))?
-            .rev()
-            .take(limit)
-        {
-            let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-            let entry: BlockedQueryEntry = decode(val.value())
-                .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-            result.push(serde_json::json!({
-                "timestamp": entry.timestamp,
-                "src_ip": entry.src_ip,
-                "src_mac": entry.src_mac,
-                "domain": entry.domain,
-            }));
-        }
-        Ok(result)
-    }
 }
 
 impl LogStore for RedbDatabase {
@@ -339,53 +307,6 @@ impl LogStore for RedbDatabase {
                     .insert((ts, seq), bytes_buf.as_slice())
                     .map_err(|e| DbError::Backend(e.to_string()))?;
             }
-        }
-        write_txn
-            .commit()
-            .map_err(|e| DbError::Backend(e.to_string()))?;
-
-        let now_secs = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-        self.maybe_prune(now_secs)?;
-
-        Ok(())
-    }
-
-    fn record_dns_block(
-        &self,
-        timed_event: &TimedEvent,
-        src_ip: IpAddr,
-        domain: &str,
-        src_mac: Option<String>,
-    ) -> Result<(), DbError> {
-        let ts = timed_event
-            .timestamp
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let entry = BlockedQueryEntry {
-            timestamp: ts,
-            src_ip: src_ip.to_string(),
-            src_mac,
-            domain: domain.to_string(),
-        };
-        let mut bytes_buf = Vec::with_capacity(256);
-        encode_into(&entry, &mut bytes_buf)?;
-
-        let write_txn = self
-            .db
-            .begin_write()
-            .map_err(|e| DbError::Backend(e.to_string()))?;
-        {
-            let mut table = write_txn
-                .open_table(TABLE_DNS_BLOCKED)
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-            let seq = self.log_seq.fetch_add(1, Ordering::Relaxed);
-            table
-                .insert((ts, seq), bytes_buf.as_slice())
-                .map_err(|e| DbError::Backend(e.to_string()))?;
         }
         write_txn
             .commit()
@@ -572,7 +493,6 @@ impl LogStore for RedbDatabase {
         {
             let _ = write_txn.delete_table(TABLE_LOG_EVENTS);
             let _ = write_txn.delete_table(TABLE_DNS_QUERIES);
-            let _ = write_txn.delete_table(TABLE_DNS_BLOCKED);
             let _ = write_txn.delete_table(TABLE_DNS_TELEMETRY);
             let _ = write_txn.delete_table(TABLE_DNS_STATS_HOURLY);
         }
@@ -675,50 +595,7 @@ impl LogStore for RedbDatabase {
                 }
             }
 
-            // 3. Prune TABLE_DNS_BLOCKED
-            if let Ok(mut table) = write_txn.open_table(TABLE_DNS_BLOCKED) {
-                loop {
-                    let mut chunk = Vec::with_capacity(512);
-                    for item in table
-                        .range(..(cutoff, 0))
-                        .map_err(|e| DbError::Backend(e.to_string()))?
-                        .take(512)
-                    {
-                        let (k, _) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                        chunk.push(k.value());
-                    }
-                    if chunk.is_empty() {
-                        break;
-                    }
-                    for k in chunk {
-                        let _ = table.remove(k);
-                    }
-                }
-
-                // Capacity cap (50,000)
-                let mut len = table.len().map_err(|e| DbError::Backend(e.to_string()))? as usize;
-                while len > 50_000 {
-                    let to_take = (len - 50_000).min(512);
-                    let mut chunk = Vec::with_capacity(to_take);
-                    for item in table
-                        .iter()
-                        .map_err(|e| DbError::Backend(e.to_string()))?
-                        .take(to_take)
-                    {
-                        let (k, _) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                        chunk.push(k.value());
-                    }
-                    if chunk.is_empty() {
-                        break;
-                    }
-                    len -= chunk.len();
-                    for k in chunk {
-                        let _ = table.remove(k);
-                    }
-                }
-            }
-
-            // 4. Prune TABLE_DNS_TELEMETRY (keep up to 30 days of 15-minute buckets)
+            // 3. Prune TABLE_DNS_TELEMETRY (keep up to 30 days of 15-minute buckets)
             if let Ok(mut table) = write_txn.open_table(TABLE_DNS_TELEMETRY) {
                 let telemetry_cutoff = cutoff.saturating_sub(23 * 86400); // 30 days total retention
                 loop {

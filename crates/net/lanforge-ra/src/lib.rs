@@ -1176,3 +1176,11 @@ mod tests {
         assert_eq!(pref2, 0); // Must be deprecated (preferred=0)
     }
 }
+
+#[cfg(test)]
+#[allow(
+    clippy::pedantic,
+    clippy::nursery,
+    reason = "integration tests keep the workspace lint level they had as a test crate"
+)]
+mod integration_tests;
