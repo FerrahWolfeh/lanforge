@@ -34,6 +34,20 @@ pub struct ListMatches {
     pub block_important: u64,
 }
 
+impl ListMatches {
+    /// Only the lists of `mask`.
+    #[inline]
+    #[must_use]
+    pub const fn masked(self, mask: u64) -> Self {
+        Self {
+            allow: self.allow & mask,
+            block: self.block & mask,
+            allow_important: self.allow_important & mask,
+            block_important: self.block_important & mask,
+        }
+    }
+}
+
 /// Adblock lists, each queried in place from its own memory-mapped FSTs: no merged copy.
 /// Lookups allocate nothing and take no lock.
 pub struct DiskBlocklist {
@@ -149,6 +163,16 @@ impl DiskBlocklist {
             }
         }
         m
+    }
+
+    /// The bits of the lists with these source ids (those not loaded have none).
+    #[must_use]
+    pub fn mask_of(&self, ids: &[i64]) -> u64 {
+        self.lists
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| ids.contains(&l.id))
+            .fold(0, |acc, (bit, _)| acc | (1 << bit))
     }
 
     /// Source id of the list at bit `bit`.

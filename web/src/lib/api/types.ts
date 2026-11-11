@@ -887,7 +887,10 @@ export type FilterAction = 'block' | 'allow';
 export type FilterOrigin =
 	| { type: 'user_rule' }
 	| { type: 'user_allowlist' }
-	| { type: 'list'; source_id: number };
+	| { type: 'list'; source_id: number }
+	| { type: 'group_rule'; group: string }
+	| { type: 'group_allowlist'; group: string }
+	| { type: 'group_list'; group: string; source_id: number };
 
 export interface FilterMatch {
 	action: FilterAction;

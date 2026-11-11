@@ -161,6 +161,13 @@ impl ClientContext {
                 info!("Reload: adblock rules file changed; applying");
                 patch = patch.with_dns_adblock_rules(rules);
             }
+            let (with_policy, policy_issues) =
+                self.adblock_policy_patch(patch, &adblock, Some(path));
+            issues.extend(log_issues(policy_issues));
+            patch = with_policy;
+            if patch.dns_adblock_policy.is_some() {
+                info!("Reload: adblock groups or bypass changed; applying");
+            }
         }
         if applies(Section::Dhcp) {
             let (dhcp, dhcp_issues) = file.dhcp_settings();

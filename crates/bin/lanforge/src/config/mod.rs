@@ -61,6 +61,8 @@ use lanforge_api::config_file::{RaInputs, effective_ra};
 #[cfg(feature = "pppoe")]
 use lanforge_pppoe::config::PppoeConfig as PppoeTomlConfig;
 use lanforge_types::device::StaticHost;
+#[cfg(feature = "dns")]
+use lanforge_types::network::dns::adblock::AdblockPolicy;
 use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::{Ipv6Prefix, is_ula};
 
@@ -110,6 +112,9 @@ pub struct Config {
     /// The text of the global adblock rules file (`[adblock] rules`).
     #[cfg(feature = "dns")]
     pub adblock_rules: String,
+    /// The adblock groups and `bypass`, with the groups' rules files read.
+    #[cfg(feature = "dns")]
+    pub adblock_policy: AdblockPolicy,
     pub search_domains: Vec<String>,
 
     // Monitor & mDNS
@@ -246,6 +251,8 @@ impl Config {
             adblock: toml_cfg.adblock,
             #[cfg(feature = "dns")]
             adblock_rules: toml_cfg.adblock_rules,
+            #[cfg(feature = "dns")]
+            adblock_policy: toml_cfg.adblock_policy,
             search_domains,
             #[cfg(feature = "discovery")]
             monitor_toml: toml_cfg.monitor,
@@ -699,6 +706,8 @@ impl Default for Config {
             adblock: AdblockSettings::default(),
             #[cfg(feature = "dns")]
             adblock_rules: String::new(),
+            #[cfg(feature = "dns")]
+            adblock_policy: AdblockPolicy::default(),
             search_domains: vec!["lan".to_string()],
             #[cfg(feature = "discovery")]
             monitor_toml: MonitorConfig::default(),

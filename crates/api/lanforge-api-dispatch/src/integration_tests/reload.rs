@@ -547,4 +547,73 @@ async fn renaming_a_host_moves_its_dev_references() {
         &rewrites[0].answer,
         RewriteAnswer::Device { identifier, .. } if *identifier == storage
     ));
+    let clients: Vec<String> = client.ctx.get_dns_adblock_policy().groups[0]
+        .clients
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(clients, ["dev:storage", "192.168.0.0/28"]);
+}
+
+/// The adblock groups and `bypass` run as the file has them after a reload, each group with
+/// its own lists and its rules file; a group rules file that cannot be read keeps the group's
+/// rules that run. A `WebUI` change to `[adblock]` keeps them running.
+#[cfg(feature = "adblock")]
+#[tokio::test]
+async fn reload_applies_adblock_groups_and_bypass() {
+    let file = "[adblock]\nenabled = true\nlists = [\"g\"]\nbypass = [\"dev:notebook\"]\n\n\
+                [adblock.sources.g]\nurl = \"https://example.com/g\"\n\n\
+                [adblock.sources.k]\nurl = \"https://example.com/k\"\n\n\
+                [adblock.groups.bradesco]\nrules = \"adblock/bradesco.rules\"\nclients = [\"dev:pixel-faiko\"]\n\n\
+                [adblock.groups.kids]\nlists = [\"k\"]\nclients = [\"192.168.1.64/28\"]\n";
+    let (client, dir, _path) = with_file(file);
+    fs::create_dir(dir.path().join("adblock")).unwrap();
+    fs::write(
+        dir.path().join("adblock/bradesco.rules"),
+        "@@||app-measurement.com^\n",
+    )
+    .unwrap();
+
+    reload(&client).await;
+    let policy = client.ctx.get_dns_adblock_policy();
+    let bypass: Vec<String> = policy.bypass.iter().map(ToString::to_string).collect();
+    assert_eq!(bypass, ["dev:notebook"]);
+    let [bradesco, kids] = &policy.groups[..] else {
+        panic!("two groups: {policy:?}");
+    };
+    assert_eq!(bradesco.name, "bradesco");
+    assert_eq!(bradesco.rules, "@@||app-measurement.com^\n");
+    assert_eq!(bradesco.clients[0].to_string(), "dev:pixel-faiko");
+    assert!(bradesco.sources.is_empty());
+    assert_eq!(kids.sources.len(), 1);
+    assert_eq!(kids.sources[0].url, "https://example.com/k");
+    // The global layer is still only `lists`.
+    let urls = client.ctx.get_dns_adblock_urls();
+    assert_eq!(urls.len(), 1);
+    assert_eq!(urls[0].url, "https://example.com/g");
+
+    fs::remove_file(dir.path().join("adblock/bradesco.rules")).unwrap();
+    fs::create_dir(dir.path().join("adblock/bradesco.rules")).unwrap();
+    let _ = client.handle_reload().await;
+    assert_eq!(
+        client.ctx.get_dns_adblock_policy().groups[0].rules,
+        "@@||app-measurement.com^\n",
+        "an unreadable group rules file must not drop the group's rules"
+    );
+    assert!(
+        client
+            .ctx
+            .config_issues()
+            .iter()
+            .any(|i| i.contains("[adblock.groups.\"bradesco\"] rules")
+                && i.contains("cannot be read")),
+        "{:?}",
+        client.ctx.config_issues()
+    );
+
+    client
+        .change_adblock(|a| a.config.enabled = false)
+        .expect("adblock change");
+    assert_eq!(client.ctx.get_dns_adblock_policy().groups.len(), 2);
+    assert_eq!(client.ctx.get_dns_adblock_policy().bypass.len(), 1);
 }

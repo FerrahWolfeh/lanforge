@@ -406,6 +406,12 @@
 										Manual Allowlist
 									{:else if entry.filter.origin.type === 'list'}
 										Source List #{entry.filter.origin.source_id}
+									{:else if entry.filter.origin.type === 'group_rule'}
+										Group "{entry.filter.origin.group}" Rule
+									{:else if entry.filter.origin.type === 'group_allowlist'}
+										Group "{entry.filter.origin.group}" Allowlist
+									{:else if entry.filter.origin.type === 'group_list'}
+										Group "{entry.filter.origin.group}" Source List #{entry.filter.origin.source_id}
 									{/if}
 								</div>
 							</div>

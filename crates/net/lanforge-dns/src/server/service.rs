@@ -21,6 +21,8 @@ use crate::server::transport::doq;
 use crate::server::transport::dot::run_dot_worker;
 use crate::server::transport::net::bind_udp;
 #[cfg(feature = "adblock")]
+use crate::server::worker::adblock_sources;
+#[cfg(feature = "adblock")]
 use crate::server::worker::compute_next_refresh_target;
 #[cfg(feature = "adblock")]
 use crate::server::worker::spawn_adblock_manager;
@@ -45,6 +47,8 @@ use lanforge_transport::TransportMetrics;
 #[cfg(feature = "adblock")]
 use lanforge_types::config::AdblockRules;
 use lanforge_types::config::{ConfigDomain, DnsListenConfig, SiteDomains};
+#[cfg(feature = "adblock")]
+use lanforge_types::network::dns::adblock::AdblockPolicy;
 use lanforge_types::network::dns::{
     AdblockCheckResponse, DnsAdblockSourcesResponse, DnsAdblockStatusResponse, DnsCacheEntry,
     DnsCacheResponse, DnsCacheStatsExtResponse, DnsClass, DnsLifetimeStats, DnsMessage,
@@ -862,7 +866,7 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
         DnsRequest::AdblockSources => {
             #[cfg(feature = "adblock")]
             {
-                let urls = dns_ctx.ctx.get_dns_adblock_urls();
+                let urls = adblock_sources(&dns_ctx.ctx);
                 let cache_dir = dns_ctx
                     .cfg
                     .adblock_cache_dir
@@ -932,13 +936,14 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
                     let matched_filter = filter.check_domain(&cleaned);
                     let mut source_matches = Vec::new();
                     if let Some(FilterMatch {
-                        origin: FilterOrigin::List { source_id },
+                        origin:
+                            FilterOrigin::List { source_id } | FilterOrigin::GroupList { source_id, .. },
                         action,
                         ref rule,
                         important,
                     }) = matched_filter
                     {
-                        let urls = dns_ctx.ctx.get_dns_adblock_urls();
+                        let urls = adblock_sources(&dns_ctx.ctx);
                         let url = urls
                             .iter()
                             .find(|u| u.source_id() == source_id)
@@ -1121,7 +1126,7 @@ async fn resolve_diagnostic_internal(
 
 /// Change of a filter-related config section observed by the DNS service loop.
 enum FilterChange {
-    /// Allowlist or custom block rules changed: resync the in-memory filter.
+    /// A rules file or the groups changed: resync the in-memory filter.
     #[cfg_attr(not(feature = "adblock"), allow(dead_code))]
     Rules,
     /// Adblock settings changed (mode, blocking IPs, enabled).
@@ -1135,6 +1140,7 @@ enum FilterChange {
 struct FilterSubscriptions {
     rules: ConfigSubscription<AdblockRules>,
     adblock: ConfigSubscription<AdblockDbConfig>,
+    policy: ConfigSubscription<AdblockPolicy>,
 }
 
 #[cfg(feature = "adblock")]
@@ -1143,12 +1149,14 @@ impl FilterSubscriptions {
         Self {
             rules: ctx.config_subscription(),
             adblock: ctx.config_subscription(),
+            policy: ctx.config_subscription(),
         }
     }
 
     async fn next(&mut self) -> FilterChange {
         tokio::select! {
             Some(_) = self.rules.next() => FilterChange::Rules,
+            Some(_) = self.policy.next() => FilterChange::Rules,
             Some(delta) = self.adblock.next() => FilterChange::Adblock(delta.new),
             else => future::pending().await,
         }
@@ -1176,7 +1184,7 @@ fn apply_filter_change(dns_ctx: &DnsContext, ctx: &LanforgeContext, change: Filt
     };
     match change {
         FilterChange::Rules => {
-            info!("Reloading manual adblock rules");
+            info!("Reloading adblock rules and groups");
             filter.sync_from_context(ctx);
         }
         FilterChange::Adblock(cfg) => {

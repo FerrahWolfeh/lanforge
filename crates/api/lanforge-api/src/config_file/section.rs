@@ -169,7 +169,8 @@ impl From<ConfigDomain> for Section {
             ConfigDomain::SiteDomains => Self::Dns,
             ConfigDomain::DnsAdblock
             | ConfigDomain::DnsAdblockUrls
-            | ConfigDomain::DnsAdblockRules => Self::Adblock,
+            | ConfigDomain::DnsAdblockRules
+            | ConfigDomain::DnsAdblockPolicy => Self::Adblock,
             ConfigDomain::Discovery => Self::Monitor,
             ConfigDomain::Interfaces => Self::System,
             ConfigDomain::Http => Self::Http,

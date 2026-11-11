@@ -294,6 +294,12 @@ impl ClientContext {
         if let Some(dns) = dns {
             patch = self.dns_settings_patch(patch, dns);
         }
+        if let Some(adblock) = adblock {
+            let path = self.resolve_config_path();
+            patch = self
+                .adblock_policy_patch(patch, &adblock, path.as_deref())
+                .0;
+        }
         let _ = self.ctx.apply_config(patch);
         Ok(persisted)
     }
@@ -451,12 +457,31 @@ impl ClientContext {
         Ok(persisted)
     }
 
-    /// Applies the filter settings and the global layer's sources of `adblock` that differ from
-    /// the live ones. The rules file is applied by [`Self::change_adblock_rules`] / the reload.
+    /// Applies the filter settings, the global layer's sources and the groups/`bypass` of
+    /// `adblock` that differ from the live ones. The global rules file is applied by
+    /// [`Self::change_adblock_rules`] / the reload; the groups' rules files are read here.
     pub fn apply_adblock_settings(&self, adblock: &AdblockSettings) {
-        let _ = self
-            .ctx
-            .apply_config(self.adblock_settings_patch(ConfigPatch::new(), adblock));
+        let patch = self.adblock_settings_patch(ConfigPatch::new(), adblock);
+        let path = self.resolve_config_path();
+        let (patch, _) = self.adblock_policy_patch(patch, adblock, path.as_deref());
+        let _ = self.ctx.apply_config(patch);
+    }
+
+    /// `patch` plus the groups and `bypass` of `adblock` when they differ from the live ones
+    /// (see [`AdblockSettings::policy`]), and the issues of the groups' rules files.
+    pub(crate) fn adblock_policy_patch(
+        &self,
+        patch: ConfigPatch,
+        adblock: &AdblockSettings,
+        config_path: Option<&Path>,
+    ) -> (ConfigPatch, Vec<String>) {
+        let live = self.ctx.get_dns_adblock_policy();
+        let (policy, issues) = adblock.policy(config_path, &live);
+        if live == policy {
+            (patch, issues)
+        } else {
+            (patch.with_dns_adblock_policy(policy), issues)
+        }
     }
 
     /// `patch` plus the filter settings and global sources of `adblock` that differ from the

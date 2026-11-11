@@ -1,4 +1,6 @@
-use crate::identifiers::DeviceIdentifier;
+use crate::device::Device;
+use crate::identifiers::{DeviceIdentifier, MacAddr};
+use crate::network::dns::AdblockUrlEntry;
 use crate::network::{DnsRecordType, IpSubnet};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{self, Display, Formatter};
@@ -401,7 +403,22 @@ impl Display for FilterAction {
 pub enum FilterOrigin {
     UserRule,
     UserAllowlist,
-    List { source_id: i64 },
+    List {
+        source_id: i64,
+    },
+    /// A block rule of a group's rules file.
+    GroupRule {
+        group: Box<str>,
+    },
+    /// An allow rule of a group's rules file.
+    GroupAllowlist {
+        group: Box<str>,
+    },
+    /// A list a group adds.
+    GroupList {
+        group: Box<str>,
+        source_id: i64,
+    },
 }
 
 impl Serialize for FilterOrigin {
@@ -412,10 +429,13 @@ impl Serialize for FilterOrigin {
         if serializer.is_human_readable() {
             #[derive(Serialize)]
             #[serde(tag = "type", rename_all = "snake_case")]
-            enum JsonFilterOrigin {
+            enum JsonFilterOrigin<'a> {
                 UserRule,
                 UserAllowlist,
                 List { source_id: i64 },
+                GroupRule { group: &'a str },
+                GroupAllowlist { group: &'a str },
+                GroupList { group: &'a str, source_id: i64 },
             }
             let repr = match self {
                 Self::UserRule => JsonFilterOrigin::UserRule,
@@ -423,19 +443,34 @@ impl Serialize for FilterOrigin {
                 Self::List { source_id } => JsonFilterOrigin::List {
                     source_id: *source_id,
                 },
+                Self::GroupRule { group } => JsonFilterOrigin::GroupRule { group },
+                Self::GroupAllowlist { group } => JsonFilterOrigin::GroupAllowlist { group },
+                Self::GroupList { group, source_id } => JsonFilterOrigin::GroupList {
+                    group,
+                    source_id: *source_id,
+                },
             };
             repr.serialize(serializer)
         } else {
             #[derive(Serialize)]
-            enum BinaryFilterOrigin {
+            enum BinaryFilterOrigin<'a> {
                 UserRule,
                 UserAllowlist,
                 List { source_id: i64 },
+                GroupRule { group: &'a str },
+                GroupAllowlist { group: &'a str },
+                GroupList { group: &'a str, source_id: i64 },
             }
             let repr = match self {
                 Self::UserRule => BinaryFilterOrigin::UserRule,
                 Self::UserAllowlist => BinaryFilterOrigin::UserAllowlist,
                 Self::List { source_id } => BinaryFilterOrigin::List {
+                    source_id: *source_id,
+                },
+                Self::GroupRule { group } => BinaryFilterOrigin::GroupRule { group },
+                Self::GroupAllowlist { group } => BinaryFilterOrigin::GroupAllowlist { group },
+                Self::GroupList { group, source_id } => BinaryFilterOrigin::GroupList {
+                    group,
                     source_id: *source_id,
                 },
             };
@@ -456,11 +491,19 @@ impl<'de> Deserialize<'de> for FilterOrigin {
                 UserRule,
                 UserAllowlist,
                 List { source_id: i64 },
+                GroupRule { group: Box<str> },
+                GroupAllowlist { group: Box<str> },
+                GroupList { group: Box<str>, source_id: i64 },
             }
             match JsonFilterOrigin::deserialize(deserializer)? {
                 JsonFilterOrigin::UserRule => Ok(Self::UserRule),
                 JsonFilterOrigin::UserAllowlist => Ok(Self::UserAllowlist),
                 JsonFilterOrigin::List { source_id } => Ok(Self::List { source_id }),
+                JsonFilterOrigin::GroupRule { group } => Ok(Self::GroupRule { group }),
+                JsonFilterOrigin::GroupAllowlist { group } => Ok(Self::GroupAllowlist { group }),
+                JsonFilterOrigin::GroupList { group, source_id } => {
+                    Ok(Self::GroupList { group, source_id })
+                }
             }
         } else {
             #[derive(Deserialize)]
@@ -468,11 +511,19 @@ impl<'de> Deserialize<'de> for FilterOrigin {
                 UserRule,
                 UserAllowlist,
                 List { source_id: i64 },
+                GroupRule { group: Box<str> },
+                GroupAllowlist { group: Box<str> },
+                GroupList { group: Box<str>, source_id: i64 },
             }
             match BinaryFilterOrigin::deserialize(deserializer)? {
                 BinaryFilterOrigin::UserRule => Ok(Self::UserRule),
                 BinaryFilterOrigin::UserAllowlist => Ok(Self::UserAllowlist),
                 BinaryFilterOrigin::List { source_id } => Ok(Self::List { source_id }),
+                BinaryFilterOrigin::GroupRule { group } => Ok(Self::GroupRule { group }),
+                BinaryFilterOrigin::GroupAllowlist { group } => Ok(Self::GroupAllowlist { group }),
+                BinaryFilterOrigin::GroupList { group, source_id } => {
+                    Ok(Self::GroupList { group, source_id })
+                }
             }
         }
     }
@@ -618,6 +669,27 @@ pub enum ClientSelector {
 }
 
 impl ClientSelector {
+    /// Whether the client at `ip` is one of these. `mac` is the MAC the client's address
+    /// resolves to and `device` its record, when known: a `dev:<mac>` selector needs the MAC,
+    /// a `dev:<name>` one the device's name (hostname or DNS name), whatever MAC it has now.
+    #[must_use]
+    pub fn matches(&self, ip: IpAddr, mac: Option<MacAddr>, device: Option<&Device>) -> bool {
+        match self {
+            Self::Subnet(subnet) => subnet.contains(ip.to_canonical()),
+            Self::Device(DeviceIdentifier::Mac(wanted)) => mac == Some(*wanted),
+            Self::Device(DeviceIdentifier::Name(name)) => device.is_some_and(|d| {
+                d.hostname.name.eq_ignore_ascii_case(name)
+                    || d.dns_fallback.eq_ignore_ascii_case(name)
+            }),
+        }
+    }
+
+    /// Whether matching needs the client's device (a `dev:` selector), not only its address.
+    #[must_use]
+    pub const fn needs_device(&self) -> bool {
+        matches!(self, Self::Device(_))
+    }
+
     /// Follows a renamed device (see [`DeviceIdentifier::rename_device`]).
     pub fn rename_device(&mut self, old: &str, new: &DeviceIdentifier) -> bool {
         match self {
@@ -643,6 +715,26 @@ impl FromStr for ClientSelector {
             .map(Self::Subnet)
             .map_err(|e| format!("not a subnet, an address or \"dev:<name|mac>\" ({e})"))
     }
+}
+
+/// The per-client overlays of `[adblock]` as the DNS filter runs them: groups and `bypass`. The
+/// global layer every client gets is the global sources and rules file, kept apart.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AdblockPolicy {
+    /// Clients that are never filtered.
+    pub bypass: Vec<ClientSelector>,
+    pub groups: Vec<AdblockGroupPolicy>,
+}
+
+/// One `[adblock.groups.<name>]`: lists and rules its clients get on top of the global layer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdblockGroupPolicy {
+    pub name: String,
+    /// The group's own lists, never one of the global layer.
+    pub sources: Vec<AdblockUrlEntry>,
+    /// The text of the group's rules file (`RulesFile` lines).
+    pub rules: String,
+    pub clients: Vec<ClientSelector>,
 }
 
 impl Display for ClientSelector {
@@ -836,12 +928,40 @@ mod tests {
         assert_eq!(deserialized, parsed);
     }
 
+    /// The query log on disk holds postcard `FilterMatch`es: the group origins come after the
+    /// old ones, so an old record still reads as what it was.
+    #[test]
+    fn group_origins_keep_the_old_postcard_encoding() {
+        let old = [
+            (FilterOrigin::UserRule, vec![0]),
+            (FilterOrigin::UserAllowlist, vec![1]),
+            (FilterOrigin::List { source_id: 42 }, vec![2, 84]),
+        ];
+        for (origin, bytes) in old {
+            assert_eq!(postcard::to_stdvec(&origin).unwrap(), bytes, "{origin:?}");
+            assert_eq!(
+                postcard::from_bytes::<FilterOrigin>(&bytes).unwrap(),
+                origin
+            );
+        }
+    }
+
     #[test]
     fn test_filter_origin_postcard_and_json_dual_mode() {
         let origins = vec![
             FilterOrigin::UserRule,
             FilterOrigin::UserAllowlist,
             FilterOrigin::List { source_id: 42 },
+            FilterOrigin::GroupRule {
+                group: "kids".into(),
+            },
+            FilterOrigin::GroupAllowlist {
+                group: "bradesco".into(),
+            },
+            FilterOrigin::GroupList {
+                group: "kids".into(),
+                source_id: 7,
+            },
         ];
 
         for orig in origins {
@@ -865,6 +985,15 @@ mod tests {
                 FilterOrigin::List { source_id } => {
                     assert!(json.contains(r#""type":"list""#));
                     assert!(json.contains(&format!(r#""source_id":{source_id}"#)));
+                }
+                FilterOrigin::GroupRule { .. } => {
+                    assert!(json.contains(r#""type":"group_rule","group":"kids""#));
+                }
+                FilterOrigin::GroupAllowlist { .. } => {
+                    assert!(json.contains(r#""type":"group_allowlist","group":"bradesco""#));
+                }
+                FilterOrigin::GroupList { .. } => {
+                    assert!(json.contains(r#""type":"group_list","group":"kids","source_id":7"#));
                 }
             }
             let from_json: FilterMatch = serde_json::from_str(&json).expect("json deserialize");

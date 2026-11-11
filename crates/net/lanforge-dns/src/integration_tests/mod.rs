@@ -6,6 +6,7 @@ mod common;
 
 mod adblock;
 mod adblock_fallback;
+mod adblock_groups;
 mod adblock_live;
 mod adblock_manual_rules;
 mod adblock_restart;

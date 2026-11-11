@@ -35,6 +35,8 @@ use lanforge_api::config_file::DhcpSettings;
 use lanforge_api::config_file::{AdblockSettings, DnsSettings};
 use lanforge_api::config_file::{ConfigFile, Section};
 use lanforge_types::device::StaticHost;
+#[cfg(feature = "dns")]
+use lanforge_types::network::dns::adblock::AdblockPolicy;
 
 /// Root structure of the TOML file.
 #[derive(Deserialize, Serialize, Debug, Default, Clone)]
@@ -60,6 +62,10 @@ pub struct TomlConfig {
     #[cfg(feature = "dns")]
     #[serde(skip)]
     pub adblock_rules: String,
+    /// The adblock groups and `bypass`, with the groups' rules files read.
+    #[cfg(feature = "dns")]
+    #[serde(skip)]
+    pub adblock_policy: AdblockPolicy,
     #[cfg(feature = "discovery")]
     pub monitor: MonitorConfig,
     #[cfg(feature = "discovery")]
@@ -331,6 +337,11 @@ pub fn load_toml(path: &str) -> TomlConfig {
                 cfg.config_issues.extend(file_cfg.adblock.to_config().1);
                 let (rules, issues) = cfg.adblock.load_rules(Path::new(path));
                 cfg.adblock_rules = rules.unwrap_or_default();
+                cfg.config_issues.extend(issues);
+                let (policy, issues) = cfg
+                    .adblock
+                    .policy(Some(Path::new(path)), &AdblockPolicy::default());
+                cfg.adblock_policy = policy;
                 cfg.config_issues.extend(issues);
             }
             if !set_aside.iter().any(|(sec, _)| *sec == Section::Hosts) {

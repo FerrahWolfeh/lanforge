@@ -10,7 +10,7 @@ use lanforge_types::network::dhcp::{
     DhcpOptionsConfig, Dhcpv4Options, Dhcpv4Pool, Dhcpv6Options, Dhcpv6Pool, TftpOptions,
 };
 use lanforge_types::network::dns::AdblockUrlEntry;
-use lanforge_types::network::dns::adblock::{AdblockDbConfig, RewriteRule};
+use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockPolicy, RewriteRule};
 use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamTarget};
 use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
@@ -115,6 +115,7 @@ impl_subscribable!(Vec<RewriteRule>, dns_rewrites);
 impl_subscribable!(AdblockDbConfig, dns_adblock);
 impl_subscribable!(Vec<AdblockUrlEntry>, dns_adblock_urls);
 impl_subscribable!(AdblockRules, dns_adblock_rules);
+impl_subscribable!(AdblockPolicy, dns_adblock_policy);
 impl_subscribable!(Vec<DnsReverseResolver>, dns_reverse);
 impl_subscribable!(DnsListenConfig, dns_listen);
 impl_subscribable!(SiteDomains, site_domains);
@@ -142,6 +143,7 @@ pub struct ConfigStore {
     pub dns_adblock: WatchPair<AdblockDbConfig>,
     pub dns_adblock_urls: WatchPair<Vec<AdblockUrlEntry>>,
     pub dns_adblock_rules: WatchPair<AdblockRules>,
+    pub dns_adblock_policy: WatchPair<AdblockPolicy>,
     pub dns_reverse: WatchPair<Vec<DnsReverseResolver>>,
     pub dns_listen: WatchPair<DnsListenConfig>,
     pub site_domains: WatchPair<SiteDomains>,
@@ -168,6 +170,7 @@ impl Default for ConfigStore {
             dns_adblock: watch::channel(Arc::new(AdblockDbConfig::default())),
             dns_adblock_urls: watch::channel(Arc::new(Vec::new())),
             dns_adblock_rules: watch::channel(Arc::new(AdblockRules::default())),
+            dns_adblock_policy: watch::channel(Arc::new(AdblockPolicy::default())),
             dns_reverse: watch::channel(Arc::new(Vec::new())),
             dns_listen: watch::channel(Arc::new(DnsListenConfig::default())),
             site_domains: watch::channel(Arc::new(SiteDomains::default())),
@@ -196,6 +199,7 @@ pub struct ConfigPatch {
     pub dns_adblock: Option<AdblockDbConfig>,
     pub dns_adblock_urls: Option<Vec<AdblockUrlEntry>>,
     pub dns_adblock_rules: Option<AdblockRules>,
+    pub dns_adblock_policy: Option<AdblockPolicy>,
     pub dns_reverse: Option<Vec<DnsReverseResolver>>,
     pub dns_listen: Option<DnsListenConfig>,
     pub site_domains: Option<SiteDomains>,
@@ -227,6 +231,7 @@ impl ConfigPatch {
             && self.dns_adblock.is_none()
             && self.dns_adblock_urls.is_none()
             && self.dns_adblock_rules.is_none()
+            && self.dns_adblock_policy.is_none()
             && self.dns_reverse.is_none()
             && self.dns_listen.is_none()
             && self.site_domains.is_none()
@@ -360,6 +365,13 @@ impl ConfigPatch {
         self
     }
 
+    /// The adblock groups and `bypass`.
+    #[must_use]
+    pub fn with_dns_adblock_policy(mut self, policy: AdblockPolicy) -> Self {
+        self.dns_adblock_policy = Some(policy);
+        self
+    }
+
     #[must_use]
     pub fn with_dns_reverse(mut self, reverse: Vec<DnsReverseResolver>) -> Self {
         self.dns_reverse = Some(reverse);
@@ -434,6 +446,9 @@ impl ConfigPatch {
         if let Some(ref rules) = self.dns_adblock_rules {
             target.dns_adblock_rules.clone_from(rules);
         }
+        if let Some(ref policy) = self.dns_adblock_policy {
+            target.dns_adblock_policy.clone_from(policy);
+        }
         if let Some(ref reverse) = self.dns_reverse {
             target.dns_reverse.clone_from(reverse);
         }
@@ -472,6 +487,8 @@ pub struct DynamicConfig {
     pub dns_adblock_urls: Vec<AdblockUrlEntry>,
     /// The global adblock rules file's text (manual blocks and allows).
     pub dns_adblock_rules: AdblockRules,
+    /// The adblock groups and `bypass` (the per-client overlays).
+    pub dns_adblock_policy: AdblockPolicy,
     /// Per-subnet resolvers for reverse (PTR) lookups.
     pub dns_reverse: Vec<DnsReverseResolver>,
     /// Configured `PPPoE` client runtime configuration.
@@ -607,6 +624,11 @@ impl LanforgeContext {
             DNS_ADBLOCK_RULES
         );
         check_and_apply!(
+            dns_adblock_policy,
+            self.inner.config_store.dns_adblock_policy,
+            DNS_ADBLOCK_POLICY
+        );
+        check_and_apply!(
             dns_reverse,
             self.inner.config_store.dns_reverse,
             DNS_REVERSE
@@ -675,6 +697,10 @@ impl LanforgeContext {
         hydrate_val!(dns_adblock, self.inner.config_store.dns_adblock);
         hydrate_val!(dns_adblock_urls, self.inner.config_store.dns_adblock_urls);
         hydrate_val!(dns_adblock_rules, self.inner.config_store.dns_adblock_rules);
+        hydrate_val!(
+            dns_adblock_policy,
+            self.inner.config_store.dns_adblock_policy
+        );
         hydrate_val!(dns_reverse, self.inner.config_store.dns_reverse);
         hydrate_val!(dns_listen, self.inner.config_store.dns_listen);
         hydrate_val!(site_domains, self.inner.config_store.site_domains);
@@ -797,6 +823,12 @@ impl LanforgeContext {
     /// The global adblock rules file's text.
     pub fn get_dns_adblock_rules(&self) -> String {
         self.with_config(|c| c.dns_adblock_rules.0.clone())
+    }
+
+    /// The adblock groups and `bypass`.
+    #[must_use]
+    pub fn get_dns_adblock_policy(&self) -> AdblockPolicy {
+        self.with_config(|c| c.dns_adblock_policy.clone())
     }
 
     /// The site's search domains DNS answers for.

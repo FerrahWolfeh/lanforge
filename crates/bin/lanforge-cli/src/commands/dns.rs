@@ -1869,10 +1869,15 @@ async fn check_adblock_domain(
         };
         println!("    {:<18} {action_str}", "Verdict:".dimmed());
 
-        let origin_str = match m.origin {
+        let origin_str = match &m.origin {
             FilterOrigin::UserRule => "Custom User Rule".to_string(),
             FilterOrigin::UserAllowlist => "User Allowlist".to_string(),
             FilterOrigin::List { source_id } => format!("Filter Source #{source_id}"),
+            FilterOrigin::GroupRule { group } => format!("Group \"{group}\" rule"),
+            FilterOrigin::GroupAllowlist { group } => format!("Group \"{group}\" allowlist"),
+            FilterOrigin::GroupList { group, source_id } => {
+                format!("Group \"{group}\" source #{source_id}")
+            }
         };
         println!("    {:<18} {}", "Origin:".dimmed(), origin_str.cyan());
 
