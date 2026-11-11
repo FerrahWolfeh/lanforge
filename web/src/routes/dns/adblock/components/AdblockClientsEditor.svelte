@@ -6,6 +6,7 @@
 	import XIcon from "@lucide/svelte/icons/x";
 	import PlusIcon from "@lucide/svelte/icons/plus";
 	import type { AdblockClientEntry, DeviceEntry } from "$lib/api/types";
+	import { adblockClientMacs, adblockClientNames } from "$lib/utils";
 
 	/**
 	 * Edits a list of adblock client selectors: a device (`dev:<name>`, or `dev:<mac>` when it
@@ -39,9 +40,8 @@
 		address = "";
 	}
 
-	function names(selector: string): string {
-		const entry = known.find((k) => k.selector === selector);
-		return entry ? entry.devices.map((d) => d.name).join(", ") : "";
+	function devicesOf(selector: string) {
+		return known.find((k) => k.selector === selector)?.devices ?? [];
 	}
 </script>
 
@@ -51,10 +51,14 @@
 	{:else}
 		<div class="flex flex-wrap gap-1.5">
 			{#each clients as selector (selector)}
-				<Badge variant="secondary" class="gap-1 pr-1 font-mono text-[11px]">
+				<Badge
+					variant="secondary"
+					class="h-auto max-w-full gap-1 pr-1 font-mono text-[11px] whitespace-normal break-all"
+					title={adblockClientMacs(devicesOf(selector))}
+				>
 					<span>{selector}</span>
-					{#if names(selector)}
-						<span class="font-sans text-muted-foreground">({names(selector)})</span>
+					{#if devicesOf(selector).length > 0}
+						<span class="font-sans text-muted-foreground">({adblockClientNames(devicesOf(selector))})</span>
 					{/if}
 					<button
 						type="button"

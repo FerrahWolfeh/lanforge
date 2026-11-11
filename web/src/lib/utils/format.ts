@@ -143,3 +143,18 @@ export function formatBuild(token: string | null | undefined): string {
 	const [hash, , dirty] = meta.split(".");
 	return `v${version} · ${hash}${dirty === "dirty" ? " · local changes" : ""}`;
 }
+
+/**
+ * The devices an adblock client selector names, one entry per distinct name: a phone with a
+ * randomized MAC shows up as several devices with the same name ("Pixel ×3").
+ */
+export function adblockClientNames(devices: { mac: string; name: string }[]): string {
+	const counts = new Map<string, number>();
+	for (const d of devices) counts.set(d.name, (counts.get(d.name) ?? 0) + 1);
+	return [...counts].map(([name, n]) => (n > 1 ? `${name} ×${n}` : name)).join(", ");
+}
+
+/** The MAC addresses behind an adblock client selector, for a tooltip. */
+export function adblockClientMacs(devices: { mac: string; name: string }[]): string {
+	return devices.map((d) => `${d.name}: ${d.mac}`).join("\n");
+}

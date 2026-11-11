@@ -13,6 +13,7 @@
 	import ShieldOffIcon from "@lucide/svelte/icons/shield-off";
 	import LayersIcon from "@lucide/svelte/icons/layers";
 	import { toast } from "svelte-sonner";
+	import { adblockClientMacs, adblockClientNames } from "$lib/utils";
 	import {
 		dnsAdblockGroups,
 		dnsAdblockGroupDelete,
@@ -82,7 +83,11 @@
 	}
 
 	function clientLabel(c: AdblockClientEntry): string {
-		return c.devices.length > 0 ? c.devices.map((d) => d.name).join(", ") : c.selector;
+		return c.devices.length > 0 ? adblockClientNames(c.devices) : c.selector;
+	}
+
+	function clientTitle(c: AdblockClientEntry): string {
+		return c.devices.length > 0 ? `${c.selector}\n${adblockClientMacs(c.devices)}` : c.selector;
 	}
 
 	onMount(load);
@@ -119,7 +124,7 @@
 				<ShieldOffIcon class="size-3.5 text-amber-500" />
 				<span class="font-medium">Never filtered:</span>
 				{#each data.bypass as c (c.selector)}
-					<Badge variant="outline" class="font-mono text-[11px]" title={c.selector}>{clientLabel(c)}</Badge>
+					<Badge variant="outline" class="h-auto max-w-full font-mono text-[11px] whitespace-normal break-all" title={clientTitle(c)}>{clientLabel(c)}</Badge>
 				{/each}
 			</Card.Content>
 		</Card.Root>
@@ -166,7 +171,7 @@
 							{:else}
 								<div class="flex flex-wrap gap-1">
 									{#each group.clients as c (c.selector)}
-										<Badge variant="secondary" class="font-mono text-[11px]" title={c.selector}>
+										<Badge variant="secondary" class="h-auto max-w-full font-mono text-[11px] whitespace-normal break-all" title={clientTitle(c)}>
 											{clientLabel(c)}
 										</Badge>
 									{/each}
