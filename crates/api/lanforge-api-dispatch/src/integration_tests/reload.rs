@@ -927,3 +927,206 @@ async fn a_group_change_drops_the_sources_nothing_uses_any_more() {
         .collect();
     assert_eq!(names, ["teens"]);
 }
+
+/// The incremental adblock calls (the CLI's): a group gains and loses lists (by name or URL) and
+/// clients one at a time, `bypass` likewise, a device joins and leaves groups without touching
+/// the others, and block/allow/unallow/allowlist work on a group's rules file. Taking out what
+/// is not there is `NotFound`, never a silent success.
+#[cfg(feature = "adblock")]
+#[tokio::test]
+async fn adblock_groups_change_one_member_at_a_time() {
+    use lanforge_api::api::{AdblockGroupChange, Response};
+    use lanforge_types::update::DeviceUpdate;
+    use std::time::SystemTime;
+
+    let file = "[adblock]\nenabled = true\nlists = [\"g\"]\n\n\
+                [adblock.sources.g]\nurl = \"https://example.com/g\"\n\n\
+                [adblock.sources.k]\nurl = \"https://example.com/k\"\n\n\
+                [adblock.groups.kids]\nclients = [\"192.168.1.64/28\"]\n\n\
+                [adblock.groups.bank]\n";
+    let (client, dir, path) = with_file(file);
+    reload(&client).await;
+    let mac = MacAddr::parse("aa:aa:aa:aa:aa:02").unwrap();
+    let _ = client.ctx.apply(DeviceUpdate::V4LeaseGranted {
+        mac,
+        ip: "192.168.1.18".parse().unwrap(),
+        expires: SystemTime::now() + Duration::from_secs(3600),
+    });
+    let _ = client.ctx.apply(DeviceUpdate::DhcpHostnameHint {
+        mac,
+        hostname: "tablet".into(),
+    });
+    let ok = |res: Response| assert!(matches!(res, Response::Success(_)), "{res:?}");
+    let not_found = |res: Response| assert!(matches!(res, Response::NotFound { .. }), "{res:?}");
+    let policy = || client.ctx.get_dns_adblock_policy();
+    let clients = |group: usize| -> Vec<String> {
+        policy().groups[group]
+            .clients
+            .iter()
+            .map(ToString::to_string)
+            .collect()
+    };
+    let change = |add_lists: &[&str], remove_lists: &[&str], add: &[&str], remove: &[&str]| {
+        let v = |s: &[&str]| s.iter().map(ToString::to_string).collect();
+        AdblockGroupChange {
+            add_lists: v(add_lists),
+            remove_lists: v(remove_lists),
+            add_clients: v(add),
+            remove_clients: v(remove),
+        }
+    };
+
+    // A list by URL lands as its name; a client is added once; the other member stays.
+    ok(client
+        .handle_dns_adblock_group_change(
+            "kids".into(),
+            change(
+                &["https://example.com/k"],
+                &[],
+                &["10.0.0.5", "10.0.0.5"],
+                &[],
+            ),
+        )
+        .await);
+    assert_eq!(policy().groups[0].sources[0].url, "https://example.com/k");
+    assert_eq!(clients(0), ["192.168.1.64/28", "10.0.0.5"]);
+    assert!(
+        fs::read_to_string(&path)
+            .unwrap()
+            .contains("lists = [\"k\"]")
+    );
+    // Taking out one member keeps the rest.
+    ok(client
+        .handle_dns_adblock_group_change(
+            "kids".into(),
+            change(&[], &["k"], &[], &["192.168.1.64/28"]),
+        )
+        .await);
+    assert!(policy().groups[0].sources.is_empty());
+    assert_eq!(clients(0), ["10.0.0.5"]);
+    // Not there, unknown group, bad selector, unknown list.
+    not_found(
+        client
+            .handle_dns_adblock_group_change("kids".into(), change(&[], &[], &[], &["10.9.9.9"]))
+            .await,
+    );
+    not_found(
+        client
+            .handle_dns_adblock_group_change("kids".into(), change(&[], &["g"], &[], &[]))
+            .await,
+    );
+    not_found(
+        client
+            .handle_dns_adblock_group_change("nope".into(), change(&[], &[], &["10.0.0.1"], &[]))
+            .await,
+    );
+    let res = client
+        .handle_dns_adblock_group_change("kids".into(), change(&[], &[], &["dev:"], &[]))
+        .await;
+    assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
+    let res = client
+        .handle_dns_adblock_group_change("kids".into(), change(&["missing"], &[], &[], &[]))
+        .await;
+    assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
+    assert_eq!(clients(0), ["10.0.0.5"], "refused changes apply nothing");
+
+    // bypass: add two, take one out, a missing one is NotFound.
+    ok(client
+        .handle_dns_adblock_bypass_change(vec!["10.0.0.7".into(), "dev:tv".into()], Vec::new())
+        .await);
+    ok(client
+        .handle_dns_adblock_bypass_change(Vec::new(), vec!["10.0.0.7".into()])
+        .await);
+    let bypass: Vec<String> = policy().bypass.iter().map(ToString::to_string).collect();
+    assert_eq!(bypass, ["dev:tv"]);
+    not_found(
+        client
+            .handle_dns_adblock_bypass_change(Vec::new(), vec!["10.0.0.7".into()])
+            .await,
+    );
+
+    // The device side: join one group, then the other, the first membership stays.
+    ok(client
+        .handle_dns_adblock_device_change(mac, vec!["kids".into()], Vec::new(), None)
+        .await);
+    ok(client
+        .handle_dns_adblock_device_change(mac, vec!["bank".into()], Vec::new(), Some(true))
+        .await);
+    assert_eq!(clients(0), ["10.0.0.5", "dev:tablet"]);
+    assert_eq!(clients(1), ["dev:tablet"]);
+    assert!(
+        policy()
+            .bypass
+            .iter()
+            .any(|c| c.to_string() == "dev:tablet")
+    );
+    ok(client
+        .handle_dns_adblock_device_change(mac, Vec::new(), vec!["kids".into()], Some(false))
+        .await);
+    assert_eq!(clients(0), ["10.0.0.5"]);
+    assert_eq!(clients(1), ["dev:tablet"], "bank untouched");
+    assert!(
+        !policy()
+            .bypass
+            .iter()
+            .any(|c| c.to_string() == "dev:tablet")
+    );
+    // Leaving a group that does not name it, an unknown group, an unknown device.
+    not_found(
+        client
+            .handle_dns_adblock_device_change(mac, Vec::new(), vec!["kids".into()], None)
+            .await,
+    );
+    not_found(
+        client
+            .handle_dns_adblock_device_change(mac, vec!["nope".into()], Vec::new(), None)
+            .await,
+    );
+    not_found(
+        client
+            .handle_dns_adblock_device_change(
+                MacAddr::parse("aa:aa:aa:aa:aa:99").unwrap(),
+                vec!["kids".into()],
+                Vec::new(),
+                None,
+            )
+            .await,
+    );
+
+    // block/allow/unallow/allowlist on a group's rules file, the global one untouched.
+    ok(client
+        .handle_dns_allow("bank.example".into(), Some("bank".into()))
+        .await);
+    ok(client
+        .handle_dns_block("ads.example".into(), Some("bank".into()))
+        .await);
+    let rules = fs::read_to_string(dir.path().join("adblock/bank.rules")).unwrap();
+    assert!(
+        rules.contains("@@||bank.example^") && rules.contains("||ads.example^"),
+        "{rules}"
+    );
+    assert!(
+        client.ctx.get_dns_adblock_rules().is_empty(),
+        "global untouched"
+    );
+    let Response::DnsAllowlist(list) = client.handle_dns_allowlist(Some("bank".into())).await
+    else {
+        panic!("group allowlist");
+    };
+    assert_eq!(list.allowlist.len(), 1);
+    assert_eq!(list.allowlist[0].domain, "bank.example");
+    let Response::DnsAllowlist(global) = client.handle_dns_allowlist(None).await else {
+        panic!("global allowlist");
+    };
+    assert!(global.allowlist.is_empty());
+    not_found(client.handle_dns_allowlist(Some("nope".into())).await);
+    ok(client
+        .handle_dns_unallow("bank.example".into(), Some("bank".into()))
+        .await);
+    assert!(!policy().groups[1].rules.contains("@@||bank.example^"));
+    not_found(
+        client
+            .handle_dns_unallow("bank.example".into(), Some("bank".into()))
+            .await,
+    );
+}

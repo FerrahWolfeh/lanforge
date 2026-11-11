@@ -193,6 +193,20 @@ pub struct AdblockGroupEntry {
     pub clients: Vec<AdblockClientEntry>,
 }
 
+/// Members to add to an adblock group and to take out of it: lists by source name or URL,
+/// clients by selector (`192.168.1.64/28`, `dev:<name|mac>`).
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct AdblockGroupChange {
+    #[serde(default)]
+    pub add_lists: Vec<String>,
+    #[serde(default)]
+    pub remove_lists: Vec<String>,
+    #[serde(default)]
+    pub add_clients: Vec<String>,
+    #[serde(default)]
+    pub remove_clients: Vec<String>,
+}
+
 /// The adblock groups, in file order, and the bypassed clients.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct DnsAdblockGroupsResponse {

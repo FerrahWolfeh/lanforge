@@ -6,6 +6,7 @@ use axum::{
     response::IntoResponse,
     routing::{delete, get, post, put},
 };
+use lanforge_api::api::AdblockGroupChange;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::adblock::rules_file::RulesFile;
 use lanforge_types::network::dns::adblock::{
@@ -115,6 +116,26 @@ pub struct AdblockBypassRequest {
     pub clients: Vec<String>,
 }
 
+/// Clients to add to and take out of `bypass`.
+#[derive(Debug, Deserialize)]
+pub struct AdblockBypassChangeRequest {
+    #[serde(default)]
+    pub add: Vec<String>,
+    #[serde(default)]
+    pub remove: Vec<String>,
+}
+
+/// Groups for a device to join and leave; `bypass` absent leaves it as it is.
+#[derive(Debug, Deserialize)]
+pub struct AdblockDeviceChangeRequest {
+    #[serde(default)]
+    pub join: Vec<String>,
+    #[serde(default)]
+    pub leave: Vec<String>,
+    #[serde(default)]
+    pub bypass: Option<bool>,
+}
+
 /// The groups a device is in, and whether it is bypassed.
 #[derive(Debug, Deserialize)]
 pub struct AdblockDeviceRequest {
@@ -168,10 +189,18 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/adblock/groups/{name}",
-            put(handle_adblock_group_update).delete(handle_adblock_group_delete),
+            put(handle_adblock_group_update)
+                .patch(handle_adblock_group_change)
+                .delete(handle_adblock_group_delete),
         )
-        .route("/adblock/bypass", put(handle_adblock_bypass_set))
-        .route("/adblock/devices/{mac}", put(handle_adblock_device_set))
+        .route(
+            "/adblock/bypass",
+            put(handle_adblock_bypass_set).patch(handle_adblock_bypass_change),
+        )
+        .route(
+            "/adblock/devices/{mac}",
+            put(handle_adblock_device_set).patch(handle_adblock_device_change),
+        )
 }
 
 async fn handle_adblock_status(State(state): State<AppState>) -> impl IntoResponse {
@@ -264,9 +293,12 @@ async fn handle_adblock_url_remove(
     )
 }
 
-async fn handle_allowlist(State(state): State<AppState>) -> impl IntoResponse {
+async fn handle_allowlist(
+    State(state): State<AppState>,
+    Query(query): Query<AdblockGroupQuery>,
+) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_dns_allowlist().await, DnsAllowlist)
+    crate::http_response!(ctx.handle_dns_allowlist(query.group).await, DnsAllowlist)
 }
 
 async fn handle_adblock_rules(
@@ -385,6 +417,42 @@ async fn handle_adblock_group_update(
     let ctx = create_client_ctx(&state);
     crate::http_response!(
         ctx.handle_dns_adblock_group_update(name, payload.lists, payload.clients)
+            .await,
+        Success => NoContent
+    )
+}
+
+async fn handle_adblock_group_change(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(payload): Json<AdblockGroupChange>,
+) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(
+        ctx.handle_dns_adblock_group_change(name, payload).await,
+        Success => NoContent
+    )
+}
+
+async fn handle_adblock_bypass_change(
+    State(state): State<AppState>,
+    Json(payload): Json<AdblockBypassChangeRequest>,
+) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(
+        ctx.handle_dns_adblock_bypass_change(payload.add, payload.remove).await,
+        Success => NoContent
+    )
+}
+
+async fn handle_adblock_device_change(
+    State(state): State<AppState>,
+    Path(mac): Path<MacAddr>,
+    Json(payload): Json<AdblockDeviceChangeRequest>,
+) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(
+        ctx.handle_dns_adblock_device_change(mac, payload.join, payload.leave, payload.bypass)
             .await,
         Success => NoContent
     )

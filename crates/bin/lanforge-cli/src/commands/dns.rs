@@ -1754,7 +1754,7 @@ async fn add_adblock_block(
         None => Text::new("Domain name to block:").prompt()?,
     };
 
-    let resp = client.dns_block(domain.clone()).await?;
+    let resp = client.dns_block(domain.clone(), None).await?;
     if printer.json {
         return printer.print_json(&resp);
     }
@@ -1775,7 +1775,7 @@ async fn add_adblock_allow(
         None => Text::new("Domain name to allow:").prompt()?,
     };
 
-    let resp = client.dns_allow(domain.clone()).await?;
+    let resp = client.dns_allow(domain.clone(), None).await?;
     if printer.json {
         return printer.print_json(&resp);
     }
@@ -1794,7 +1794,7 @@ async fn remove_adblock_allow(
     let domain = if let Some(d) = domain_opt {
         d
     } else {
-        let resp = client.dns_allowlist().await?;
+        let resp = client.dns_allowlist(None).await?;
         if resp.allowlist.is_empty() {
             bail!("No allowlist entries configured.");
         }
@@ -1808,7 +1808,7 @@ async fn remove_adblock_allow(
         parts[0].to_string()
     };
 
-    let resp = client.dns_unallow(domain.clone()).await?;
+    let resp = client.dns_unallow(domain.clone(), None).await?;
     if printer.json {
         return printer.print_json(&resp);
     }
@@ -1817,7 +1817,7 @@ async fn remove_adblock_allow(
 }
 
 async fn show_adblock_allowlist(client: &LanforgeClient, printer: &Printer) -> Result<()> {
-    let resp = client.dns_allowlist().await?;
+    let resp = client.dns_allowlist(None).await?;
 
     if printer.json {
         return printer.print_json(&resp);
@@ -2024,7 +2024,7 @@ async fn add_adblock_source(
     };
 
     let resp = client
-        .dns_adblock_url_add(url.clone(), kind, format)
+        .dns_adblock_url_add(None, url.clone(), kind, format, None)
         .await?;
     if printer.json {
         return printer.print_json(&resp);

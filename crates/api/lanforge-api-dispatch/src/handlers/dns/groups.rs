@@ -9,7 +9,8 @@ use std::path::Path;
 use std::str::FromStr;
 
 use lanforge_api::api::{
-    AdblockClientDevice, AdblockClientEntry, AdblockGroupEntry, DnsAdblockGroupsResponse, Response,
+    AdblockClientDevice, AdblockClientEntry, AdblockGroupChange, AdblockGroupEntry,
+    DnsAdblockGroupsResponse, Response,
 };
 use lanforge_api::config_file::AdblockGroup;
 use lanforge_core::context::state::State;
@@ -232,15 +233,127 @@ impl ClientContext {
         )
     }
 
-    /// Makes the device `mac` a member of exactly `groups` and bypassed or not. It is added as
-    /// `dev:<name>` (it keeps matching when an Android re-randomizes its MAC), or `dev:<mac>`
-    /// without a name; a `dev:` selector naming it is removed where it is no longer wanted.
-    /// Subnet selectors are left alone: a device in a group through its subnet stays in it.
+    /// Adds to and takes out of `[adblock] bypass`. Taking out a client that is not there is
+    /// `NotFound` (a typo must not pass for done).
+    pub async fn handle_dns_adblock_bypass_change(
+        &self,
+        add: Vec<String>,
+        remove: Vec<String>,
+    ) -> Response {
+        let (add, remove) = match (parse_clients(&add), parse_clients(&remove)) {
+            (Ok(add), Ok(remove)) => (add, remove),
+            (Err(error), _) | (_, Err(error)) => return Response::Rejected { error },
+        };
+        let live = self.live_adblock_settings();
+        if let Some(missing) = remove.iter().find(|c| !live.bypass.contains(c)) {
+            return Response::NotFound {
+                error: format!("client \"{missing}\" is not in the adblock bypass"),
+            };
+        }
+        dns_reply(
+            self.change_adblock(|a| edit_clients(&mut a.bypass, add, &remove)),
+            "Adblock bypass updated".to_string(),
+        )
+    }
+
+    /// Adds members to a group and takes members out of it. A list is named by its source name
+    /// or URL, a client by its selector. Taking out a member the group does not have is
+    /// `NotFound`; adding one it has changes nothing.
+    pub async fn handle_dns_adblock_group_change(
+        &self,
+        name: String,
+        change: AdblockGroupChange,
+    ) -> Response {
+        let (add_clients, remove_clients) = match (
+            parse_clients(&change.add_clients),
+            parse_clients(&change.remove_clients),
+        ) {
+            (Ok(add), Ok(remove)) => (add, remove),
+            (Err(error), _) | (_, Err(error)) => return Response::Rejected { error },
+        };
+        let live = self.live_adblock_settings();
+        let Some(group) = live.groups.iter().find(|g| g.name == name) else {
+            return Response::NotFound {
+                error: format!("adblock group \"{name}\""),
+            };
+        };
+        let list_name = |text: &String| {
+            live.sources
+                .iter()
+                .find(|s| &s.url == text)
+                .and_then(|s| s.name.clone())
+                .unwrap_or_else(|| text.clone())
+        };
+        let add_lists: Vec<String> = change.add_lists.iter().map(list_name).collect();
+        let remove_lists: Vec<String> = change.remove_lists.iter().map(list_name).collect();
+        let missing: Vec<String> = remove_lists
+            .iter()
+            .filter(|l| !group.lists.contains(l))
+            .map(|l| format!("list \"{l}\""))
+            .chain(
+                remove_clients
+                    .iter()
+                    .filter(|c| !group.clients.contains(c))
+                    .map(|c| format!("client \"{c}\"")),
+            )
+            .collect();
+        if !missing.is_empty() {
+            return Response::NotFound {
+                error: format!("not in adblock group \"{name}\": {}", missing.join(", ")),
+            };
+        }
+        dns_reply(
+            self.change_adblock(|a| {
+                if let Some(group) = a.groups.iter_mut().find(|g| g.name == name) {
+                    for list in add_lists {
+                        if !group.lists.contains(&list) {
+                            group.lists.push(list);
+                        }
+                    }
+                    group.lists.retain(|l| !remove_lists.contains(l));
+                    edit_clients(&mut group.clients, add_clients, &remove_clients);
+                }
+            }),
+            format!("Adblock group \"{name}\" updated"),
+        )
+    }
+
+    /// Makes the device `mac` a member of exactly `groups` and bypassed or not (the `WebUI`'s
+    /// device menu). See [`Self::set_device_adblock`].
     pub async fn handle_dns_adblock_device_set(
         &self,
         mac: MacAddr,
         groups: Vec<String>,
         bypass: bool,
+    ) -> Response {
+        self.set_device_adblock(mac, &groups, &[], Some(bypass), true)
+    }
+
+    /// Puts the device `mac` in the groups `join`, takes it out of `leave`, and bypasses it or
+    /// not (`bypass`), leaving the rest as it is. Leaving a group that does not name the device
+    /// is `NotFound`: it may be in it through a subnet, which only the group can change.
+    pub async fn handle_dns_adblock_device_change(
+        &self,
+        mac: MacAddr,
+        join: Vec<String>,
+        leave: Vec<String>,
+        bypass: Option<bool>,
+    ) -> Response {
+        self.set_device_adblock(mac, &join, &leave, bypass, false)
+    }
+
+    /// The device `mac` in the groups `join`, out of the groups `leave` (with `exact`: out of
+    /// every group not in `join`), bypassed per `bypass` (`None`: as it is). It is added as
+    /// `dev:<name>` (it keeps matching when an Android re-randomizes its MAC), or `dev:<mac>`
+    /// without a name; a `dev:` selector naming it is removed where it is no longer wanted.
+    /// Subnet selectors are left alone: a device in a group through its subnet stays in it.
+    fn set_device_adblock(
+        &self,
+        mac: MacAddr,
+        join: &[String],
+        leave: &[String],
+        bypass: Option<bool>,
+        exact: bool,
     ) -> Response {
         let Some(device) = self.ctx.get_device(&mac) else {
             return Response::NotFound {
@@ -255,19 +368,27 @@ impl ClientContext {
                 Err(_) => ClientSelector::Device(DeviceIdentifier::Mac(mac)),
             }
         };
-        let known = self.live_adblock_settings();
-        if let Some(unknown) = groups
-            .iter()
-            .find(|name| !known.groups.iter().any(|g| &&g.name == name))
-        {
-            return Response::NotFound {
-                error: format!("adblock group \"{unknown}\""),
-            };
-        }
         let names_it = |s: &ClientSelector| {
             s.needs_device()
                 && s.matches(IpAddr::V4(Ipv4Addr::UNSPECIFIED), Some(mac), Some(&device))
         };
+        let known = self.live_adblock_settings();
+        let group = |name: &String| known.groups.iter().find(|g| &g.name == name);
+        if let Some(unknown) = join.iter().chain(leave).find(|n| group(n).is_none()) {
+            return Response::NotFound {
+                error: format!("adblock group \"{unknown}\""),
+            };
+        }
+        if let Some(not_in) = leave
+            .iter()
+            .find(|n| group(n).is_some_and(|g| !g.clients.iter().any(names_it)))
+        {
+            return Response::NotFound {
+                error: format!(
+                    "device {mac} is not in adblock group \"{not_in}\" by name (a subnet of the group may still cover it)"
+                ),
+            };
+        }
         let set = |clients: &mut Vec<ClientSelector>, wanted: bool| {
             if wanted {
                 if !clients.iter().any(names_it) {
@@ -280,11 +401,31 @@ impl ClientContext {
         dns_reply(
             self.change_adblock(|a| {
                 for group in &mut a.groups {
-                    set(&mut group.clients, groups.contains(&group.name));
+                    if join.contains(&group.name) {
+                        set(&mut group.clients, true);
+                    } else if exact || leave.contains(&group.name) {
+                        set(&mut group.clients, false);
+                    }
                 }
-                set(&mut a.bypass, bypass);
+                if let Some(bypass) = bypass {
+                    set(&mut a.bypass, bypass);
+                }
             }),
             format!("Adblock groups of {mac} updated"),
         )
     }
+}
+
+/// `clients` with `add` appended (those it lacks) and `remove` taken out.
+fn edit_clients(
+    clients: &mut Vec<ClientSelector>,
+    add: Vec<ClientSelector>,
+    remove: &[ClientSelector],
+) {
+    for client in add {
+        if !clients.contains(&client) {
+            clients.push(client);
+        }
+    }
+    clients.retain(|c| !remove.contains(c));
 }

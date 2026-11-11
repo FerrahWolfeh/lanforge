@@ -1037,6 +1037,55 @@ async fn test_adblock_groups_contract() {
         .await;
     assert!(status.is_client_error(), "got {status}");
 
+    // The incremental routes (the CLI's): one member in, one out; what is not there is a 404.
+    let (status, body) = app
+        .patch(
+            "/api/v1/dns/adblock/groups/kids",
+            &json!({"add_clients": ["dev:tablet"], "remove_clients": ["192.168.1.64/28"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    let (_, body) = app.get("/api/v1/dns/adblock/groups").await;
+    assert_eq!(
+        body["data"]["groups"][0]["clients"][0]["selector"],
+        "dev:tablet"
+    );
+    let (status, _) = app
+        .patch(
+            "/api/v1/dns/adblock/groups/kids",
+            &json!({"remove_clients": ["10.9.9.9"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = app
+        .patch("/api/v1/dns/adblock/groups/nope", &json!({}))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, body) = app
+        .patch("/api/v1/dns/adblock/bypass", &json!({"add": ["10.0.0.7"]}))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    let (_, body) = app.get("/api/v1/dns/adblock/groups").await;
+    assert_eq!(body["data"]["bypass"][0]["selector"], "10.0.0.7");
+    let (status, _) = app
+        .patch(
+            "/api/v1/dns/adblock/bypass",
+            &json!({"add": ["not a client"]}),
+        )
+        .await;
+    assert!(status.is_client_error(), "got {status}");
+    let (status, _) = app
+        .patch(
+            "/api/v1/dns/adblock/devices/aa:bb:cc:dd:ee:ff",
+            &json!({"join": ["kids"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, body) = app.get("/api/v1/dns/adblock/allowlist?group=kids").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _) = app.get("/api/v1/dns/adblock/allowlist?group=nope").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
     let (status, _) = app.delete("/api/v1/dns/adblock/groups/kids").await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 }
