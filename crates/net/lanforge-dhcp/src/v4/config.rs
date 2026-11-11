@@ -33,7 +33,8 @@ pub struct Dhcpv4Config {
     pub lease_time: u32,
     /// Default gateway announced to clients (Option 3 — Router).
     pub router: Ipv4Addr,
-    /// DNS servers announced to clients (Option 6).
+    /// DNS servers announced to clients (Option 6). Empty: this server's own address
+    /// (`server_id`), resolved when the service applies its config.
     pub dns: Vec<Ipv4Addr>,
     /// Subnet mask announced to clients (Option 1, default: 255.255.255.0).
     pub subnet_mask: Ipv4Addr,
@@ -64,7 +65,7 @@ impl Default for Dhcpv4Config {
             pools: Vec::new(),
             lease_time: 86400,
             router: Ipv4Addr::new(192, 168, 0, 1),
-            dns: vec![Ipv4Addr::new(192, 168, 0, 1)],
+            dns: Vec::new(),
             subnet_mask: Ipv4Addr::new(255, 255, 255, 0),
             domain_name: None,
             search_domains: Vec::new(),
