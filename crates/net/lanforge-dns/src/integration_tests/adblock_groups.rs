@@ -388,3 +388,26 @@ fn a_group_overrides_the_global_layer() {
     };
     assert_eq!(verdict("ads.example.com", bypass), None);
 }
+
+/// A list added while the daemon was down (here a group's) is downloaded at boot even though
+/// the lists already on disk are fresh: before, a fresh cache skipped the whole download pass
+/// and the new list stayed empty until the next daily refresh.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_list_added_while_down_is_downloaded_at_boot() {
+    let port = spawn_list_server().await;
+    let dir = tempfile::tempdir().unwrap();
+
+    let ctx = init_test_context();
+    ctx.update_dns_adblock_urls(vec![source(port, "global.txt")]);
+    let (dns, _upstream) = start(&ctx, dir.path()).await;
+    wait_for(&dns, "192.168.1.20", "ads.example.com", BLOCKED).await;
+    ctx.terminate();
+    sleep(Duration::from_millis(200)).await;
+
+    let ctx = init_test_context();
+    ctx.update_dns_adblock_urls(vec![source(port, "global.txt")]);
+    let _ = ctx.apply_config(ConfigPatch::new().with_dns_adblock_policy(owner_policy(port)));
+    let (dns, _upstream) = start(&ctx, dir.path()).await;
+    wait_for(&dns, "192.168.1.70", "games.example.com", BLOCKED).await;
+    ctx.terminate();
+}

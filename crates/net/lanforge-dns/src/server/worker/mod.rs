@@ -206,7 +206,11 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                     info!("Adblock: re-enabled with recent lists, skipping download pass");
                 }
                 if !cache_loaded {
-                    let compiled = compiled_lists(&sources_dir, &adblock_sources(&ctx.ctx));
+                    let configured = adblock_sources(&ctx.ctx);
+                    let compiled = compiled_lists(&sources_dir, &configured);
+                    // A configured list never downloaded yet (added while the daemon was down)
+                    // needs the download pass, however fresh the others are.
+                    let all_compiled = compiled.len() == configured.len();
                     if !compiled.is_empty() {
                         info!("Adblock: loading compiled lists from disk");
                         if let Some(bl) = load_lists(&sources_dir, compiled).await
@@ -221,12 +225,14 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                 .unwrap_or_default()
                                 .as_secs();
                             let elapsed = now.saturating_sub(manifest.last_merge);
-                            if elapsed < 20 * 3600 {
+                            if elapsed < 20 * 3600 && all_compiled {
                                 skip_download_pass = true;
                                 info!(
                                     fingerprint = format_args!("{:016x}", manifest.fingerprint),
                                     "Adblock: cached lists are fresh, skipping startup download"
                                 );
+                            } else if !all_compiled {
+                                info!("Adblock: lists never downloaded are configured, updating");
                             } else {
                                 info!(
                                     "Adblock: cached lists are stale, scheduling background update"
