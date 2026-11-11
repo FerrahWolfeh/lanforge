@@ -922,6 +922,7 @@ export interface AdblockSourceStatus {
 	consecutive_failures: number;
 	last_error?: string | null;
 	sample_unsupported: string[];
+	kind: 'blocklist' | 'allowlist';
 }
 
 export interface DnsAdblockSourcesResponse {
@@ -968,6 +969,34 @@ export interface DnsAdblockStatusResponse {
 	blocking_ip_v4?: string | null;
 	blocking_ip_v6?: string | null;
 	refresh_time: TimeOfDay;
+}
+
+/** A device an adblock client selector names now. */
+export interface AdblockClientDevice {
+	mac: string;
+	name: string;
+}
+
+/** A client of an adblock group or bypass: `192.168.1.64/28`, `10.0.0.5`, `dev:<name|mac>`. */
+export interface AdblockClientEntry {
+	selector: string;
+	devices: AdblockClientDevice[];
+}
+
+/** An adblock group: an override of the global layer for its clients. */
+export interface AdblockGroupEntry {
+	name: string;
+	/** Source names of the lists only this group adds. */
+	lists: string[];
+	rules_file?: string | null;
+	allow_rules: number;
+	block_rules: number;
+	clients: AdblockClientEntry[];
+}
+
+export interface DnsAdblockGroupsResponse {
+	groups: AdblockGroupEntry[];
+	bypass: AdblockClientEntry[];
 }
 
 export interface DnsAdblockUrlEntry {

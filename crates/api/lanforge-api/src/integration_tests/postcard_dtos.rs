@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::api::dns::{DnsQueryLogEntry, DnsUpstreamConfig, QueryRateEntry};
 use crate::api::system::SystemConfigExport;
-use lanforge_types::network::dns::adblock::{AdblockSourceFormat, FilterAction};
+use lanforge_types::network::dns::adblock::{AdblockSourceFormat, AdblockUrlKind, FilterAction};
 use lanforge_types::network::dns::{
     AdblockCheckResponse, AdblockSourceMatch, AdblockSourceStatus, DnsRecordType, QueryResult,
     UpstreamHealthSnapshot, UpstreamProtocol, UpstreamStatus,
@@ -88,6 +88,7 @@ fn dns_dtos_with_empty_optional_fields_cross_the_socket() {
         consecutive_failures: 0,
         last_error: None,
         sample_unsupported: Vec::new(),
+        kind: AdblockUrlKind::Allowlist,
     });
     assert_postcard_roundtrip("AdblockCheckResponse", || AdblockCheckResponse {
         domain: "example.com".into(),

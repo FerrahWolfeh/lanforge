@@ -902,6 +902,7 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
                                 consecutive_failures: sm.consecutive_failures,
                                 last_error: sm.last_error.clone(),
                                 sample_unsupported: sm.unsupported_samples.clone(),
+                                kind: u.kind,
                             }
                         } else {
                             AdblockSourceStatus {
@@ -918,6 +919,7 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
                                 consecutive_failures: 0,
                                 last_error: None,
                                 sample_unsupported: Vec::new(),
+                                kind: u.kind,
                             }
                         }
                     })

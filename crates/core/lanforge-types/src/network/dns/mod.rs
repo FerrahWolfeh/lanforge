@@ -797,6 +797,9 @@ pub struct AdblockSourceStatus {
     pub last_error: Option<String>,
     #[serde(default)]
     pub sample_unsupported: Vec<String>,
+    /// Blocklist or allowlist.
+    #[serde(default)]
+    pub kind: AdblockUrlKind,
 }
 
 /// Response containing status of all compiled adblock filter sources.

@@ -219,6 +219,25 @@ async fn groups_and_bypass_apply_per_client() {
     wait_for(&dns, "192.168.1.70", "games.example.com", BLOCKED).await;
     wait_for(&dns, "192.168.1.20", "ads.example.com", BLOCKED).await;
 
+    // The sources' status lists the group's list too (the WebUI's lists page), with its kind.
+    let res = ctx
+        .dns_handle()
+        .expect("DNS handle")
+        .send_request(DnsRequest::AdblockSources)
+        .await;
+    let Ok(DnsResponse::AdblockSources(sources)) = res else {
+        panic!("sources: {res:?}");
+    };
+    let urls: Vec<&str> = sources.sources.iter().map(|s| s.url.as_str()).collect();
+    assert_eq!(urls.len(), 2, "{urls:?}");
+    assert!(urls.iter().any(|u| u.ends_with("/kids.txt")), "{urls:?}");
+    assert!(
+        sources
+            .sources
+            .iter()
+            .all(|s| s.kind == AdblockUrlKind::Blocklist && s.blocks > 0)
+    );
+
     // The phone first: its allowed answer is cached, and must not reach the others.
     let pixel = "192.168.1.50";
     assert_eq!(
