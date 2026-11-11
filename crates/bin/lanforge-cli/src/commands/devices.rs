@@ -4,8 +4,11 @@ use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::str::FromStr;
 
-use lanforge_api::api::{DeviceEntry, DeviceListQuery, DevicesResponse, WhoisResponse};
+use lanforge_api::api::{
+    AdblockClientEntry, DeviceEntry, DeviceListQuery, DevicesResponse, WhoisResponse,
+};
 use lanforge_types::identifiers::MacAddr;
+use serde::Serialize;
 
 use crate::client::LanforgeClient;
 use crate::output::{Printer, format_duration_secs, format_time_ago};
@@ -50,6 +53,35 @@ pub enum DevicesSubcommand {
         /// MAC address of the device to purge
         mac: String,
     },
+    /// Show or change the adblock groups a device is in, and whether adblock bypasses it
+    Adblock(DeviceAdblockArgs),
+}
+
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+pub struct DeviceAdblockArgs {
+    /// MAC address, IP address or hostname of the device
+    pub target: String,
+    /// Put the device in this adblock group (as `dev:<name>`); repeatable
+    #[arg(long, value_name = "GROUP")]
+    pub join: Vec<String>,
+    /// Take the device out of this adblock group; repeatable
+    #[arg(long, value_name = "GROUP")]
+    pub leave: Vec<String>,
+    /// Never filter the device
+    #[arg(long, conflicts_with = "no_bypass")]
+    pub bypass: bool,
+    /// Filter the device again
+    #[arg(long)]
+    pub no_bypass: bool,
+}
+
+/// A device's adblock memberships, as `devices adblock --json` prints them.
+#[derive(Debug, Serialize)]
+struct DeviceAdblock {
+    mac: MacAddr,
+    name: String,
+    groups: Vec<String>,
+    bypass: bool,
 }
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq, Default)]
@@ -81,6 +113,7 @@ impl DevicesArgs {
             Some(DevicesSubcommand::List(args)) => list_devices(client, printer, args).await,
             Some(DevicesSubcommand::Show { target }) => show_device(client, printer, target).await,
             Some(DevicesSubcommand::Purge { mac }) => purge_device(client, printer, mac).await,
+            Some(DevicesSubcommand::Adblock(args)) => device_adblock(client, printer, args).await,
             None => {
                 let args = ListArgs {
                     filter: self.filter,
@@ -357,9 +390,124 @@ async fn purge_device(client: &LanforgeClient, printer: &Printer, mac_str: Strin
     Ok(())
 }
 
+/// Shows the adblock groups that name the device (`dev:` selectors) and its bypass, or, with
+/// `--join`/`--leave`/`--bypass`/`--no-bypass`, changes them and leaves the rest as it is.
+async fn device_adblock(
+    client: &LanforgeClient,
+    printer: &Printer,
+    args: DeviceAdblockArgs,
+) -> Result<()> {
+    let device = client.whois(args.target.clone()).await?.entry;
+    let mac = device.mac;
+    let bypass = match (args.bypass, args.no_bypass) {
+        (true, _) => Some(true),
+        (_, true) => Some(false),
+        _ => None,
+    };
+    if !args.join.is_empty() || !args.leave.is_empty() || bypass.is_some() {
+        let resp = client
+            .dns_adblock_device_change(mac, args.join, args.leave, bypass)
+            .await?;
+        if printer.json {
+            return printer.print_json(&resp);
+        }
+        printer.success(&format!("Adblock groups of {} updated.", args.target));
+        return Ok(());
+    }
+
+    let resp = client.dns_adblock_groups().await?;
+    let names_it = |c: &AdblockClientEntry| c.devices.iter().any(|d| d.mac == mac);
+    let status = DeviceAdblock {
+        mac,
+        name: device.hostname.clone(),
+        groups: resp
+            .groups
+            .iter()
+            .filter(|g| g.clients.iter().any(names_it))
+            .map(|g| g.name.clone())
+            .collect(),
+        bypass: resp.bypass.iter().any(names_it),
+    };
+    if printer.json {
+        return printer.print_json(&status);
+    }
+
+    println!();
+    let label = if status.name.is_empty() {
+        mac.to_string()
+    } else {
+        format!("{} ({mac})", status.name)
+    };
+    println!(
+        " {} Adblock for {}",
+        printer.status_badge(true),
+        label.bold().white()
+    );
+    let groups = if status.groups.is_empty() {
+        "none (global layer only)".dimmed().to_string()
+    } else {
+        status.groups.join(", ")
+    };
+    println!("    {:<10} {groups}", "Groups:".dimmed());
+    let bypass = if status.bypass {
+        "yes (never filtered)".yellow().to_string()
+    } else {
+        "no".to_string()
+    };
+    println!("    {:<10} {bypass}", "Bypass:".dimmed());
+    println!(
+        "    {}",
+        "Groups that cover it only through a subnet are not listed here.".dimmed()
+    );
+    println!();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::args::{Cli, Command};
+    use clap::Parser;
+
+    #[test]
+    fn device_adblock_flags_parse() {
+        let cli = Cli::try_parse_from([
+            "lanforge",
+            "devices",
+            "adblock",
+            "tablet",
+            "--join",
+            "kids",
+            "--join",
+            "bank",
+            "--leave",
+            "teens",
+            "--no-bypass",
+        ])
+        .unwrap();
+        let Some(Command::Devices(DevicesArgs {
+            subcommand: Some(DevicesSubcommand::Adblock(args)),
+            ..
+        })) = cli.command
+        else {
+            panic!("not devices adblock");
+        };
+        assert_eq!(args.target, "tablet");
+        assert_eq!(args.join, ["kids", "bank"]);
+        assert_eq!(args.leave, ["teens"]);
+        assert!(args.no_bypass && !args.bypass);
+        assert!(
+            Cli::try_parse_from([
+                "lanforge",
+                "devices",
+                "adblock",
+                "x",
+                "--bypass",
+                "--no-bypass"
+            ])
+            .is_err()
+        );
+    }
     use lanforge_api::api::DevicesMeta;
     use lanforge_types::device::{DeviceClass, DeviceStatus, LearningMethod, Origin};
 

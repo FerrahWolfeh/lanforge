@@ -74,6 +74,9 @@ lanforge devices -f 192.168.1.50       # Filter by IP, MAC, or hostname
 lanforge devices -a                    # Include stale and offline devices
 lanforge devices show <mac-or-name>    # Detailed identity card, lease history, and SLAAC addrs
 lanforge devices purge <mac-or-name>   # Remove device and its dynamic DNS records from DB
+lanforge devices adblock tablet        # Adblock groups that name the device, and its bypass
+lanforge devices adblock tablet --join kids --leave teens   # Join/leave groups (as dev:<name>)
+lanforge devices adblock tablet --bypass                    # Never filter it (--no-bypass undoes)
 ```
 
 ### `host` *(alias: `hosts`)*
@@ -146,6 +149,18 @@ lanforge dns adblock resume            # Re-enable adblocking immediately
 lanforge dns adblock block ads.foo.com # Add domain to custom blocklist
 lanforge dns adblock allow cdn.foo.com # Add domain to custom allowlist
 lanforge dns adblock check doubleclick.net # Test attribution and matching rules for a domain
+lanforge dns adblock check bank.example --client 192.168.1.20 # ...as that client gets it
+
+# Adblock groups: clients with their own lists and rules on top of the global layer
+lanforge dns adblock groups            # Groups, their lists, clients, rule counts; the bypass
+lanforge dns adblock groups show kids  # One group with its rules
+lanforge dns adblock groups create kids -c 192.168.1.64/28 -c dev:tablet -l <list>
+lanforge dns adblock groups add kids -l <name-or-url> -c dev:<name|mac>     # Add members
+lanforge dns adblock groups remove kids -c 192.168.1.64/28                  # Take members out
+lanforge dns adblock groups delete kids                    # The group and its rules file
+lanforge dns adblock allow bank.example -g bank            # block/allow/unallow/allowlist -g <group>
+lanforge dns adblock sources add <url> -n kidslist -g kids # A list for a group only
+lanforge dns adblock bypass add dev:tv                     # Clients never filtered (add/remove)
 ```
 
 ### `dhcp`
