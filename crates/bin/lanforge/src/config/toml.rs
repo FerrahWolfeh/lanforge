@@ -547,6 +547,9 @@ source = "broken" # Invalid variant
 
     #[test]
     fn test_docs_example_config_parses_cleanly() {
+        #[cfg(feature = "dns")]
+        use lanforge_api::config_file::AdblockFile;
+
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../../docs/config/lanforge.example.toml"
@@ -561,6 +564,20 @@ source = "broken" # Invalid variant
         #[cfg(feature = "http")]
         assert_eq!(cfg.http.listen.port(), 8088);
         assert!(!cfg.database.config_path.contains("sqlite"));
+
+        // The `[adblock]` example (global layer, bypass, groups) is a valid one, read as is.
+        #[cfg(feature = "dns")]
+        {
+            let root: toml::Value = toml::from_str(&content).unwrap();
+            let file: AdblockFile = root["adblock"]
+                .clone()
+                .try_into()
+                .expect("[adblock] example");
+            let (adblock, issues) = file.to_config();
+            assert_eq!(issues, Vec::<String>::new());
+            assert_eq!(adblock.groups.len(), 2);
+            assert_eq!(adblock.bypass.len(), 1);
+        }
     }
 
     fn load_section<T: DeserializeOwned + Default>(v: &toml::Value, key: &str) -> T {

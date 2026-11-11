@@ -156,10 +156,39 @@ dot_listen = "0.0.0.0:853"
 doq_enabled = false
 doq_listen = "0.0.0.0:853"
 
-# Note: Operational configurations like Upstream Resolvers, DNS Rewrites,
-# and Adblock settings (enable toggle, blocklist URLs, blocking mode, allowlist, etc.)
-# have been migrated to the database. Configure them dynamically at runtime
-# using the CLI (`lanforge dns ...`) or the HTTP/UDS API.
+# Upstreams (`[dns.upstreams.<name>]`) and rewrites (`[dns.rewrites]`) live in this file
+# too; the CLI, the API and the WebUI edit it. `lanforge reload` applies offline edits.
+
+[adblock]
+enabled = true
+# nxdomain, null_ip, custom_ip or refused.
+blocking_mode = "nxdomain"
+# Daily list update, local time.
+refresh_time = "03:00"
+# The global layer: lists and a rules file every client gets.
+lists = ["stevenblack"]
+# Manual rules, one per line: `||ads.example^` blocks, `@@||bank.example^` allows.
+# Relative to this file's directory.
+rules = "adblock/global.rules"
+# Clients never filtered: a subnet, an address, or `dev:<name|mac>`.
+bypass = ["dev:work-laptop"]
+
+[adblock.sources.stevenblack]
+url = "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
+
+[adblock.sources.nsfw]
+url = "https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/porn-only/hosts"
+
+# Groups override the global layer for their clients: their rules and lists decide first
+# (a group allow wins over a global block), then the global layer. `dev:<name>` follows the
+# device's name whatever MAC it has (randomized Android MACs).
+[adblock.groups.banking]
+rules = "adblock/banking.rules"
+clients = ["dev:my-phone"]
+
+[adblock.groups.kids]
+lists = ["nsfw"]
+clients = ["192.168.1.64/28", "dev:tablet"]
 
 [mdns]
 # Actively probe for hostnames and device classes via mDNS.

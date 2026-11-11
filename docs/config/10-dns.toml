@@ -8,24 +8,10 @@ listen = "[::]:53"
 # Multiple search domains for local resolution.
 search_domains = ["lan", "local"]
 
-# --- Operational Data (Upstreams, Adblock, Rewrites) ---
-# Note: Upstream resolvers, Adblock settings (enable toggle, lists, redirect IPs),
-# and Domain rewrites have been migrated to the database for dynamic, runtime management.
-#
-# DO NOT configure them here. Instead, use the `lanforge` command-line tool:
-#
-# 1. Upstream Servers:
-#    lanforge dns upstream add udp://8.8.8.8:53
-#    lanforge dns upstream add tls://1.1.1.1:853
-#
-# 2. DNS Rewrites:
-#    lanforge dns rewrite add router.lan 192.168.1.1
-#    lanforge dns rewrite add vault.lan dev:truenas
-#
-# 3. Adblock Settings:
-#    lanforge dns adblock config --mode null_ip
-#    lanforge dns adblock url add https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
-#    lanforge dns adblock enable
+# --- Upstreams, rewrites, adblock ---
+# They live in this file (`[dns.upstreams.<name>]`, `[dns.rewrites]`, `[adblock]`; see
+# lanforge.example.toml). The CLI (`lanforge dns ...`), the API and the WebUI write them here;
+# `lanforge reload` applies edits made by hand.
 
 # How many days a device can be offline before its DNS entry is hidden.
 last_seen_threshold_days = 7
