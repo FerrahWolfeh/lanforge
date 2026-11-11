@@ -1,7 +1,7 @@
 # Lanforge Configuration Documentation
 
 This directory contains modular configuration snippets for each Lanforge service.
-These files can be merged into a single `lanforge.toml` or read individually by the daemon.
+These files are sections to merge into the single `lanforge.toml` the daemon reads.
 
 ## Module Numbering System
 
@@ -18,6 +18,11 @@ The files are prefixed with numbers to suggest a logical loading order:
 
 To use these as a base for your configuration:
 
-1. Copy the desired sections into your `/etc/lanforge/lanforge.toml`.
-2. Customize the parameters (especially `system.iface` and `system.ula_prefix`).
-3. Restart the `lanforged` daemon.
+1. Copy the desired sections into your `/etc/lanforge/lanforge.toml` (the daemon reads that one
+   file; `lanforge.example.toml` has every section together).
+2. Customize the parameters (especially `system.iface`).
+3. Run `lanforge reload`: it applies the file in place, without restarting the daemon. A wrong
+   value is left out and listed by `lanforge status` and the WebUI.
+
+Every file here is checked by the daemon's tests: each parses with the strict file form and
+has no config issue.

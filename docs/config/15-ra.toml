@@ -1,46 +1,32 @@
-# Lanforge Router Advertisement (RA) Configuration
-# Implements ICMPv6 RA (RFC 4861) for IPv6 auto-configuration.
+# Lanforge IPv6 Router Advertisements (RFC 4861).
+#
+# Left out, the prefixes are the LAN interface's own ULA and delegated GUA, and RDNSS/DNSSL
+# follow DHCPv6 and the search domains: most setups need only `enabled`.
 
 [ra]
 enabled = true
-
-# M-Flag: Managed Address Configuration (clients should use DHCPv6).
+# M flag: addresses from DHCPv6. O flag: other settings (DNS, ...) from DHCPv6.
 managed = true
-
-# O-Flag: Other Configuration (clients should use DHCPv6 for DNS/options).
 other_config = true
-
-# MaxRtrAdvInterval (seconds).
-max_interval = 600
-
-# Router lifetime (seconds). 0 means this router is not a default gateway.
-lifetime = 1800
-
-# MTU to announce on this link.
+# Durations: seconds or "200s", "10m", "1d".
+max_interval = "10m"
+# Router lifetime; 0 = not a default router.
+lifetime = "30m"
 mtu = 1500
-
-# HOP Limit for IPv6 packets.
 hop_limit = 64
 
-# --- IPv6 Prefixes ---
-[[ra.prefix]]
-# Source can be "ula", "gua", or "auto_gua" (detects from interface).
-source = "ula"
-address = "fd00:cafe:f00d::/64"
-on_link = true
-autonomous = true
-
-[[ra.prefix]]
+# A prefix written here replaces the detected ones. `source`: static, ula, auto_ula or
+# auto_gua (found on the interface at run time).
+[ra.prefixes.gua]
 source = "auto_gua"
-on_link = true
-autonomous = true
 
-# --- Recursive DNS Servers (RDNSS) ---
-[[ra.rdnss]]
+[ra.prefixes.ula]
+source = "auto_ula"
+
+[ra.rdnss.lan]
 servers = ["fd00:cafe:f00d::1"]
-lifetime = 600
+lifetime = "10m"
 
-# --- DNS Search List (DNSSL) ---
-[[ra.dnssl]]
-domains = ["lan", "local"]
-lifetime = 600
+[ra.dnssl.lan]
+domains = ["lan"]
+lifetime = "10m"

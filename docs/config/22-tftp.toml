@@ -1,20 +1,11 @@
-# Lanforge TFTP Configuration
-# Lightweight TFTP server specifically for PXE/Network boot orchestration.
+# Lanforge TFTP server for PXE boot.
 
 [tftp]
 enabled = true
-
-# The directory to serve files from.
+listen = "[::]:69"
 root_dir = "/var/lib/lanforge/tftp"
-
-# Address and UDP port to listen on (Default: "[::]:69").
-listen_addr = "[::]:69"
-
-# Default block size for transfers in bytes (Default: 512).
-# block_size = 512
-
-# Timeout for retransmissions in seconds (Default: 5).
-# timeout = 5
-
-# Maximum number of retries per block (Default: 3).
-# max_retries = 3
+# Transfer block size in bytes.
+block_size = 512
+# Retransmission timeout (seconds) and retries per block.
+timeout = 5
+max_retries = 3

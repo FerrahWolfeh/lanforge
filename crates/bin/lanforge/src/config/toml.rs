@@ -545,39 +545,60 @@ source = "broken" # Invalid variant
         );
     }
 
+    /// A config file in `docs/config/` as the daemon reads it: the strict file form takes every
+    /// section (nothing set aside) and no value in it is an issue.
+    fn docs_config(name: &str) -> ConfigFile {
+        let path = format!("{}/../../../docs/config/{name}", env!("CARGO_MANIFEST_DIR"));
+        let content =
+            fs::read_to_string(&path).unwrap_or_else(|e| panic!("docs/config/{name}: {e}"));
+        let file =
+            ConfigFile::parse(&content).unwrap_or_else(|e| panic!("docs/config/{name}: {e}"));
+        let mut issues = Vec::new();
+        issues.extend(file.firewall.to_config().1);
+        issues.extend(file.dhcp.to_config().1);
+        issues.extend(file.ra.to_config().1);
+        issues.extend(file.pppoe.checked().1);
+        issues.extend(file.dns.to_config().1);
+        issues.extend(file.static_hosts().1);
+        issues.extend(file.adblock.to_config().1);
+        assert_eq!(issues, Vec::<String>::new(), "docs/config/{name}");
+        file
+    }
+
+    /// Every snippet in `docs/config/` is valid on its own (they are copied into a config).
+    #[test]
+    fn test_docs_config_snippets_parse_cleanly() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../docs/config");
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| {
+                let path = e.ok()?.path();
+                let toml = path
+                    .extension()
+                    .is_some_and(|x| x.eq_ignore_ascii_case("toml"));
+                toml.then(|| path.file_name()?.to_str().map(String::from))?
+            })
+            .collect();
+        names.sort();
+        assert!(names.len() > 1, "{names:?}");
+        for name in names {
+            docs_config(&name);
+        }
+    }
+
+    /// The reference config: every section, as the daemon loads it.
     #[test]
     fn test_docs_example_config_parses_cleanly() {
-        #[cfg(feature = "dns")]
-        use lanforge_api::config_file::AdblockFile;
+        let file = docs_config("lanforge.example.toml");
+        let (adblock, _) = file.adblock.to_config();
+        assert_eq!(adblock.groups.len(), 2);
+        assert_eq!(adblock.bypass.len(), 1);
 
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../docs/config/lanforge.example.toml"
-        );
-        let content = fs::read_to_string(path).unwrap_or_else(|e| {
-            panic!("Failed to read docs/config/lanforge.example.toml at {path}: {e}")
-        });
-        let cfg: TomlConfig = toml::from_str(&content)
-            .unwrap_or_else(|e| panic!("Failed to parse docs/config/lanforge.example.toml: {e}"));
-
+        // As the daemon loads it.
+        let cfg = TomlConfig::from(&file);
         assert_eq!(cfg.system.iface, "end0");
         #[cfg(feature = "http")]
         assert_eq!(cfg.http.listen.port(), 8088);
-        assert!(!cfg.database.config_path.contains("sqlite"));
-
-        // The `[adblock]` example (global layer, bypass, groups) is a valid one, read as is.
-        #[cfg(feature = "dns")]
-        {
-            let root: toml::Value = toml::from_str(&content).unwrap();
-            let file: AdblockFile = root["adblock"]
-                .clone()
-                .try_into()
-                .expect("[adblock] example");
-            let (adblock, issues) = file.to_config();
-            assert_eq!(issues, Vec::<String>::new());
-            assert_eq!(adblock.groups.len(), 2);
-            assert_eq!(adblock.bypass.len(), 1);
-        }
     }
 
     fn load_section<T: DeserializeOwned + Default>(v: &toml::Value, key: &str) -> T {
