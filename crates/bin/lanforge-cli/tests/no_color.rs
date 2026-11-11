@@ -35,10 +35,38 @@ fn no_color_one_does_not_stop_the_cli() {
     }
 }
 
-/// The error report (`color_eyre`) is plain too.
+/// The error report is plain too.
 #[test]
 fn no_color_set_leaves_no_ansi_codes() {
     let err = stderr_with("1");
-    assert!(err.contains("Error"), "{err:?}");
+    assert!(err.contains("error"), "{err:?}");
     assert!(!err.contains('\u{1b}'), "{err:?}");
+}
+
+/// A failed command prints one `error:` line and exits 1: no `Location:` of the CLI source and no
+/// backtrace hint, which made a daemon refusal look like a crash.
+#[test]
+fn an_error_is_one_line_and_exit_code_one() {
+    let out = Command::new(env!("CARGO_BIN_EXE_lanforge"))
+        .args(["-s", "/nonexistent/lanforge.sock", "status"])
+        .env("NO_COLOR", "1")
+        .env("HOME", "/nonexistent")
+        .env("XDG_DATA_HOME", "/nonexistent")
+        .env_remove("LANFORGE_REMOTE_URL")
+        .env_remove("LANFORGE_TOKEN")
+        .env_remove("RUST_BACKTRACE")
+        .env_remove("RUST_LIB_BACKTRACE")
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    assert_eq!(err.lines().count(), 1, "{err}");
+    assert!(
+        err.starts_with("error: Failed to connect to daemon"),
+        "{err}"
+    );
+    assert!(
+        !err.contains("Location") && !err.contains("Backtrace"),
+        "{err}"
+    );
 }
