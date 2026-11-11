@@ -284,7 +284,7 @@ pub trait LanforgeRpc {
     fn dns_adblock_group_change(
         &self,
         name: String,
-        change: AdblockGroupChange,
+        change: Box<AdblockGroupChange>,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn dns_adblock_group_delete(
         &self,

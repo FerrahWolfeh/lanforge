@@ -638,9 +638,9 @@ impl LanforgeRpc for ClientContext {
     async fn dns_adblock_group_change(
         &self,
         name: String,
-        change: AdblockGroupChange,
+        change: Box<AdblockGroupChange>,
     ) -> Result<SimpleSuccess, RpcCallError> {
-        match self.handle_dns_adblock_group_change(name, change).await {
+        match self.handle_dns_adblock_group_change(name, *change).await {
             Response::Success(s) => Ok(s),
             other => Err(Self::map_failure(other)),
         }

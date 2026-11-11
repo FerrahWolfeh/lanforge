@@ -1339,7 +1339,7 @@ impl LanforgeClient {
                 .await;
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.dns_adblock_group_change(name, change)
+        rpc.dns_adblock_group_change(name, Box::new(change))
             .await
             .map_err(|e| eyre!("{e}"))
     }
