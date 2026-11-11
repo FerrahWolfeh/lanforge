@@ -191,7 +191,7 @@ impl Default for Dhcpv4Options {
         Self {
             enabled: true,
             lease_time: 86400,
-            router: Some(Ipv4Addr::new(192, 168, 0, 1)),
+            router: None,
             subnet_mask: Some(Ipv4Addr::new(255, 255, 255, 0)),
             dns_servers: Vec::new(),
             domain_name: None,

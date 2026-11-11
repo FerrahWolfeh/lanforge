@@ -1474,3 +1474,66 @@ async fn test_dhcpv4_without_configured_dns_announces_this_server() -> Result<()
     let _ = timeout(TEST_TIMEOUT, serve_handle).await?;
     Ok(())
 }
+
+/// A `[dhcp.v4]` without `router` must announce this server as the gateway. It announced the
+/// hard-coded default `192.168.0.1`, which the sanity pass keeps when it falls inside the LAN
+/// (a /22 such as 192.168.0.0/22): clients then route through an address nobody answers.
+#[tokio::test]
+async fn test_dhcpv4_without_configured_router_announces_this_server() -> Result<(), Box<dyn Error>>
+{
+    let (ctx, bus) = init_test_context();
+    ctx.set_target_interface_name("lan0".to_string());
+    let server = Ipv4Addr::new(192, 168, 3, 1);
+    let mask = Ipv4Addr::new(255, 255, 252, 0);
+    let pool = Dhcpv4Pool {
+        name: Some("Pool 1".to_string()),
+        range_start: Ipv4Addr::new(192, 168, 1, 2),
+        range_end: Ipv4Addr::new(192, 168, 1, 240),
+        lease_time: Some(86_400),
+        subnet_mask: Some(mask),
+        ..Default::default()
+    };
+    // The server id is this server's LAN address (the sanity pass sets it from the interface);
+    // the file names no router.
+    let cfg = Dhcpv4Config {
+        enabled: true,
+        iface: "lan0".into(),
+        server_id: server,
+        subnet_mask: mask,
+        pools: vec![pool.clone()],
+        ..Default::default()
+    };
+    let _ = ctx.apply_config(
+        ConfigPatch::new()
+            .with_dhcp_v4_pools(vec![pool])
+            .with_dhcp_v4_options(Dhcpv4Options {
+                router: None,
+                subnet_mask: Some(mask),
+                ..Default::default()
+            }),
+    );
+
+    let (handle, transport) = Dhcpv4Transport::inert();
+    let mut service = Dhcpv4Service::with_transport(cfg, ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let serve_handle = tokio::spawn(async move {
+        let h = ServiceHandle::new(ServiceId::Dhcp4, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+    wait_for_service_online(&ctx, ServiceId::Dhcp4).await?;
+
+    let ack = dhcpv4_acquire(
+        &handle,
+        MacAddr([0x00, 0x11, 0x22, 0x33, 0x44, 0x77]),
+        server,
+    )
+    .await?;
+    assert_eq!(
+        ack.opts().get(OptionCodeV4::Router),
+        Some(&DhcpOptionV4::Router(vec![server]))
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(TEST_TIMEOUT, serve_handle).await?;
+    Ok(())
+}

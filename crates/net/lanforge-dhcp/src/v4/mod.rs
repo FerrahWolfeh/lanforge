@@ -248,8 +248,11 @@ impl Dhcpv4Service {
 
         // Audit network topology against physical interface and auto-heal if needed
         sanity::audit_and_auto_heal_dhcpv4(&mut current_cfg);
-        // No DNS configured: announce this server (its live LAN address, healed above), never a
-        // guessed one.
+        // No router or DNS configured: announce this server (its live LAN address, healed
+        // above), never a guessed one.
+        if current_cfg.router.is_unspecified() {
+            current_cfg.router = current_cfg.server_id;
+        }
         if current_cfg.dns.is_empty() {
             current_cfg.dns = vec![current_cfg.server_id];
         }

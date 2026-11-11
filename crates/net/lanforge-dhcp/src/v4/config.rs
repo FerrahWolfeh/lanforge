@@ -31,7 +31,8 @@ pub struct Dhcpv4Config {
 
     /// Lease time in seconds (default: 86400 = 24h).
     pub lease_time: u32,
-    /// Default gateway announced to clients (Option 3 — Router).
+    /// Default gateway announced to clients (Option 3 — Router). Unspecified: this server's own
+    /// address (`server_id`), resolved when the service applies its config.
     pub router: Ipv4Addr,
     /// DNS servers announced to clients (Option 6). Empty: this server's own address
     /// (`server_id`), resolved when the service applies its config.
@@ -59,12 +60,12 @@ impl Default for Dhcpv4Config {
         Self {
             enabled: false,
             iface: String::new(),
-            server_id: Ipv4Addr::new(192, 168, 0, 1),
+            server_id: Ipv4Addr::UNSPECIFIED,
             range_start: None,
             range_end: None,
             pools: Vec::new(),
             lease_time: 86400,
-            router: Ipv4Addr::new(192, 168, 0, 1),
+            router: Ipv4Addr::UNSPECIFIED,
             dns: Vec::new(),
             subnet_mask: Ipv4Addr::new(255, 255, 255, 0),
             domain_name: None,
