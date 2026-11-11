@@ -366,13 +366,8 @@ fn a_group_overrides_the_global_layer() {
     filter.replace_blocklist(lists);
 
     let layers = filter.client_layers(&ctx, "10.0.0.1".parse().unwrap());
-    assert_eq!(
-        layers,
-        ClientLayers {
-            bypass: false,
-            groups: 0b11
-        }
-    );
+    assert!(!layers.bypass);
+    assert_eq!(filter.group_names(layers), ["a", "b"]);
     let verdict = |name: &str, client| filter.check(name, client).map(|m| (m.action, m.origin));
 
     assert_eq!(

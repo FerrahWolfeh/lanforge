@@ -1,3 +1,4 @@
+use std::iter;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -24,23 +25,25 @@ pub mod source;
 pub use blocklist::{DiskBlocklist, ListMatches};
 pub use manual::ManualRules;
 
-/// Most groups the filter runs: one bit each in [`ClientLayers::groups`].
+/// Most groups the filter runs, the global one included: one bit each in
+/// [`ClientLayers::groups`].
 pub const MAX_GROUPS: usize = 64;
 
+/// The global layer's bit: group 0, the group every client is in.
+const GLOBAL_BIT: u64 = 1;
+
 pub struct AdBlocker {
-    /// The loaded lists, every layer's, with the bits of each layer. Lock after `layers`.
+    /// The loaded lists, every group's, with the bits of each group. Lock after `layers`.
     lists: RwLock<Option<Arc<LoadedLists>>>,
-    /// The global rules file's rules, checked before the global lists.
-    pub manual: RwLock<Arc<ManualRules>>,
-    /// Which lists are global and the groups. Lock before `lists`.
+    /// The groups, the global one first. Lock before `lists`.
     layers: RwLock<Arc<Layers>>,
     pub timer: Arc<AdblockTimerState>,
     pub config: RwLock<AdblockRuntimeConfig>,
     per_ip_stats: DashMap<IpAddr, AtomicU64>,
 }
 
-/// The layers a client gets: none (`bypass`), or the global layer plus the groups whose bits
-/// are set (bit = position in `[adblock.groups]`).
+/// The groups a client is in, one bit each (bit = position in [`Layers::groups`]): always the
+/// global group (bit 0) unless bypassed, plus its `[adblock.groups]`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ClientLayers {
     pub bypass: bool,
@@ -48,48 +51,71 @@ pub struct ClientLayers {
 }
 
 impl ClientLayers {
-    /// Only the global layer: a client in no group, or one not (yet) known.
+    /// Only the global group: a client in no other group, or one not (yet) known.
     pub const GLOBAL: Self = Self {
         bypass: false,
-        groups: 0,
+        groups: GLOBAL_BIT,
     };
 }
 
-/// The groups and `bypass`, as configured (lists by source id). Every other list is global.
-#[derive(Default)]
+/// The filter's groups. Group 0 is the global layer: every client is in it, its rules are the
+/// global rules file's and its lists every list no other group adds. The others are
+/// `[adblock.groups]`, in file order (lists by source id).
+#[derive(Clone)]
 struct Layers {
-    bypass: Vec<ClientSelector>,
     groups: Vec<Group>,
+    bypass: Vec<ClientSelector>,
     /// Whether a selector needs the client's device (`dev:`), not only its address.
     by_device: bool,
 }
 
+impl Default for Layers {
+    fn default() -> Self {
+        Self {
+            groups: vec![Group::global(Arc::default())],
+            bypass: Vec::new(),
+            by_device: false,
+        }
+    }
+}
+
+#[derive(Clone)]
 struct Group {
-    name: Box<str>,
+    /// `None` for the global group: its matches carry the global origins.
+    name: Option<Box<str>>,
     sources: Vec<i64>,
-    rules: ManualRules,
+    rules: Arc<ManualRules>,
     clients: Vec<ClientSelector>,
 }
 
-/// The lists and, for each layer, the bits of its lists in the index.
+impl Group {
+    const fn global(rules: Arc<ManualRules>) -> Self {
+        Self {
+            name: None,
+            sources: Vec::new(),
+            rules,
+            clients: Vec::new(),
+        }
+    }
+}
+
+/// The lists, with the bits of each group's lists in the index.
 struct LoadedLists {
     index: Arc<DiskBlocklist>,
-    /// The lists no group adds.
-    global: u64,
-    /// One mask per group, in group order.
+    /// One mask per group, in group order; the global group's is every list no other adds.
     groups: Box<[u64]>,
 }
 
 impl LoadedLists {
     fn new(index: Arc<DiskBlocklist>, layers: &Layers) -> Self {
-        let groups: Box<[u64]> = layers
+        let mut groups: Vec<u64> = layers
             .groups
             .iter()
             .map(|g| index.mask_of(&g.sources))
             .collect();
+        groups[0] = !groups[1..].iter().fold(0, |acc, m| acc | m);
         Self {
-            global: !groups.iter().fold(0, |acc, m| acc | m),
-            groups,
+            groups: groups.into_boxed_slice(),
             index,
         }
     }
@@ -135,7 +161,6 @@ impl AdBlocker {
     pub fn new(enabled: bool) -> Self {
         Self {
             lists: RwLock::new(None),
-            manual: RwLock::new(Arc::new(ManualRules::default())),
             layers: RwLock::new(Arc::new(Layers::default())),
             timer: Arc::new(AdblockTimerState::new(enabled)),
             config: RwLock::new(AdblockRuntimeConfig::default()),
@@ -176,102 +201,103 @@ impl AdBlocker {
         self.check(qname, ClientLayers::GLOBAL)
     }
 
-    /// The verdict for `qname` asked by a client with `client`'s layers. A bypassed client is
-    /// never filtered; otherwise its groups decide first (an override of the global layer for
-    /// their clients: a group allow wins over any global block, `$important` included), then
-    /// the global layer. In each layer the rules files come before the lists.
+    /// The verdict for `qname` asked by a client in `client`'s groups. A bypassed client is
+    /// never filtered. Otherwise the groups form a ladder of overrides, from the top: the
+    /// client's groups (all on one step; an allow of one wins over a block of another), then
+    /// the global group at the base. The highest step with a verdict decides, so a group allow
+    /// wins over any global block, `$important` included. In a step, its rules files (the
+    /// admin's overrides) decide before its lists (each with its own precedence).
     pub fn check(&self, qname: &str, client: ClientLayers) -> Option<FilterMatch> {
         if client.bypass || !self.is_enabled() {
             return None;
         }
+        let layers = self.layers.read().clone();
         let lists = self.lists.read().clone();
-        // Every list is walked once, and only when a layer's rules leave the name undecided.
+        // Every list is walked once, and only when a step's rules leave the name undecided.
         let mut matched: Option<ListMatches> = None;
-        let mut list_matches =
-            |l: &LoadedLists| *matched.get_or_insert_with(|| l.index.match_lists(qname));
-
-        if client.groups != 0 {
-            let layers = self.layers.read().clone();
-            let mut block = None;
-            for (bit, group) in layers.groups.iter().enumerate() {
-                if client.groups & (1 << bit) == 0 {
-                    continue;
-                }
-                let Some(v) = group.rules.verdict(qname) else {
-                    continue;
-                };
-                let found = FilterMatch {
-                    action: v.action,
-                    origin: if v.action == FilterAction::Allow {
-                        FilterOrigin::GroupAllowlist {
-                            group: group.name.clone(),
-                        }
-                    } else {
-                        FilterOrigin::GroupRule {
-                            group: group.name.clone(),
-                        }
-                    },
-                    rule: (v.domain != qname).then(|| v.domain.into()),
-                    important: v.important,
-                };
-                // Of the client's groups, an allow wins over a block.
-                if v.action == FilterAction::Allow {
-                    return Some(found);
-                }
-                block.get_or_insert(found);
+        for step in [client.groups & !GLOBAL_BIT, client.groups & GLOBAL_BIT] {
+            if step == 0 {
+                continue;
             }
-            if block.is_some() {
-                return block;
-            }
-            if let Some(l) = lists.as_deref() {
-                let mask = l
-                    .groups
-                    .iter()
-                    .enumerate()
-                    .filter(|(bit, _)| client.groups & (1 << bit) != 0)
-                    .fold(0, |acc, (_, m)| acc | m);
-                if mask != 0
-                    && let Some((action, list_bit, important)) =
-                        Self::list_verdict(list_matches(l).masked(mask))
-                {
-                    let source_id = l.index.source_id(list_bit);
-                    let group = layers
-                        .groups
-                        .iter()
-                        .enumerate()
-                        .find(|(bit, _)| {
-                            client.groups & (1 << bit) != 0 && l.groups[*bit] & (1 << list_bit) != 0
-                        })
-                        .map(|(_, g)| g.name.clone())
-                        .unwrap_or_default();
-                    return Some(FilterMatch {
-                        action,
-                        origin: FilterOrigin::GroupList { group, source_id },
-                        rule: None,
-                        important,
-                    });
-                }
+            if let Some(m) =
+                Self::step_verdict(&layers, lists.as_deref(), &mut matched, qname, step)
+            {
+                return Some(m);
             }
         }
+        None
+    }
 
-        if let Some(v) = self.manual.read().verdict(qname) {
-            return Some(FilterMatch {
+    /// The verdict of one step of the ladder: the groups of `step` (bits), their rules files
+    /// first (of several, an allow wins), then their lists.
+    fn step_verdict(
+        layers: &Layers,
+        lists: Option<&LoadedLists>,
+        matched: &mut Option<ListMatches>,
+        qname: &str,
+        step: u64,
+    ) -> Option<FilterMatch> {
+        let in_step = |bit: usize| step & (1 << bit) != 0;
+        let mut block = None;
+        for (_, group) in layers
+            .groups
+            .iter()
+            .enumerate()
+            .filter(|(bit, _)| in_step(*bit))
+        {
+            let Some(v) = group.rules.verdict(qname) else {
+                continue;
+            };
+            let allow = v.action == FilterAction::Allow;
+            let found = FilterMatch {
                 action: v.action,
-                origin: if v.action == FilterAction::Allow {
-                    FilterOrigin::UserAllowlist
-                } else {
-                    FilterOrigin::UserRule
+                origin: match (&group.name, allow) {
+                    (None, true) => FilterOrigin::UserAllowlist,
+                    (None, false) => FilterOrigin::UserRule,
+                    (Some(name), true) => FilterOrigin::GroupAllowlist {
+                        group: name.clone(),
+                    },
+                    (Some(name), false) => FilterOrigin::GroupRule {
+                        group: name.clone(),
+                    },
                 },
                 rule: (v.domain != qname).then(|| v.domain.into()),
                 important: v.important,
-            });
+            };
+            if allow {
+                return Some(found);
+            }
+            block.get_or_insert(found);
         }
-        let l = lists.as_deref()?;
-        let (action, list_bit, important) = Self::list_verdict(list_matches(l).masked(l.global))?;
+        if block.is_some() {
+            return block;
+        }
+
+        let l = lists?;
+        let mask = l
+            .groups
+            .iter()
+            .enumerate()
+            .filter(|(bit, _)| in_step(*bit))
+            .fold(0, |acc, (_, m)| acc | m);
+        if mask == 0 {
+            return None;
+        }
+        let m = *matched.get_or_insert_with(|| l.index.match_lists(qname));
+        let (action, list_bit, important) = Self::list_verdict(m.masked(mask))?;
+        let source_id = l.index.source_id(list_bit);
+        // Attributed to the first group of the step that has the deciding list.
+        let name = layers
+            .groups
+            .iter()
+            .enumerate()
+            .find(|(bit, _)| in_step(*bit) && l.groups[*bit] & (1 << list_bit) != 0)
+            .and_then(|(_, g)| g.name.clone());
         Some(FilterMatch {
             action,
-            origin: FilterOrigin::List {
-                source_id: l.index.source_id(list_bit),
+            origin: match name {
+                None => FilterOrigin::List { source_id },
+                Some(group) => FilterOrigin::GroupList { group, source_id },
             },
             rule: None,
             important,
@@ -307,7 +333,7 @@ impl AdBlocker {
             .is_some_and(|m| m.action == FilterAction::Block)
     }
 
-    /// The names of the groups set in `client`, in group order.
+    /// The names of the `[adblock.groups]` set in `client`, in group order (not the global one).
     #[must_use]
     pub fn group_names(&self, client: ClientLayers) -> Vec<String> {
         self.layers
@@ -316,17 +342,17 @@ impl AdBlocker {
             .iter()
             .enumerate()
             .filter(|(bit, _)| client.groups & (1 << bit) != 0)
-            .map(|(_, g)| g.name.to_string())
+            .filter_map(|(_, g)| g.name.as_deref().map(String::from))
             .collect()
     }
 
-    /// The layers of the client at `ip`. Without groups or `bypass` every client gets the global
-    /// layer and nothing is looked up; a `dev:` selector looks the client's device up by its
+    /// The groups of the client at `ip`. Without groups or `bypass` every client is only in the
+    /// global group and nothing is looked up; a `dev:` selector looks the client's device up by its
     /// address (lease, static host, neighbour cache). An address no device is known for gets
     /// only what its subnet selectors give, never `bypass` by accident of an unknown name.
     pub fn client_layers(&self, ctx: &LanforgeContext, ip: IpAddr) -> ClientLayers {
         let layers = self.layers.read().clone();
-        if layers.bypass.is_empty() && layers.groups.is_empty() {
+        if layers.bypass.is_empty() && layers.groups.len() == 1 {
             return ClientLayers::GLOBAL;
         }
         let mac = if layers.by_device {
@@ -347,8 +373,9 @@ impl AdBlocker {
                 .groups
                 .iter()
                 .enumerate()
+                .skip(1)
                 .filter(|(_, g)| g.clients.iter().any(is))
-                .fold(0, |acc, (bit, _)| acc | (1 << bit));
+                .fold(GLOBAL_BIT, |acc, (bit, _)| acc | (1 << bit));
             ClientLayers {
                 bypass: false,
                 groups,
@@ -387,57 +414,63 @@ impl AdBlocker {
         });
     }
 
-    /// Sets the groups and `bypass`; the loaded lists stay, only their layer bits change (a list
-    /// no group adds is global). Groups past [`MAX_GROUPS`] are left out.
+    /// Sets the groups and `bypass`, keeping the global group's rules; the loaded lists stay,
+    /// only their group bits change (a list no group adds is global). Groups past
+    /// [`MAX_GROUPS`] are left out.
     pub fn replace_layers(&self, policy: &AdblockPolicy) {
-        if policy.groups.len() > MAX_GROUPS {
+        if policy.groups.len() >= MAX_GROUPS {
             warn!(
                 configured = policy.groups.len(),
-                max = MAX_GROUPS,
+                max = MAX_GROUPS - 1,
                 "Adblock: too many groups, the extra ones are ignored"
             );
         }
-        let layers = Layers {
+        let global = Arc::clone(&self.layers.read().groups[0].rules);
+        let groups = iter::once(Group::global(global))
+            .chain(policy.groups.iter().take(MAX_GROUPS - 1).map(|g| Group {
+                name: Some(g.name.as_str().into()),
+                sources: g.sources.iter().map(|s| s.source_id()).collect(),
+                rules: Arc::new(ManualRules::from_text(&g.rules)),
+                clients: g.clients.clone(),
+            }))
+            .collect();
+        self.install(Layers {
+            groups,
             bypass: policy.bypass.clone(),
-            groups: policy
-                .groups
-                .iter()
-                .take(MAX_GROUPS)
-                .map(|g| Group {
-                    name: g.name.as_str().into(),
-                    sources: g.sources.iter().map(|s| s.source_id()).collect(),
-                    rules: ManualRules::from_text(&g.rules),
-                    clients: g.clients.clone(),
-                })
-                .collect(),
             by_device: policy
                 .bypass
                 .iter()
                 .chain(policy.groups.iter().flat_map(|g| &g.clients))
                 .any(ClientSelector::needs_device),
-        };
-        let mut current = self.layers.write();
-        let mut lists = self.lists.write();
-        if let Some(l) = lists.as_ref() {
-            *lists = Some(Arc::new(LoadedLists::new(Arc::clone(&l.index), &layers)));
-        }
-        *current = Arc::new(layers);
-        debug!(
-            groups = current.groups.len(),
-            bypass = current.bypass.len(),
-            "Adblock: layers updated"
-        );
+        });
     }
 
-    /// Replaces the manual rules with those of a rules file's text.
+    /// Replaces the global group's rules with those of the global rules file's text.
     pub fn replace_rules(&self, text: &str) {
         let rules = ManualRules::from_text(text);
         debug!(
             blocks = rules.block_len(),
             allows = rules.allow_len(),
-            "Adblock: manual rules updated"
+            "Adblock: global rules updated"
         );
-        *self.manual.write() = Arc::new(rules);
+        let mut layers = (**self.layers.read()).clone();
+        layers.groups[0].rules = Arc::new(rules);
+        self.install(layers);
+    }
+
+    /// Makes `layers` the running groups, with the loaded lists' group bits recomputed.
+    fn install(&self, layers: Layers) {
+        let mut current = self.layers.write();
+        let mut lists = self.lists.write();
+        if let Some(l) = lists.as_ref() {
+            *lists = Some(Arc::new(LoadedLists::new(Arc::clone(&l.index), &layers)));
+        }
+        debug!(
+            groups = layers.groups.len() - 1,
+            bypass = layers.bypass.len(),
+            "Adblock: groups updated"
+        );
+        *current = Arc::new(layers);
     }
 
     pub fn replace_config(
@@ -453,12 +486,12 @@ impl AdBlocker {
     #[must_use]
     pub fn blocklist_size(&self) -> usize {
         let disk_size = self.lists.read().as_ref().map_or(0, |l| l.index.len());
-        disk_size + self.manual.read().block_len()
+        disk_size + self.layers.read().groups[0].rules.block_len()
     }
 
     #[must_use]
     pub fn allowlist_size(&self) -> usize {
-        self.manual.read().allow_len()
+        self.layers.read().groups[0].rules.allow_len()
     }
 
     #[must_use]
