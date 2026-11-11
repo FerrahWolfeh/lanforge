@@ -13,10 +13,11 @@ use dhcproto::v6::{
     OptionCode as OptionCodeV6,
 };
 use dhcproto::{Decodable, Decoder};
-use lanforge_core::bus::{LanforgeEvent, SystemEvent};
+use lanforge_core::bus::{DeviceEvent, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_types::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin};
+use lanforge_types::events::DhcpV4MessageType;
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::network::dhcp::Dhcpv6Pool;
 use lanforge_types::network::{Ipv6Prefix, Ipv6Suffix};
@@ -104,6 +105,7 @@ async fn test_dhcpv4_synthetic_full_lifecycle() -> Result<(), Box<dyn Error>> {
     );
 
     // --- Step 2: REQUEST -> ACK ---
+    let mut device_events = ctx.bus().subscribe_device();
     let request_bytes = Dhcpv4PacketBuilder::request(client_mac, offered_ip, cfg.server_id)
         .with_hostname("client-laptop")
         .build();
@@ -119,6 +121,20 @@ async fn test_dhcpv4_synthetic_full_lifecycle() -> Result<(), Box<dyn Error>> {
         Some(&DhcpOptionV4::MessageType(MessageTypeV4::Ack))
     );
     assert_eq!(ack_msg.yiaddr(), offered_ip);
+
+    // The REQUEST's transaction event names the address it asked for (shown by `lanforge watch`).
+    let mut request_details = None;
+    while let Ok(timed) = device_events.try_recv() {
+        if let LanforgeEvent::Device(DeviceEvent::DhcpV4Transaction {
+            msg_type: DhcpV4MessageType::Request,
+            details,
+            ..
+        }) = timed.event
+        {
+            request_details = details;
+        }
+    }
+    assert_eq!(request_details, Some(format!("asks for {offered_ip}")));
 
     // --- Step 3: Verify Context State Updates ---
     let dev = ctx
