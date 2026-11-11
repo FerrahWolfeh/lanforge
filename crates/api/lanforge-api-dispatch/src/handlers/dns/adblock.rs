@@ -27,7 +27,7 @@ use lanforge_types::network::dns::adblock::{
 use lanforge_types::network::dns::{
     AdblockCheckResponse, AdblockUrlEntry, DnsAdblockSourcesResponse, DnsRequest, DnsResponse,
 };
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 /// The rules text with `line` active and its opposite (the same rule with `@@` added or
 /// removed) gone: a domain is blocked or allowed, not both. `None` when nothing changes.
@@ -170,11 +170,16 @@ impl ClientContext {
     }
 
     #[cfg(feature = "adblock")]
-    pub async fn handle_dns_adblock_check(&self, domain: String) -> Response {
+    pub async fn handle_dns_adblock_check(
+        &self,
+        domain: String,
+        client: Option<IpAddr>,
+    ) -> Response {
         if let Some(handle) = self.ctx.dns_handle()
             && let Ok(DnsResponse::AdblockCheck(res)) = handle
                 .send_request(DnsRequest::AdblockCheck {
                     domain: domain.clone(),
+                    client,
                 })
                 .await
         {
@@ -182,20 +187,23 @@ impl ClientContext {
         }
         Response::AdblockCheck(Box::new(AdblockCheckResponse {
             domain,
-            matched: false,
-            filter: None,
-            source_matches: Vec::new(),
+            ..Default::default()
         }))
     }
 
     #[cfg(not(feature = "adblock"))]
-    pub async fn handle_dns_adblock_check(&self, _domain: String) -> Response {
+    pub async fn handle_dns_adblock_check(
+        &self,
+        _domain: String,
+        _client: Option<IpAddr>,
+    ) -> Response {
         Response::Error {
             error: "Adblock support not enabled in this build. Recompile with --features adblock."
                 .to_string(),
         }
     }
 
+    /// Adds a list source, to the global layer or (`group`) to a group.
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_adblock_url_add(
         &self,
@@ -203,7 +211,19 @@ impl ClientContext {
         url: String,
         kind: AdblockUrlKind,
         format: Option<AdblockSourceFormat>,
+        group: Option<String>,
     ) -> Response {
+        if let Some(group) = &group
+            && !self
+                .live_adblock_settings()
+                .groups
+                .iter()
+                .any(|g| &g.name == group)
+        {
+            return Response::NotFound {
+                error: format!("adblock group \"{group}\" not found"),
+            };
+        }
         let what = format!("Adblock {kind} URL added: {url}");
         dns_reply(
             self.change_adblock(|a| {
@@ -225,8 +245,15 @@ impl ClientContext {
                         name
                     }
                 };
-                if !a.lists.contains(&name) {
-                    a.lists.push(name);
+                let lists = match &group {
+                    None => &mut a.lists,
+                    Some(group) => match a.groups.iter_mut().find(|g| &g.name == group) {
+                        Some(g) => &mut g.lists,
+                        None => return,
+                    },
+                };
+                if !lists.contains(&name) {
+                    lists.push(name);
                 }
             }),
             what,
@@ -240,6 +267,7 @@ impl ClientContext {
         _url: String,
         _kind: AdblockUrlKind,
         _format: Option<AdblockSourceFormat>,
+        _group: Option<String>,
     ) -> Response {
         Response::Error {
             error: "Adblock support not enabled in this build. Recompile with --features adblock."
@@ -249,7 +277,13 @@ impl ClientContext {
 
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_adblock_url_remove(&self, url: String) -> Response {
-        if !self.ctx.get_dns_adblock_urls().iter().any(|u| u.url == url) {
+        // A source of the global layer or of a group: the file has them all.
+        if !self
+            .live_adblock_settings()
+            .sources
+            .iter()
+            .any(|u| u.url == url)
+        {
             return Response::Error {
                 error: format!("URL '{url}' not found"),
             };
@@ -336,16 +370,28 @@ impl ClientContext {
         }
     }
 
+    /// The rules of the global rules file (`group` `None`) or of a group's.
     #[cfg(feature = "adblock")]
-    pub async fn handle_dns_adblock_rules(&self) -> Response {
-        let rules = self
-            .ctx
-            .with_config(|c| RulesFile::new(&c.dns_adblock_rules.0).rule_entries());
-        Response::DnsAdblockRules(DnsAdblockRulesResponse { rules })
+    pub async fn handle_dns_adblock_rules(&self, group: Option<String>) -> Response {
+        let rules = self.ctx.with_config(|c| match group.as_deref() {
+            None => Some(RulesFile::new(&c.dns_adblock_rules.0).rule_entries()),
+            Some(name) => c
+                .dns_adblock_policy
+                .groups
+                .iter()
+                .find(|g| g.name == name)
+                .map(|g| RulesFile::new(&g.rules).rule_entries()),
+        });
+        match rules {
+            Some(rules) => Response::DnsAdblockRules(DnsAdblockRulesResponse { rules }),
+            None => Response::NotFound {
+                error: format!("adblock group \"{}\" not found", group.unwrap_or_default()),
+            },
+        }
     }
 
     #[cfg(not(feature = "adblock"))]
-    pub async fn handle_dns_adblock_rules(&self) -> Response {
+    pub async fn handle_dns_adblock_rules(&self, _group: Option<String>) -> Response {
         Response::Error {
             error: "Adblock support not enabled in this build. Recompile with --features adblock."
                 .to_string(),
@@ -353,21 +399,31 @@ impl ClientContext {
     }
 
     #[cfg(feature = "adblock")]
-    pub async fn handle_dns_adblock_rule_add(&self, domain: String, action: String) -> Response {
+    pub async fn handle_dns_adblock_rule_add(
+        &self,
+        domain: String,
+        action: String,
+        group: Option<String>,
+    ) -> Response {
         match action.parse::<AdblockRuleAction>() {
-            Ok(action) => self.add_adblock_rule(&domain, action),
+            Ok(action) => self.add_adblock_rule(&domain, action, group.as_deref()),
             Err(error) => Response::Rejected { error },
         }
     }
 
-    /// Blocks or allows `domain` (a bare name or a rule as written) in the rules file, replacing
-    /// its opposite rule. The one write path of the block/allow/rule-add calls; a block announces
-    /// `AdblockBlock` to watchers.
+    /// Blocks or allows `domain` (a bare name or a rule as written) in a rules file (the global
+    /// one, or `group`'s), replacing its opposite rule. The one write path of the
+    /// block/allow/rule-add calls; a block announces `AdblockBlock` to watchers.
     #[cfg(feature = "adblock")]
-    pub(crate) fn add_adblock_rule(&self, domain: &str, action: AdblockRuleAction) -> Response {
+    pub(crate) fn add_adblock_rule(
+        &self,
+        domain: &str,
+        action: AdblockRuleAction,
+        group: Option<&str>,
+    ) -> Response {
         let line = AdblockRuleEntry::rule_line(domain, action);
         let reply = dns_reply(
-            self.change_adblock_rules(|text| with_rule_only(text, &line)),
+            self.change_adblock_rules(group, |text| with_rule_only(text, &line)),
             format!("Adblock rule added: {line}"),
         );
         if matches!(reply, Response::Success(_)) && !action.is_allow() {
@@ -384,13 +440,18 @@ impl ClientContext {
     /// Adds every rule of a pasted list (`action` for bare names) in one rules-file write and one
     /// engine reload; rejected lines are reported, never fatal.
     #[cfg(feature = "adblock")]
-    pub async fn handle_dns_adblock_rules_import(&self, text: String, action: String) -> Response {
+    pub async fn handle_dns_adblock_rules_import(
+        &self,
+        text: String,
+        action: String,
+        group: Option<String>,
+    ) -> Response {
         let action = match action.parse::<AdblockRuleAction>() {
             Ok(a) => a,
             Err(error) => return Response::Rejected { error },
         };
         let mut report = RulesImport::default();
-        let persisted = self.change_adblock_rules(|live| {
+        let persisted = self.change_adblock_rules(group.as_deref(), |live| {
             let (new, outcome) = RulesFile::new(live).with_rules_imported(&text, action);
             report = outcome;
             Ok(new)
@@ -409,6 +470,7 @@ impl ClientContext {
         &self,
         _text: String,
         _action: String,
+        _group: Option<String>,
     ) -> Response {
         Response::Error {
             error: "Adblock support not enabled in this build. Recompile with --features adblock."
@@ -417,7 +479,12 @@ impl ClientContext {
     }
 
     #[cfg(not(feature = "adblock"))]
-    pub async fn handle_dns_adblock_rule_add(&self, _domain: String, _action: String) -> Response {
+    pub async fn handle_dns_adblock_rule_add(
+        &self,
+        _domain: String,
+        _action: String,
+        _group: Option<String>,
+    ) -> Response {
         Response::Error {
             error: "Adblock support not enabled in this build. Recompile with --features adblock."
                 .to_string(),
@@ -425,9 +492,9 @@ impl ClientContext {
     }
 
     #[cfg(feature = "adblock")]
-    pub async fn handle_dns_adblock_rule_remove(&self, id: i64) -> Response {
+    pub async fn handle_dns_adblock_rule_remove(&self, id: i64, group: Option<String>) -> Response {
         dns_reply(
-            self.change_adblock_rules(|text| {
+            self.change_adblock_rules(group.as_deref(), |text| {
                 RulesFile::new(text)
                     .without_rule(id)
                     .map(Some)
@@ -440,7 +507,11 @@ impl ClientContext {
     }
 
     #[cfg(not(feature = "adblock"))]
-    pub async fn handle_dns_adblock_rule_remove(&self, _id: i64) -> Response {
+    pub async fn handle_dns_adblock_rule_remove(
+        &self,
+        _id: i64,
+        _group: Option<String>,
+    ) -> Response {
         Response::Error {
             error: "Adblock support not enabled in this build. Recompile with --features adblock."
                 .to_string(),
@@ -448,9 +519,14 @@ impl ClientContext {
     }
 
     #[cfg(feature = "adblock")]
-    pub async fn handle_dns_adblock_rule_status(&self, id: i64, enabled: bool) -> Response {
+    pub async fn handle_dns_adblock_rule_status(
+        &self,
+        id: i64,
+        enabled: bool,
+        group: Option<String>,
+    ) -> Response {
         dns_reply(
-            self.change_adblock_rules(|text| {
+            self.change_adblock_rules(group.as_deref(), |text| {
                 let file = RulesFile::new(text);
                 if !file.rule_entries().iter().any(|r| r.id == Some(id)) {
                     return Err(ChangeError::NotFound(format!(
@@ -464,7 +540,12 @@ impl ClientContext {
     }
 
     #[cfg(not(feature = "adblock"))]
-    pub async fn handle_dns_adblock_rule_status(&self, _id: i64, _enabled: bool) -> Response {
+    pub async fn handle_dns_adblock_rule_status(
+        &self,
+        _id: i64,
+        _enabled: bool,
+        _group: Option<String>,
+    ) -> Response {
         Response::Error {
             error: "Adblock support not enabled in this build. Recompile with --features adblock."
                 .to_string(),

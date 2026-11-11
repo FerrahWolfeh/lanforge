@@ -296,7 +296,8 @@ async fn test_dispatch_system_config_import_export() {
                     ("||custom-blocked.com^", AdblockRuleAction::Block, true),
                 ]
             );
-            let Response::DnsAllowlist(allowlist) = client_ctx.handle_dns_allowlist().await else {
+            let Response::DnsAllowlist(allowlist) = client_ctx.handle_dns_allowlist(None).await
+            else {
                 panic!("Expected Response::DnsAllowlist");
             };
             assert_eq!(allowlist.allowlist.len(), 1);
@@ -1556,6 +1557,7 @@ async fn adblock_changes_are_written_to_the_files() {
             "https://small.oisd.nl".into(),
             AdblockUrlKind::Blocklist,
             None,
+            None,
         )
         .await);
     ok(client_ctx
@@ -1566,14 +1568,18 @@ async fn adblock_changes_are_written_to_the_files() {
             Some(TimeOfDay::new(4, 30).unwrap()),
         )
         .await);
-    ok(client_ctx.handle_dns_block("ads.example".into()).await);
     ok(client_ctx
-        .handle_dns_adblock_rule_add("||track.example^$important".into(), "block".into())
+        .handle_dns_block("ads.example".into(), None)
+        .await);
+    ok(client_ctx
+        .handle_dns_adblock_rule_add("||track.example^$important".into(), "block".into(), None)
         .await);
     // Allowing a blocked domain replaces its block rule.
-    ok(client_ctx.handle_dns_allow("ads.example".into()).await);
     ok(client_ctx
-        .handle_dns_unallow("analytics.google.com".into())
+        .handle_dns_allow("ads.example".into(), None)
+        .await);
+    ok(client_ctx
+        .handle_dns_unallow("analytics.google.com".into(), None)
         .await);
 
     let (adblock, rules, text) = adblock_in_files(&dir);
@@ -1594,7 +1600,7 @@ async fn adblock_changes_are_written_to_the_files() {
     );
 
     // Disable, then remove, by the id the listing gives.
-    let Response::DnsAdblockRules(listed) = client_ctx.handle_dns_adblock_rules().await else {
+    let Response::DnsAdblockRules(listed) = client_ctx.handle_dns_adblock_rules(None).await else {
         panic!("Expected Response::DnsAdblockRules");
     };
     let track = listed
@@ -1604,14 +1610,14 @@ async fn adblock_changes_are_written_to_the_files() {
         .and_then(|r| r.id)
         .unwrap();
     ok(client_ctx
-        .handle_dns_adblock_rule_status(track, false)
+        .handle_dns_adblock_rule_status(track, false, None)
         .await);
     assert!(
         adblock_in_files(&dir)
             .1
             .contains("# ||track.example^$important\n")
     );
-    ok(client_ctx.handle_dns_adblock_rule_remove(track).await);
+    ok(client_ctx.handle_dns_adblock_rule_remove(track, None).await);
     assert!(!adblock_in_files(&dir).1.contains("track.example"));
 
     ok(client_ctx
@@ -1632,7 +1638,11 @@ async fn a_refused_adblock_change_writes_and_applies_nothing() {
     let (client_ctx, dir) = owner_adblock_client(true).await;
     for res in [
         client_ctx
-            .handle_dns_adblock_rule_add("||x.example^$client=10.0.0.1".into(), "block".into())
+            .handle_dns_adblock_rule_add(
+                "||x.example^$client=10.0.0.1".into(),
+                "block".into(),
+                None,
+            )
             .await,
         client_ctx
             .handle_dns_adblock_url_add(
@@ -1640,12 +1650,13 @@ async fn a_refused_adblock_change_writes_and_applies_nothing() {
                 "ftp://example.com/list".into(),
                 AdblockUrlKind::Blocklist,
                 None,
+                None,
             )
             .await,
     ] {
         assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
     }
-    let res = client_ctx.handle_dns_adblock_rule_remove(42).await;
+    let res = client_ctx.handle_dns_adblock_rule_remove(42, None).await;
     assert!(matches!(res, Response::NotFound { .. }), "{res:?}");
     let (_, rules, text) = adblock_in_files(&dir);
     assert_eq!(rules, OWNER_RULES);
@@ -1658,7 +1669,9 @@ async fn a_refused_adblock_change_writes_and_applies_nothing() {
 #[tokio::test]
 async fn adblock_change_on_read_only_config_applies_in_memory_and_says_so() {
     let (client_ctx, dir) = owner_adblock_client(false).await;
-    let res = client_ctx.handle_dns_block("ads.example".into()).await;
+    let res = client_ctx
+        .handle_dns_block("ads.example".into(), None)
+        .await;
     let Response::Success(ok) = res else {
         panic!("{res:?}");
     };
@@ -1693,17 +1706,19 @@ async fn every_block_path_announces_the_block() {
     };
 
     let res = client_ctx
-        .handle_dns_adblock_rule_add("ads.example".into(), "block".into())
+        .handle_dns_adblock_rule_add("ads.example".into(), "block".into(), None)
         .await;
     assert!(matches!(res, Response::Success(_)), "{res:?}");
     assert_eq!(blocked(&mut rx), ["ads.example"]);
 
-    let res = client_ctx.handle_dns_block("track.example".into()).await;
+    let res = client_ctx
+        .handle_dns_block("track.example".into(), None)
+        .await;
     assert!(matches!(res, Response::Success(_)), "{res:?}");
     assert_eq!(blocked(&mut rx), ["track.example"]);
 
     let res = client_ctx
-        .handle_dns_adblock_rule_add("bank.example".into(), "allow".into())
+        .handle_dns_adblock_rule_add("bank.example".into(), "allow".into(), None)
         .await;
     assert!(matches!(res, Response::Success(_)), "{res:?}");
     assert!(blocked(&mut rx).is_empty());
@@ -1719,7 +1734,7 @@ async fn a_pasted_list_is_imported_in_one_write() {
     let pasted = "# copied from a forum\nads.example\n0.0.0.0 pixel.example\n\
                   analytics.google.com\nnot a rule\n";
     let res = client_ctx
-        .handle_dns_adblock_rules_import(pasted.into(), "block".into())
+        .handle_dns_adblock_rules_import(pasted.into(), "block".into(), None)
         .await;
     let Response::DnsAdblockRulesImport(report) = res else {
         panic!("{res:?}");
@@ -1737,14 +1752,14 @@ async fn a_pasted_list_is_imported_in_one_write() {
     assert_eq!(client_ctx.ctx.get_dns_adblock_rules(), expected);
 
     let res = client_ctx
-        .handle_dns_adblock_rules_import("x.example".into(), "drop".into())
+        .handle_dns_adblock_rules_import("x.example".into(), "drop".into(), None)
         .await;
     assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
 
     // A read-only configuration takes the list in memory and says it is not saved.
     let (client_ctx, dir) = owner_adblock_client(false).await;
     let res = client_ctx
-        .handle_dns_adblock_rules_import("ads.example".into(), "block".into())
+        .handle_dns_adblock_rules_import("ads.example".into(), "block".into(), None)
         .await;
     let Response::DnsAdblockRulesImport(report) = res else {
         panic!("{res:?}");
@@ -1771,12 +1786,14 @@ async fn the_first_rule_creates_the_rules_file() {
     client_ctx.ctx.set_config_path(&path);
     client_ctx.ctx.set_config_writable(true);
 
-    let res = client_ctx.handle_dns_allow("bank.example".into()).await;
+    let res = client_ctx
+        .handle_dns_allow("bank.example".into(), None)
+        .await;
     assert!(matches!(res, Response::Success(_)), "{res:?}");
     let (adblock, rules, _) = adblock_in_files(&dir);
     assert_eq!(adblock.rules.as_deref(), Some("adblock/global.rules"));
     assert_eq!(rules, "@@||bank.example^\n");
-    let Response::DnsAllowlist(list) = client_ctx.handle_dns_allowlist().await else {
+    let Response::DnsAllowlist(list) = client_ctx.handle_dns_allowlist(None).await else {
         panic!("Expected Response::DnsAllowlist");
     };
     assert_eq!(list.allowlist.len(), 1);

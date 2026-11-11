@@ -1,21 +1,13 @@
-# Lanforge DHCPv6 Configuration
-# Features: IA_NA address assignment, IA_PD prefix delegation.
+# Lanforge DHCPv6 (IA_NA addresses).
 
 [dhcp.v6]
 enabled = true
-lease_time = 86400
+lease = "1d"
+# Absent: this router's own LAN address.
+dns = ["fd00::1"]
+# HTTP boot (option 59): a file name is served from this router, a URL is used as is.
+# boot_file = "ipxe.efi"
 
-# DNS Servers announced to clients.
-dns_servers = ["fd00::1"]
-
-# HTTP Boot file URL.
-boot_file = "http://[fd00::1]/boot/grub.efi"
-
-# Custom DHCPv6 options (optional).
-[dhcp.v6.options]
-# 59 = "s:http://[fd00::1]/boot/grub.efi" (Legacy way)
-
-# Address Pools (SLAAC-compatible suffixes)
-[[dhcp.v6.pools]]
-range_start = "::100"
-range_end = "::ffff"
+# Suffix ranges follow the LAN prefix, whatever the ISP delegates; a full address is fixed.
+[dhcp.v6.pools.main]
+range = "::100-::ffff"

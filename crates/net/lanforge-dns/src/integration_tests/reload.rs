@@ -378,3 +378,39 @@ async fn site_domains_change_applies_in_place() {
     cmd_tx.send(ServiceCommand::Stop).await.expect("alive");
     let _ = timeout(Duration::from_secs(2), serve).await;
 }
+
+/// The response cache is built from the live listener config (`[dns] cache_size`), not the
+/// start-up defaults; a change restarts the DNS service with the new size.
+#[tokio::test]
+async fn the_cache_size_comes_from_the_live_config() {
+    use lanforge_types::config::DnsListenConfig;
+
+    let ctx = init_test_context();
+    ctx.update_dns_listen(DnsListenConfig {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        cache_size: 1234,
+        ..DnsListenConfig::default()
+    });
+    let cfg = DnsConfig {
+        enabled: true,
+        ..mock_config()
+    };
+    let (_handle, mut service) = DnsService::inert(cfg, ctx.clone());
+    let ctx_service = ctx.clone();
+    tokio::spawn(async move {
+        let h = ServiceHandle::new(ServiceId::Dns, ctx_service.clone());
+        let _ = service.serve(&ctx_service, &h).await;
+    });
+    wait_for_service_online(&ctx, ServiceId::Dns).await;
+
+    let res = ctx
+        .dns_handle()
+        .expect("DNS handle")
+        .send_request(DnsRequest::Stats)
+        .await;
+    let Ok(DnsResponse::Stats(stats)) = res else {
+        panic!("stats: {res:?}");
+    };
+    assert_eq!(stats.cache_capacity, 1234);
+    ctx.terminate();
+}

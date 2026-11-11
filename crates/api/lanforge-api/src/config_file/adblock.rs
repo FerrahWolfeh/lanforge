@@ -11,13 +11,15 @@ use std::str::FromStr;
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::rules_file::RulesFile;
 use lanforge_types::network::dns::adblock::{
-    AdblockDbConfig, AdblockSourceFormat, AdblockUrlKind, BlockingMode, ClientSelector, TimeOfDay,
+    AdblockDbConfig, AdblockGroupPolicy, AdblockPolicy, AdblockSourceFormat, AdblockUrlKind,
+    BlockingMode, ClientSelector, TimeOfDay,
 };
 use serde::{Deserialize, Serialize};
 
 use super::sections::named_tables;
 
-/// Lists one client can have: the engine keeps one bit per list in a `u64`.
+/// Lists `[adblock]` can use, global and groups together: the engine keeps one bit per list in
+/// a `u64`.
 pub const MAX_LISTS: usize = 64;
 
 fn default_blocking_mode() -> String {
@@ -53,6 +55,26 @@ pub struct AdblockGroup {
     pub clients: Vec<ClientSelector>,
 }
 
+impl AdblockGroup {
+    /// Whether `name` can name a group the API creates: letters, digits, `-` and `_` (it names
+    /// the group's rules file and appears in URLs).
+    #[must_use]
+    pub fn is_valid_name(name: &str) -> bool {
+        !name.is_empty()
+            && name.len() <= 64
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    }
+
+    /// The rules file the API creates for this group when it has none: `adblock/<name>.rules`,
+    /// when the name can name a file.
+    #[must_use]
+    pub fn default_rules(&self) -> Option<String> {
+        Self::is_valid_name(&self.name).then(|| format!("adblock/{}.rules", self.name))
+    }
+}
+
 impl AdblockSettings {
     /// The default global rules file, as the API creates it.
     pub const DEFAULT_RULES: &str = "adblock/global.rules";
@@ -84,6 +106,71 @@ impl AdblockSettings {
                 vec![format!("{at} cannot be read ({}: {e})", path.display())],
             ),
         }
+    }
+
+    /// The groups and `bypass` as the filter runs them, each group with its sources and the
+    /// text of its rules file, plus one issue per rules line it ignores. A group rules file that
+    /// cannot be read is an issue and keeps the text `live` has for that group: a reload keeps
+    /// the rules that run, a boot starts the group without any. Without a config file to read
+    /// (`config_path` `None`: none, or a read-only one whose edits live in memory) no rules
+    /// file is read and the groups keep their live rules.
+    #[must_use]
+    pub fn policy(
+        &self,
+        config_path: Option<&Path>,
+        live: &AdblockPolicy,
+    ) -> (AdblockPolicy, Vec<String>) {
+        let live_rules = |name: &str| {
+            live.groups
+                .iter()
+                .find(|g| g.name == name)
+                .map(|g| g.rules.clone())
+                .unwrap_or_default()
+        };
+        let mut issues = Vec::new();
+        let mut groups = Vec::with_capacity(self.groups.len());
+        for group in &self.groups {
+            let rules = match (group.rules.as_deref(), config_path) {
+                (_, None) => live_rules(&group.name),
+                (None, Some(_)) => String::new(),
+                (Some(rules), Some(config_path)) => {
+                    let at = format!("[adblock.groups.\"{}\"] rules \"{rules}\"", group.name);
+                    let path = config_path.parent().unwrap_or(Path::new(".")).join(rules);
+                    match fs::read_to_string(&path) {
+                        Ok(text) => {
+                            issues.extend(RulesFile::new(&text).issues(&at));
+                            text
+                        }
+                        Err(e) => {
+                            issues.push(format!("{at} cannot be read ({}: {e})", path.display()));
+                            live_rules(&group.name)
+                        }
+                    }
+                }
+            };
+            groups.push(AdblockGroupPolicy {
+                name: group.name.clone(),
+                sources: group
+                    .lists
+                    .iter()
+                    .filter_map(|name| {
+                        self.sources
+                            .iter()
+                            .find(|s| s.name.as_deref() == Some(name))
+                    })
+                    .cloned()
+                    .collect(),
+                rules,
+                clients: group.clients.clone(),
+            });
+        }
+        (
+            AdblockPolicy {
+                bypass: self.bypass.clone(),
+                groups,
+            },
+            issues,
+        )
     }
 
     /// The sources of the global layer, in `lists` order.
@@ -338,8 +425,10 @@ impl AdblockFile {
             });
         }
 
-        // Names a layer may use: known sources, once each, at most MAX_LISTS per client.
-        let known = |at: &str, names: &[String], taken: usize, issues: &mut Vec<String>| {
+        // Names a layer may use: known sources, once each, at most MAX_LISTS distinct ones over
+        // all layers (`used`).
+        let mut used: Vec<String> = Vec::new();
+        let mut known = |at: &str, names: &[String], issues: &mut Vec<String>| {
             let mut out: Vec<String> = Vec::with_capacity(names.len());
             for name in names {
                 if !sources
@@ -349,18 +438,21 @@ impl AdblockFile {
                     issues.push(format!("{at} lists \"{name}\" is not a source; left out"));
                 } else if out.contains(name) {
                     issues.push(format!("{at} lists \"{name}\" is listed twice; left out"));
-                } else if taken + out.len() >= MAX_LISTS {
+                } else if !used.contains(name) && used.len() >= MAX_LISTS {
                     issues.push(format!(
-                        "{at} lists \"{name}\": more than {MAX_LISTS} lists for one client; left out"
+                        "{at} lists \"{name}\": more than {MAX_LISTS} lists in [adblock]; left out"
                     ));
                 } else {
+                    if !used.contains(name) {
+                        used.push(name.clone());
+                    }
                     out.push(name.clone());
                 }
             }
             out
         };
 
-        let lists = known("[adblock]", &self.lists, 0, &mut issues);
+        let lists = known("[adblock]", &self.lists, &mut issues);
         let rules = rules_path("[adblock]", self.rules.as_ref(), &mut issues);
         let bypass = selectors("[adblock]", "bypass", &self.bypass, &mut issues);
 
@@ -378,11 +470,9 @@ impl AdblockFile {
                     "{at} lists repeats lists of the global layer; those are left out (every client has them)"
                 ));
             }
-            let group_lists = known(&at, &own, lists.len(), &mut issues);
+            let group_lists = known(&at, &own, &mut issues);
+            // A group without clients is valid (created first, members added later).
             let clients = selectors(&at, "clients", &file.clients, &mut issues);
-            if clients.is_empty() {
-                issues.push(format!("{at} has no clients; it applies to nobody"));
-            }
             groups.push(AdblockGroup {
                 name: name.clone(),
                 lists: group_lists,
@@ -706,7 +796,6 @@ clients = ["dev:galaxy tab"]
             "[adblock.groups.\"kids\"] lists repeats lists of the global layer",
             "[adblock.groups.\"kids\"] lists \"unknown\" is not a source",
             "[adblock.groups.\"kids\"] clients \"dev:galaxy tab\"",
-            "[adblock.groups.\"kids\"] has no clients",
             "[adblock.groups.\"kids\"] rules = \"/etc/lanforge/kids.rules\"",
             "[adblock.sources.\"unused\"] is not in `lists` nor in a group; not downloaded",
         ];
@@ -719,8 +808,18 @@ clients = ["dev:galaxy tab"]
         assert_eq!(issues.len(), expected.len(), "{issues:#?}");
     }
 
+    /// A group without clients is a valid state (the `WebUI` creates a group, then adds devices,
+    /// or removes its last member): not an issue, it just applies to nobody.
     #[test]
-    fn a_client_gets_at_most_64_lists() {
+    fn a_group_without_clients_is_not_an_issue() {
+        let (adblock, issues) = parse("[adblock.groups.empty]\n").to_config();
+        assert_eq!(issues, Vec::<String>::new());
+        assert_eq!(adblock.groups.len(), 1);
+        assert!(adblock.groups[0].clients.is_empty());
+    }
+
+    #[test]
+    fn the_file_uses_at_most_64_lists() {
         let mut text = String::from("[adblock]\nlists = [");
         for i in 0..=MAX_LISTS {
             text.push_str(&format!("\"l{i}\", "));
@@ -739,15 +838,52 @@ clients = ["dev:galaxy tab"]
             issues,
             vec![
                 format!(
-                    "[adblock] lists \"l64\": more than {MAX_LISTS} lists for one client; left out"
+                    "[adblock] lists \"l64\": more than {MAX_LISTS} lists in [adblock]; left out"
                 ),
                 format!(
-                    "[adblock.groups.\"g\"] lists \"l64\": more than {MAX_LISTS} lists for one client; left out"
+                    "[adblock.groups.\"g\"] lists \"l64\": more than {MAX_LISTS} lists in [adblock]; left out"
                 ),
                 "[adblock.sources.\"l64\"] is not in `lists` nor in a group; not downloaded"
                     .to_string(),
             ]
         );
+    }
+
+    /// The engine indexes every list once, global and groups together: two groups of 33 lists
+    /// each are 66 lists, too many even though no client gets more than 33. A list two groups
+    /// share counts once.
+    #[test]
+    fn groups_share_the_64_lists() {
+        use std::ops::Range;
+
+        let mut text = String::from("[adblock]\n");
+        for i in 0..66 {
+            text.push_str(&format!(
+                "[adblock.sources.l{i}]\nurl = \"https://example.com/{i}\"\n"
+            ));
+        }
+        let names = |range: Range<usize>| {
+            range
+                .map(|i| format!("\"l{i}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        text.push_str(&format!(
+            "[adblock.groups.a]\nlists = [{}]\nclients = [\"10.0.0.1\"]\n",
+            names(0..33)
+        ));
+        text.push_str(&format!(
+            "[adblock.groups.b]\nlists = [{}, \"l0\"]\nclients = [\"10.0.0.2\"]\n",
+            names(33..66)
+        ));
+        let (adblock, issues) = parse(&text).to_config();
+        assert_eq!(adblock.groups[0].lists.len(), 33);
+        // l33..l63 fit (64 in all), l64 and l65 do not; l0 is already indexed.
+        assert_eq!(adblock.groups[1].lists.len(), 32);
+        assert!(adblock.groups[1].lists.contains(&"l0".to_string()));
+        let over: Vec<_> = issues.iter().filter(|i| i.contains("more than")).collect();
+        assert_eq!(over.len(), 2, "{issues:#?}");
+        assert!(over[0].contains("\"l64\"") && over[1].contains("\"l65\""));
     }
 
     /// The old form (`allowlist`, `[adblock.rules."<domain>"]`, per-source `enabled`) is not

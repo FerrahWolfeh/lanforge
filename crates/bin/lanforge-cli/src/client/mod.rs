@@ -1,17 +1,18 @@
 pub mod build_check;
 
 use color_eyre::eyre::{Context, Result, eyre};
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use tokio::net::UnixStream;
 
 use lanforge_api::api::{
-    AuthTokenResponse, AuthTokensResponse, CreateUserPayload, DeviceListQuery, DevicesResponse,
-    DhcpOptionsResponse, DhcpPoolsConfigResponse, DhcpPoolsResponse, DhcpReconcileResponse,
-    DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse, DnsCacheStatsExtResponse,
-    DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse, DnsRewritesResponse,
-    DnsUpstreamsResponse, HostConfigEntry, HostsResponse, LeasesResponse, ServiceBannersResponse,
-    SetupPayload, SetupResponse, SetupStatusResponse, SimpleSuccess, StatusResponse,
-    SystemConfigExport, SystemConfigImportResponse, UserListResponse, UserResponse, WhoisResponse,
+    AdblockGroupChange, AuthTokenResponse, AuthTokensResponse, CreateUserPayload, DeviceListQuery,
+    DevicesResponse, DhcpOptionsResponse, DhcpPoolsConfigResponse, DhcpPoolsResponse,
+    DhcpReconcileResponse, DnsAdblockGroupsResponse, DnsAdblockRulesResponse, DnsAllowlistResponse,
+    DnsAnalyticsResponse, DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse,
+    DnsQueryResponse, DnsReverseResolversResponse, DnsRewritesResponse, DnsUpstreamsResponse,
+    HostConfigEntry, HostsResponse, LeasesResponse, ServiceBannersResponse, SetupPayload,
+    SetupResponse, SetupStatusResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
+    SystemConfigImportResponse, UserListResponse, UserResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_types::auth::ApiScopes;
@@ -1207,40 +1208,47 @@ impl LanforgeClient {
             .map_err(|e| eyre!("{e}"))
     }
 
-    pub async fn dns_block(&self, domain: String) -> Result<SimpleSuccess> {
+    /// Blocks `domain` in the global rules file, or in `group`'s.
+    pub async fn dns_block(&self, domain: String, group: Option<String>) -> Result<SimpleSuccess> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
             return self
                 .http_post(
-                    "/dns/adblock/rules",
+                    &format!("/dns/adblock/rules{}", group_query(group.as_deref())),
                     &serde_json::json!({ "domain": domain, "action": "block" }),
                 )
                 .await;
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.dns_block(domain).await.map_err(|e| eyre!("{e}"))
+        rpc.dns_block(domain, group).await.map_err(|e| eyre!("{e}"))
     }
 
-    pub async fn dns_allow(&self, domain: String) -> Result<SimpleSuccess> {
+    /// Allows `domain` in the global rules file, or in `group`'s.
+    pub async fn dns_allow(&self, domain: String, group: Option<String>) -> Result<SimpleSuccess> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
             return self
                 .http_post(
-                    "/dns/adblock/rules",
+                    &format!("/dns/adblock/rules{}", group_query(group.as_deref())),
                     &serde_json::json!({ "domain": domain, "action": "allow" }),
                 )
                 .await;
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.dns_allow(domain).await.map_err(|e| eyre!("{e}"))
+        rpc.dns_allow(domain, group).await.map_err(|e| eyre!("{e}"))
     }
 
-    pub async fn dns_unallow(&self, domain: String) -> Result<SimpleSuccess> {
+    /// Removes the allow rule of `domain` from the global rules file, or from `group`'s.
+    pub async fn dns_unallow(
+        &self,
+        domain: String,
+        group: Option<String>,
+    ) -> Result<SimpleSuccess> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
             return self
                 .http_delete_with_body(
-                    "/dns/adblock/rules",
+                    &format!("/dns/adblock/rules{}", group_query(group.as_deref())),
                     &serde_json::json!({
                         "rule": AdblockRuleEntry::rule_line(&domain, AdblockRuleAction::Allow)
                     }),
@@ -1248,31 +1256,168 @@ impl LanforgeClient {
                 .await;
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.dns_unallow(domain).await.map_err(|e| eyre!("{e}"))
+        rpc.dns_unallow(domain, group)
+            .await
+            .map_err(|e| eyre!("{e}"))
     }
 
-    pub async fn dns_allowlist(&self) -> Result<DnsAllowlistResponse> {
+    /// The allow rules of the global rules file, or of `group`'s.
+    pub async fn dns_allowlist(&self, group: Option<String>) -> Result<DnsAllowlistResponse> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
-            return self.http_get("/dns/adblock/allowlist").await;
+            return self
+                .http_get(&format!(
+                    "/dns/adblock/allowlist{}",
+                    group_query(group.as_deref())
+                ))
+                .await;
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.dns_allowlist().await.map_err(|e| eyre!("{e}"))
+        rpc.dns_allowlist(group).await.map_err(|e| eyre!("{e}"))
     }
 
-    pub async fn dns_adblock_check(&self, domain: String) -> Result<Box<AdblockCheckResponse>> {
+    /// The rules of the global rules file, or of `group`'s.
+    pub async fn dns_adblock_rules(
+        &self,
+        group: Option<String>,
+    ) -> Result<DnsAdblockRulesResponse> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
+            return self
+                .http_get(&format!(
+                    "/dns/adblock/rules{}",
+                    group_query(group.as_deref())
+                ))
+                .await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_adblock_rules(group).await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_adblock_groups(&self) -> Result<Box<DnsAdblockGroupsResponse>> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return Ok(Box::new(self.http_get("/dns/adblock/groups").await?));
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_adblock_groups().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_adblock_group_create(
+        &self,
+        name: String,
+        lists: Vec<String>,
+        clients: Vec<String>,
+    ) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self
+                .http_post(
+                    "/dns/adblock/groups",
+                    &serde_json::json!({ "name": name, "lists": lists, "clients": clients }),
+                )
+                .await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_adblock_group_create(name, lists, clients)
+            .await
+            .map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_adblock_group_change(
+        &self,
+        name: String,
+        change: AdblockGroupChange,
+    ) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self
+                .http_patch(
+                    &format!("/dns/adblock/groups/{}", urlencoding(&name)),
+                    &change,
+                )
+                .await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_adblock_group_change(name, change)
+            .await
+            .map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_adblock_group_delete(&self, name: String) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self
+                .http_delete(&format!("/dns/adblock/groups/{}", urlencoding(&name)))
+                .await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_adblock_group_delete(name)
+            .await
+            .map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_adblock_bypass_change(
+        &self,
+        add: Vec<String>,
+        remove: Vec<String>,
+    ) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self
+                .http_patch(
+                    "/dns/adblock/bypass",
+                    &serde_json::json!({ "add": add, "remove": remove }),
+                )
+                .await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_adblock_bypass_change(add, remove)
+            .await
+            .map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_adblock_device_change(
+        &self,
+        mac: MacAddr,
+        join: Vec<String>,
+        leave: Vec<String>,
+        bypass: Option<bool>,
+    ) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self
+                .http_patch(
+                    &format!("/dns/adblock/devices/{mac}"),
+                    &serde_json::json!({ "join": join, "leave": leave, "bypass": bypass }),
+                )
+                .await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_adblock_device_change(mac, join, leave, bypass)
+            .await
+            .map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_adblock_check(
+        &self,
+        domain: String,
+        client: Option<IpAddr>,
+    ) -> Result<Box<AdblockCheckResponse>> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            let client = client.map(|ip| format!("&client={}", urlencoding(&ip.to_string())));
             return Ok(Box::new(
                 self.http_get(&format!(
-                    "/dns/adblock/check?domain={}",
-                    urlencoding(&domain)
+                    "/dns/adblock/check?domain={}{}",
+                    urlencoding(&domain),
+                    client.unwrap_or_default()
                 ))
                 .await?,
             ));
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.dns_adblock_check(domain)
+        rpc.dns_adblock_check(domain, client)
             .await
             .map_err(|e| eyre!("{e}"))
     }
@@ -1286,23 +1431,26 @@ impl LanforgeClient {
         rpc.dns_adblock_sources().await.map_err(|e| eyre!("{e}"))
     }
 
+    /// Adds a list source (named `name`, or after its URL) to the global layer, or to `group`.
     pub async fn dns_adblock_url_add(
         &self,
+        name: Option<String>,
         url: String,
         kind: AdblockUrlKind,
         format: Option<AdblockSourceFormat>,
+        group: Option<String>,
     ) -> Result<SimpleSuccess> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
             return self
                 .http_post(
-                    "/dns/adblock/sources",
-                    &serde_json::json!({ "url": url, "kind": kind, "format": format }),
+                    &format!("/dns/adblock/sources{}", group_query(group.as_deref())),
+                    &serde_json::json!({ "name": name, "url": url, "kind": kind, "format": format }),
                 )
                 .await;
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.dns_adblock_url_add(url, kind, format)
+        rpc.dns_adblock_url_add(name, url, kind, format, group)
             .await
             .map_err(|e| eyre!("{e}"))
     }
@@ -1805,4 +1953,10 @@ impl LanforgeClient {
 #[cfg(feature = "remote")]
 fn urlencoding(s: &str) -> String {
     form_urlencoded::byte_serialize(s.as_bytes()).collect()
+}
+
+/// `?group=<name>` for a group's rules or lists, nothing for the global layer.
+#[cfg(feature = "remote")]
+fn group_query(group: Option<&str>) -> String {
+    group.map_or_else(String::new, |g| format!("?group={}", urlencoding(g)))
 }

@@ -9,6 +9,8 @@ use crate::pipeline::middleware::{
 #[cfg(feature = "adblock")]
 use crate::resolver::AdBlocker;
 #[cfg(feature = "adblock")]
+use crate::resolver::filter::ClientLayers;
+#[cfg(feature = "adblock")]
 use crate::resolver::filter::manifest::AdblockManifest;
 use crate::resolver::recursive::cache::CacheKey;
 use crate::resolver::{
@@ -20,6 +22,8 @@ use crate::server::transport::doq;
 #[cfg(feature = "dot")]
 use crate::server::transport::dot::run_dot_worker;
 use crate::server::transport::net::bind_udp;
+#[cfg(feature = "adblock")]
+use crate::server::worker::adblock_sources;
 #[cfg(feature = "adblock")]
 use crate::server::worker::compute_next_refresh_target;
 #[cfg(feature = "adblock")]
@@ -45,6 +49,8 @@ use lanforge_transport::TransportMetrics;
 #[cfg(feature = "adblock")]
 use lanforge_types::config::AdblockRules;
 use lanforge_types::config::{ConfigDomain, DnsListenConfig, SiteDomains};
+#[cfg(feature = "adblock")]
+use lanforge_types::network::dns::adblock::AdblockPolicy;
 use lanforge_types::network::dns::{
     AdblockCheckResponse, DnsAdblockSourcesResponse, DnsAdblockStatusResponse, DnsCacheEntry,
     DnsCacheResponse, DnsCacheStatsExtResponse, DnsClass, DnsLifetimeStats, DnsMessage,
@@ -678,7 +684,7 @@ async fn build_upstreams(
 
 /// Points the resolver at [`effective_upstream_targets`]. `force` rebuilds even an unchanged set
 /// (an explicit config change); otherwise an unchanged set is left alone, cache included.
-/// `cfg` with its listener fields taken from the live `DnsListenConfig`.
+/// `cfg` with its listener and cache fields taken from the live `DnsListenConfig`.
 fn with_live_listeners(cfg: &DnsConfig, live: &DnsListenConfig) -> DnsConfig {
     DnsConfig {
         enabled: live.enabled,
@@ -687,6 +693,8 @@ fn with_live_listeners(cfg: &DnsConfig, live: &DnsListenConfig) -> DnsConfig {
         doq_listen: live.doq_listen.filter(|_| live.doq_enabled),
         tls_cert: live.tls_cert.clone(),
         tls_key: live.tls_key.clone(),
+        cache_size: live.cache_size,
+        cache_min_ttl: live.cache_min_ttl,
         ..cfg.clone()
     }
 }
@@ -862,7 +870,7 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
         DnsRequest::AdblockSources => {
             #[cfg(feature = "adblock")]
             {
-                let urls = dns_ctx.ctx.get_dns_adblock_urls();
+                let urls = adblock_sources(&dns_ctx.ctx);
                 let cache_dir = dns_ctx
                     .cfg
                     .adblock_cache_dir
@@ -894,6 +902,7 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
                                 consecutive_failures: sm.consecutive_failures,
                                 last_error: sm.last_error.clone(),
                                 sample_unsupported: sm.unsupported_samples.clone(),
+                                kind: u.kind,
                             }
                         } else {
                             AdblockSourceStatus {
@@ -910,6 +919,7 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
                                 consecutive_failures: 0,
                                 last_error: None,
                                 sample_unsupported: Vec::new(),
+                                kind: u.kind,
                             }
                         }
                     })
@@ -924,21 +934,25 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
                 })
             }
         }
-        DnsRequest::AdblockCheck { domain } => {
+        DnsRequest::AdblockCheck { domain, client } => {
             #[cfg(feature = "adblock")]
             {
                 if let Some(filter) = &dns_ctx.filter {
                     let cleaned = domain.trim_end_matches('.').to_ascii_lowercase();
-                    let matched_filter = filter.check_domain(&cleaned);
+                    let layers = client.map_or(ClientLayers::GLOBAL, |ip| {
+                        filter.client_layers(&dns_ctx.ctx, ip)
+                    });
+                    let matched_filter = filter.check(&cleaned, layers);
                     let mut source_matches = Vec::new();
                     if let Some(FilterMatch {
-                        origin: FilterOrigin::List { source_id },
+                        origin:
+                            FilterOrigin::List { source_id } | FilterOrigin::GroupList { source_id, .. },
                         action,
                         ref rule,
                         important,
                     }) = matched_filter
                     {
-                        let urls = dns_ctx.ctx.get_dns_adblock_urls();
+                        let urls = adblock_sources(&dns_ctx.ctx);
                         let url = urls
                             .iter()
                             .find(|u| u.source_id() == source_id)
@@ -958,23 +972,22 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
                         matched: matched_filter.is_some(),
                         filter: matched_filter,
                         source_matches,
+                        bypass: layers.bypass,
+                        groups: filter.group_names(layers),
                     })
                 } else {
                     DnsResponse::AdblockCheck(AdblockCheckResponse {
                         domain,
-                        matched: false,
-                        filter: None,
-                        source_matches: Vec::new(),
+                        ..Default::default()
                     })
                 }
             }
             #[cfg(not(feature = "adblock"))]
             {
+                let _ = client;
                 DnsResponse::AdblockCheck(AdblockCheckResponse {
                     domain,
-                    matched: false,
-                    filter: None,
-                    source_matches: Vec::new(),
+                    ..Default::default()
                 })
             }
         }
@@ -1121,7 +1134,7 @@ async fn resolve_diagnostic_internal(
 
 /// Change of a filter-related config section observed by the DNS service loop.
 enum FilterChange {
-    /// Allowlist or custom block rules changed: resync the in-memory filter.
+    /// A rules file or the groups changed: resync the in-memory filter.
     #[cfg_attr(not(feature = "adblock"), allow(dead_code))]
     Rules,
     /// Adblock settings changed (mode, blocking IPs, enabled).
@@ -1135,6 +1148,7 @@ enum FilterChange {
 struct FilterSubscriptions {
     rules: ConfigSubscription<AdblockRules>,
     adblock: ConfigSubscription<AdblockDbConfig>,
+    policy: ConfigSubscription<AdblockPolicy>,
 }
 
 #[cfg(feature = "adblock")]
@@ -1143,12 +1157,14 @@ impl FilterSubscriptions {
         Self {
             rules: ctx.config_subscription(),
             adblock: ctx.config_subscription(),
+            policy: ctx.config_subscription(),
         }
     }
 
     async fn next(&mut self) -> FilterChange {
         tokio::select! {
             Some(_) = self.rules.next() => FilterChange::Rules,
+            Some(_) = self.policy.next() => FilterChange::Rules,
             Some(delta) = self.adblock.next() => FilterChange::Adblock(delta.new),
             else => future::pending().await,
         }
@@ -1176,7 +1192,7 @@ fn apply_filter_change(dns_ctx: &DnsContext, ctx: &LanforgeContext, change: Filt
     };
     match change {
         FilterChange::Rules => {
-            info!("Reloading manual adblock rules");
+            info!("Reloading adblock rules and groups");
             filter.sync_from_context(ctx);
         }
         FilterChange::Adblock(cfg) => {

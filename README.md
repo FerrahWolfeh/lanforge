@@ -146,19 +146,23 @@ router = "192.168.1.1"
 subnet_mask = "255.255.255.0"
 dns = ["192.168.1.1"]
 
-[[dhcp.v4.pools]]
-range_start = "192.168.1.100"
-range_end = "192.168.1.250"
+[dhcp.v4.pools.lan]
+range = "192.168.1.100-192.168.1.250"
 
 [dns]
 enabled = true
 listen = "0.0.0.0:53"
 
+[dns.upstreams.default]
+addresses = ["udp://1.1.1.1:53", "udp://9.9.9.9:53"]
+
 [http]
 enabled = true
 listen = "[::]:8088"
-webui = true
 ```
+
+Every key is documented in [`contrib/lanforge.toml`](contrib/lanforge.toml); section snippets
+live in [`docs/config/`](docs/config/). `lanforge reload` applies edits without a restart.
 
 ---
 

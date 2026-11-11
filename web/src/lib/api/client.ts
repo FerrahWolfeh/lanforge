@@ -23,6 +23,7 @@ import type {
 	Dhcpv4PoolConfig,
 	Dhcpv6PoolConfig,
 	AdblockCheckResponse,
+	DnsAdblockGroupsResponse,
 	DnsAdblockSourcesResponse,
 	DnsAdblockStatusResponse,
 	DnsAdblockUrlEntry,
@@ -559,10 +560,18 @@ export const dnsAllow = (domain: string) => dnsAdblockRuleAdd(domain, 'allow');
 export const dnsAdblockUrls = async (): Promise<DnsAdblockUrlEntry[]> =>
 	extractList<DnsAdblockUrlEntry>(await get<any>('/dns/adblock/urls'), 'urls');
 export const dnsAdblockSources = () => get<DnsAdblockSourcesResponse>('/dns/adblock/sources');
-export const dnsAdblockCheck = (domain: string) =>
-	get<AdblockCheckResponse>(`/dns/adblock/check?domain=${encodeURIComponent(domain)}`);
-export const dnsAdblockUrlAdd = (entry: DnsAdblockUrlEntry) =>
-	post<void>('/dns/adblock/sources', entry);
+export const dnsAdblockCheck = (domain: string, client?: string) =>
+	get<AdblockCheckResponse>(
+		`/dns/adblock/check?domain=${encodeURIComponent(domain)}` +
+			(client ? `&client=${encodeURIComponent(client)}` : '')
+	);
+/** `?group=<name>` for a group's rules or lists; nothing for the global layer. */
+const groupQuery = (group?: string | null) =>
+	group ? `?group=${encodeURIComponent(group)}` : '';
+
+/** Adds a list to the global layer, or to `group`. */
+export const dnsAdblockUrlAdd = (entry: DnsAdblockUrlEntry, group?: string | null) =>
+	post<void>(`/dns/adblock/sources${groupQuery(group)}`, entry);
 export const dnsAdblockUrlRemove = (entry: DnsAdblockUrlEntry) =>
 	del<void>('/dns/adblock/sources', entry);
 export const dnsAdblockConfigSet = (config: {
@@ -571,18 +580,39 @@ export const dnsAdblockConfigSet = (config: {
 	blocking_ip_v6?: string | null;
 	refresh_time?: TimeOfDay;
 }) => post<void>('/dns/adblock/config', config);
-export const dnsAdblockRules = async (): Promise<AdblockRuleEntry[]> =>
-	extractList<AdblockRuleEntry>(await get<any>('/dns/adblock/rules'), 'rules');
-export const dnsAdblockRuleAdd = (domain: string, action: 'block' | 'allow') =>
-	post<void>('/dns/adblock/rules', { domain, action });
+// The rules calls act on the global rules file, or on `group`'s.
+export const dnsAdblockRules = async (group?: string | null): Promise<AdblockRuleEntry[]> =>
+	extractList<AdblockRuleEntry>(await get<any>(`/dns/adblock/rules${groupQuery(group)}`), 'rules');
+export const dnsAdblockRuleAdd = (
+	domain: string,
+	action: 'block' | 'allow',
+	group?: string | null
+) => post<void>(`/dns/adblock/rules${groupQuery(group)}`, { domain, action });
 // Rules and rewrites are addressed by content: their ids are 63-bit hashes that JSON.parse rounds.
-export const dnsAdblockRuleRemove = (rule: string) =>
-	del<void>('/dns/adblock/rules', { rule });
-export const dnsAdblockRuleStatus = (rule: string, enabled: boolean) =>
-	put<void>('/dns/adblock/rules/status', { rule, enabled });
+export const dnsAdblockRuleRemove = (rule: string, group?: string | null) =>
+	del<void>(`/dns/adblock/rules${groupQuery(group)}`, { rule });
+export const dnsAdblockRuleStatus = (rule: string, enabled: boolean, group?: string | null) =>
+	put<void>(`/dns/adblock/rules/status${groupQuery(group)}`, { rule, enabled });
 /** A pasted list in one call: one rules-file write, one engine reload. */
-export const dnsAdblockRulesImport = (text: string, action: 'block' | 'allow') =>
-	post<AdblockRulesImport>('/dns/adblock/rules/import', { text, action });
+export const dnsAdblockRulesImport = (
+	text: string,
+	action: 'block' | 'allow',
+	group?: string | null
+) => post<AdblockRulesImport>(`/dns/adblock/rules/import${groupQuery(group)}`, { text, action });
+
+// Adblock groups (overrides of the global layer for some clients) and bypass.
+export const dnsAdblockGroups = () => get<DnsAdblockGroupsResponse>('/dns/adblock/groups');
+export const dnsAdblockGroupCreate = (name: string, lists: string[], clients: string[]) =>
+	post<void>('/dns/adblock/groups', { name, lists, clients });
+export const dnsAdblockGroupUpdate = (name: string, lists: string[], clients: string[]) =>
+	put<void>(`/dns/adblock/groups/${encodeURIComponent(name)}`, { lists, clients });
+export const dnsAdblockGroupDelete = (name: string) =>
+	del<void>(`/dns/adblock/groups/${encodeURIComponent(name)}`);
+export const dnsAdblockBypassSet = (clients: string[]) =>
+	put<void>('/dns/adblock/bypass', { clients });
+/** Puts one device in exactly `groups`, and bypassed or not. */
+export const dnsAdblockDeviceSet = (mac: string, groups: string[], bypass: boolean) =>
+	put<void>(`/dns/adblock/devices/${encodeURIComponent(mac)}`, { groups, bypass });
 
 // ---------------------------------------------------------------------------
 // DNS — rewrites

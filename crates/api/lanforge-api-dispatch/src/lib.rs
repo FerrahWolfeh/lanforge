@@ -8,14 +8,15 @@ use lanforge_dhcp as _;
 #[cfg(test)]
 use tempfile as _;
 
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
 use lanforge_api::api::{
-    AdblockCheckResponse, AuthTokenResponse, AuthTokensResponse, CreateUserPayload,
-    DeviceListQuery, DevicesResponse, DhcpOptionsResponse, DhcpPoolsConfigResponse,
-    DhcpPoolsResponse, DhcpReconcileResponse, DnsAdblockSourcesResponse, DnsAdblockStatusResponse,
+    AdblockCheckResponse, AdblockGroupChange, AuthTokenResponse, AuthTokensResponse,
+    CreateUserPayload, DeviceListQuery, DevicesResponse, DhcpOptionsResponse,
+    DhcpPoolsConfigResponse, DhcpPoolsResponse, DhcpReconcileResponse, DnsAdblockGroupsResponse,
+    DnsAdblockRulesResponse, DnsAdblockSourcesResponse, DnsAdblockStatusResponse,
     DnsAdblockUrlsResponse, DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse,
     DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse,
     DnsRewritesResponse, DnsStatsResponse, DnsUpstreamModeResponse, DnsUpstreamsResponse,
@@ -465,22 +466,34 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn dns_block(&self, domain: String) -> Result<SimpleSuccess, RpcCallError> {
-        match self.handle_dns_block(domain).await {
+    async fn dns_block(
+        &self,
+        domain: String,
+        group: Option<String>,
+    ) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_dns_block(domain, group).await {
             Response::Success(s) => Ok(s),
             other => Err(Self::map_failure(other)),
         }
     }
 
-    async fn dns_allow(&self, domain: String) -> Result<SimpleSuccess, RpcCallError> {
-        match self.handle_dns_allow(domain).await {
+    async fn dns_allow(
+        &self,
+        domain: String,
+        group: Option<String>,
+    ) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_dns_allow(domain, group).await {
             Response::Success(s) => Ok(s),
             other => Err(Self::map_failure(other)),
         }
     }
 
-    async fn dns_unallow(&self, domain: String) -> Result<SimpleSuccess, RpcCallError> {
-        match self.handle_dns_unallow(domain).await {
+    async fn dns_unallow(
+        &self,
+        domain: String,
+        group: Option<String>,
+    ) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_dns_unallow(domain, group).await {
             Response::Success(s) => Ok(s),
             other => Err(Self::map_failure(other)),
         }
@@ -531,8 +544,11 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn dns_allowlist(&self) -> Result<DnsAllowlistResponse, RpcCallError> {
-        match self.handle_dns_allowlist().await {
+    async fn dns_allowlist(
+        &self,
+        group: Option<String>,
+    ) -> Result<DnsAllowlistResponse, RpcCallError> {
+        match self.handle_dns_allowlist(group).await {
             Response::DnsAllowlist(r) => Ok(r),
             other => Err(Self::map_failure(other)),
         }
@@ -540,12 +556,14 @@ impl LanforgeRpc for ClientContext {
 
     async fn dns_adblock_url_add(
         &self,
+        name: Option<String>,
         url: String,
         kind: AdblockUrlKind,
         format: Option<AdblockSourceFormat>,
+        group: Option<String>,
     ) -> Result<SimpleSuccess, RpcCallError> {
         match self
-            .handle_dns_adblock_url_add(None, url, kind, format)
+            .handle_dns_adblock_url_add(name, url, kind, format, group)
             .await
         {
             Response::Success(s) => Ok(s),
@@ -577,9 +595,87 @@ impl LanforgeRpc for ClientContext {
     async fn dns_adblock_check(
         &self,
         domain: String,
+        client: Option<IpAddr>,
     ) -> Result<Box<AdblockCheckResponse>, RpcCallError> {
-        match self.handle_dns_adblock_check(domain).await {
+        match self.handle_dns_adblock_check(domain, client).await {
             Response::AdblockCheck(r) => Ok(r),
+            other => Err(Self::map_failure(other)),
+        }
+    }
+
+    async fn dns_adblock_rules(
+        &self,
+        group: Option<String>,
+    ) -> Result<DnsAdblockRulesResponse, RpcCallError> {
+        match self.handle_dns_adblock_rules(group).await {
+            Response::DnsAdblockRules(r) => Ok(r),
+            other => Err(Self::map_failure(other)),
+        }
+    }
+
+    async fn dns_adblock_groups(&self) -> Result<Box<DnsAdblockGroupsResponse>, RpcCallError> {
+        match self.handle_dns_adblock_groups().await {
+            Response::DnsAdblockGroups(r) => Ok(r),
+            other => Err(Self::map_failure(other)),
+        }
+    }
+
+    async fn dns_adblock_group_create(
+        &self,
+        name: String,
+        lists: Vec<String>,
+        clients: Vec<String>,
+    ) -> Result<SimpleSuccess, RpcCallError> {
+        match self
+            .handle_dns_adblock_group_create(name, lists, clients)
+            .await
+        {
+            Response::Success(s) => Ok(s),
+            other => Err(Self::map_failure(other)),
+        }
+    }
+
+    async fn dns_adblock_group_change(
+        &self,
+        name: String,
+        change: AdblockGroupChange,
+    ) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_dns_adblock_group_change(name, change).await {
+            Response::Success(s) => Ok(s),
+            other => Err(Self::map_failure(other)),
+        }
+    }
+
+    async fn dns_adblock_group_delete(&self, name: String) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_dns_adblock_group_delete(name).await {
+            Response::Success(s) => Ok(s),
+            other => Err(Self::map_failure(other)),
+        }
+    }
+
+    async fn dns_adblock_bypass_change(
+        &self,
+        add: Vec<String>,
+        remove: Vec<String>,
+    ) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_dns_adblock_bypass_change(add, remove).await {
+            Response::Success(s) => Ok(s),
+            other => Err(Self::map_failure(other)),
+        }
+    }
+
+    async fn dns_adblock_device_change(
+        &self,
+        mac: MacAddr,
+        join: Vec<String>,
+        leave: Vec<String>,
+        bypass: Option<bool>,
+    ) -> Result<SimpleSuccess, RpcCallError> {
+        match self
+            .handle_dns_adblock_device_change(mac, join, leave, bypass)
+            .await
+        {
+            Response::Success(s) => Ok(s),
             other => Err(Self::map_failure(other)),
         }
     }

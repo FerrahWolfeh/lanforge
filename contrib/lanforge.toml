@@ -18,7 +18,8 @@
 
 # ------------------------------------------------------------------------------
 # [system] — identity and settings shared across network services
-# Defaults: iface is auto-detected; ula_prefix is generated as an RFC 4193 ULA;
+# Defaults: iface is auto-detected; ula_prefix names the ULA the admin put on the
+# LAN interface (absent: RA finds it there; lanforge never generates one);
 # debounce_secs = 2; search_domains is empty; auto_provision and
 # allow_unprivileged are false.
 # tls_cert / tls_key are inherited by HTTP and DNS services when they need TLS.
@@ -135,11 +136,11 @@ range = "::100-::1fff"
 # [ra] — IPv6 Router Advertisements
 # Defaults: enabled = true; managed = true; other_config = true;
 # max_interval = "200s"; lifetime = "600s"; mtu = 1500.
-# Prefix source can be "ula", "auto_gua", or "static". A static prefix uses
-# prefix = "fd00::/64". on_link and autonomous default to true; prefix lifetimes
-# are optional durations. With no prefix tables, RA announces the system ULA
-# (when present) and auto-detects GUA from the primary interface. An explicit ULA
-# source inherits [system].ula_prefix when prefix is omitted.
+# Prefix source can be "ula", "auto_ula", "auto_gua", or "static". A static prefix
+# uses prefix = "fd00::/64". on_link and autonomous default to true; prefix
+# lifetimes are optional durations. With no prefix tables, RA announces the ULA
+# and GUA found on the primary interface. An explicit "ula" source inherits
+# [system].ula_prefix when prefix is omitted; "auto_ula" finds it at run time.
 # ------------------------------------------------------------------------------
 [ra]
 enabled = true
@@ -151,7 +152,7 @@ mtu = 1500
 
 # Explicit prefix override examples:
 # [ra.prefixes.ula]
-# source = "ula" # inherits [system].ula_prefix
+# source = "auto_ula" # the ULA on the interface
 # [ra.prefixes.gua]
 # source = "auto_gua"
 
@@ -168,7 +169,9 @@ mtu = 1500
 
 # ------------------------------------------------------------------------------
 # [dns] — authoritative rewrites and recursive DNS
-# Defaults: enabled = true; listen = "[::]:53".
+# Defaults: enabled = true; listen = "[::]:53"; no DoT/DoQ listener;
+# cache_size = 5000; cache_min_ttl = "30s". DoT/DoQ use [system] tls_cert/tls_key.
+# A change of listen, dot_listen, doq_listen or the cache restarts the DNS service alone.
 # Upstream addresses accept udp://, tls://, quic://, and https:// prefixes.
 # The URI scheme selects the protocol, so it does not need a separate protocol key.
 # The table key is a human-readable identifier. Set domain only for conditional
@@ -177,6 +180,10 @@ mtu = 1500
 [dns]
 enabled = true
 listen = "[::]:53"
+# dot_listen = "[::]:853"  # DNS-over-TLS
+# doq_listen = "[::]:853"  # DNS-over-QUIC (UDP)
+# cache_size = 5000
+# cache_min_ttl = "30s"
 
 # A named upstream set accepts several endpoints with shared conditional-routing
 # options. Entries are tried according to the configured DNS upstream mode.

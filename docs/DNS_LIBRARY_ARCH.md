@@ -399,16 +399,29 @@ The stats are attached to the `LanforgeContext` via `ctx.set_dns_stats()` during
 
 ### `DnsConfig`
 
+The service's start-up settings, built by the daemon from `lanforge.toml` (`[dns]`, `[adblock]`,
+`[system]`) and defaults; it is not read from a file itself. Its listeners and cache are
+replaced at each start by the live `DnsListenConfig` (`[dns] listen`, `dot_listen`,
+`doq_listen`, `cache_size`, `cache_min_ttl`). Upstreams, rewrites, the adblock
+lists, rules and groups reach the running service as live config (`ctx.config_subscription`),
+not through this struct.
+
 | Field | Default | Purpose |
 | :--- | :--- | :--- |
 | `enabled` | `true` | Service on/off switch |
-| `listen` | `0.0.0.0:53` | Socket for UDP + TCP listeners |
-| `upstream` | `None` | Upstream resolver (e.g., Unbound). If `None`, non-local queries return `REFUSED` |
-| `search_domain` | `"lan"` | Local domain suffix for hostname matching |
-| `ula_prefix` | `None` | ULA prefix for IPv6 address generation |
-| `gua_prefix` | `None` | GUA prefix for IPv6 address generation |
-| `ttl` | `60` | Default TTL (seconds) for local records |
-| `multi_search_labels` | `[[b"lan"]]` | Pre-parsed search domain labels for zero-allocation matching |
+| `listen` | `[::]:53` | UDP + TCP listeners (one address or several) |
+| `upstreams` | `[]` | Start-up upstreams (the DHCPv6 DNS fallback reads them) |
+| `upstream_mode` | `sequential` | How an upstream is chosen |
+| `search_domains` | `["lan"]` | Local domain suffixes answered from the device table |
+| `ula_prefix` / `gua_prefix` | `None` | The LAN prefixes, to build full addresses from host suffixes |
+| `ttl` | `60` | TTL (seconds) of local records |
+| `adblock_enabled` | `false` | Whether the filter starts enabled |
+| `adblock_cache_dir` | `None` | Where compiled lists live (`/var/lib/lanforge` when unset) |
+| `blocking_mode`, `blocking_ip_v4/v6` | `nxdomain` | Answer to a blocked query |
+| `last_seen_threshold_days` | `7` | Days a device stays resolvable after it was last seen |
+| `dot_listen` / `doq_listen` | `None` | DNS-over-TLS / DNS-over-QUIC listeners |
+| `query_log` | ring of 1000 | Query log settings |
+| `cache_size`, `cache_min_ttl` | `5000`, `30` | Response cache entries and the shortest TTL kept |
 
 ---
 

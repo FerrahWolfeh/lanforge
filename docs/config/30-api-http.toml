@@ -1,28 +1,17 @@
-# Lanforge API & HTTP Configuration
-# These are independent modules in the new architecture.
+# Lanforge control socket and HTTP server.
 
 [api]
-# Local CLI control via Unix Socket.
+# The Unix socket the `lanforge` CLI talks to.
 enabled = true
 socket_path = "/run/lanforge/control.sock"
 
 [http]
-# REST API and Prometheus metrics exporter.
+# REST API, WebUI and Prometheus metrics.
 enabled = true
 listen = "[::]:8088"
-
-# Secure the API with HTTPS (inherits global system TLS from [system] if paths are omitted).
+# HTTPS with the `[system]` certificate and key.
 https_enabled = true
-
-# Whether plaintext HTTP is explicitly allowed (for local development only).
-# allow_plaintext_http = false
-
-# DNS-over-HTTPS (DoH)
+# Plain HTTP next to HTTPS (local development).
+allow_plaintext_http = false
+# DNS-over-HTTPS on the same listener.
 doh_enabled = true
-
-# Optional overrides for HTTP-specific TLS certificate and key (defaults to system TLS):
-# tls_cert = "/etc/lanforge/cert.pem"
-# tls_key = "/etc/lanforge/key.pem"
-
-# Directory for serving PXE/boot files over HTTP.
-# boot_dir = "/var/lib/lanforge/tftp"

@@ -5,6 +5,7 @@ use std::net::IpAddr;
 pub mod adblock;
 pub mod cache;
 pub mod filter;
+pub mod groups;
 pub mod query;
 pub mod reverse;
 pub mod rewrite;

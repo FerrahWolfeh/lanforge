@@ -5,6 +5,7 @@
 	import LayoutDashboardIcon from "@lucide/svelte/icons/layout-dashboard";
 	import ListIcon from "@lucide/svelte/icons/list";
 	import SlidersIcon from "@lucide/svelte/icons/sliders";
+	import UsersIcon from "@lucide/svelte/icons/users";
 	import BanIcon from "@lucide/svelte/icons/ban";
 	import SettingsIcon from "@lucide/svelte/icons/settings";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
@@ -42,6 +43,7 @@
 		{ label: "Overview", href: "/dns/adblock", icon: LayoutDashboardIcon },
 		{ label: "Blocklists", href: "/dns/adblock/lists", icon: ListIcon },
 		{ label: "Filtering Rules", href: "/dns/adblock/rules", icon: SlidersIcon },
+		{ label: "Groups", href: "/dns/adblock/groups", icon: UsersIcon },
 	];
 
 	async function fetchStatus() {

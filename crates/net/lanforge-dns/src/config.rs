@@ -5,10 +5,11 @@
 //! and IPv6 prefix settings.
 
 use crate::resolver::recursive::UpstreamMode;
+use lanforge_types::config::DnsListenConfig;
 use lanforge_types::network::{
     ListenConfig,
     dns::{
-        adblock::{AdblockRuleEntry, BlockingMode, RewriteRule, TimeOfDay},
+        adblock::{BlockingMode, RewriteRule},
         upstream::UpstreamEntry,
     },
 };
@@ -81,15 +82,6 @@ pub struct DnsConfig {
     /// Directory to store adblock cache files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adblock_cache_dir: Option<String>,
-    /// List of URLs to fetch blocklists from.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub adblock_urls: Vec<String>,
-    /// List of URLs to fetch allowlists from.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub adblock_allowlist_urls: Vec<String>,
-    /// Local time of day to perform daily blocklist update check.
-    #[serde(default)]
-    pub adblock_refresh_time: TimeOfDay,
     /// How to respond to blocked queries.
     pub blocking_mode: BlockingMode,
     /// Custom IPv4 address for `BlockingMode::CustomIp`.
@@ -101,12 +93,6 @@ pub struct DnsConfig {
     /// Manual DNS rewrite rules.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rewrites: Vec<RewriteRule>,
-    /// Domains that are never blocked.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allowlist: Vec<String>,
-    /// Custom user adblock rules (blacklist / whitelist).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub adblock_rules: Vec<AdblockRuleEntry>,
 
     /// How many days a device can be offline before its DNS entry is hidden.
     pub last_seen_threshold_days: u32,
@@ -149,15 +135,10 @@ impl Default for DnsConfig {
             ttl: 60,
             adblock_enabled: false,
             adblock_cache_dir: None,
-            adblock_urls: Vec::new(),
-            adblock_allowlist_urls: Vec::new(),
-            adblock_refresh_time: TimeOfDay::DEFAULT,
             blocking_mode: BlockingMode::default(),
             blocking_ip_v4: None,
             blocking_ip_v6: None,
             rewrites: Vec::new(),
-            allowlist: Vec::new(),
-            adblock_rules: Vec::new(),
             last_seen_threshold_days: 7,
             dot_listen: None,
             dot_enabled: false,
@@ -166,8 +147,8 @@ impl Default for DnsConfig {
             doq_listen: None,
             doq_enabled: false,
             query_log: QueryLogConfig::default(),
-            cache_size: 5000,
-            cache_min_ttl: 30,
+            cache_size: DnsListenConfig::DEFAULT_CACHE_SIZE,
+            cache_min_ttl: DnsListenConfig::DEFAULT_CACHE_MIN_TTL,
         }
     }
 }

@@ -9,7 +9,9 @@ use color_eyre::eyre::{bail, eyre};
 use colored::Colorize;
 use inquire::{Confirm, Select, Text};
 
-use lanforge_api::api::{DeviceListQuery, DnsQueryLogEntry};
+use lanforge_api::api::{
+    AdblockClientEntry, AdblockGroupChange, DeviceListQuery, DnsQueryLogEntry,
+};
 use lanforge_api::rpc::RpcResponse;
 #[cfg(feature = "remote")]
 use lanforge_types::events::TimedEvent;
@@ -257,25 +259,45 @@ pub enum DnsAdblockAction {
     Block {
         /// Domain name to block (e.g. tracker.example.com)
         domain: Option<String>,
+        /// In this adblock group's rules file instead of the global one
+        #[arg(short, long)]
+        group: Option<String>,
     },
     /// Add a domain to the custom allowlist (whitelist)
     #[command(alias = "whitelist")]
     Allow {
         /// Domain name to allow (e.g. analytics.example.com)
         domain: Option<String>,
+        /// In this adblock group's rules file instead of the global one
+        #[arg(short, long)]
+        group: Option<String>,
     },
     /// Remove a domain from the custom allowlist
     Unallow {
         /// Domain name to remove from allowlist
         domain: Option<String>,
+        /// From this adblock group's rules file instead of the global one
+        #[arg(short, long)]
+        group: Option<String>,
     },
     /// List all custom allowlist entries
     #[command(alias = "whitelisted")]
-    Allowlist,
+    Allowlist {
+        /// The allowlist of this adblock group instead of the global one
+        #[arg(short, long)]
+        group: Option<String>,
+    },
+    /// Manage adblock groups: clients with their own lists and rules on top of the global layer
+    Groups(DnsAdblockGroupsArgs),
+    /// Manage the clients adblock never filters
+    Bypass(DnsAdblockBypassArgs),
     /// Test domain filter attribution (shows whether blocked, origin source, and matching rule)
     Check {
         /// Domain name to check
         domain: Option<String>,
+        /// Check as this client gets it (its adblock groups and bypass); default: the global layer
+        #[arg(long, value_name = "IP")]
+        client: Option<IpAddr>,
     },
     /// Manage remote adblock filter list sources
     #[command(alias = "lists")]
@@ -305,6 +327,12 @@ pub enum DnsAdblockSourcesAction {
     Add {
         /// URL of the blocklist or allowlist
         url: Option<String>,
+        /// Source name, used to refer to it in a group (default: derived from the URL)
+        #[arg(short, long)]
+        name: Option<String>,
+        /// Add it to this adblock group instead of the global layer
+        #[arg(short, long)]
+        group: Option<String>,
         /// Source list format (auto, adblock, hosts, domains, wildcard-domains)
         #[arg(short, long)]
         format: Option<AdblockSourceFormat>,
@@ -320,6 +348,83 @@ pub enum DnsAdblockSourcesAction {
     /// Trigger immediate re-download and re-compilation of all filter sources
     #[command(alias = "update")]
     Reload,
+}
+
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq, Default)]
+pub struct DnsAdblockGroupsArgs {
+    #[command(subcommand)]
+    pub action: Option<DnsAdblockGroupsAction>,
+}
+
+#[derive(clap::Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum DnsAdblockGroupsAction {
+    /// List adblock groups with their lists, clients and rule counts, and the bypass (default)
+    List,
+    /// Show a group: its lists, clients (with the devices they name now) and rules
+    Show {
+        /// Group name
+        name: String,
+    },
+    /// Create an adblock group
+    Create {
+        /// Group name (letters, digits, '-' and '_')
+        name: String,
+        /// List source (name or URL) the group adds; repeatable
+        #[arg(short, long = "list", value_name = "NAME|URL")]
+        lists: Vec<String>,
+        /// Client the group applies to (`192.168.1.64/28`, `dev:<name|mac>`); repeatable
+        #[arg(short, long = "client", value_name = "SELECTOR")]
+        clients: Vec<String>,
+    },
+    /// Add lists and clients to a group
+    Add(DnsAdblockGroupMembersArgs),
+    /// Take lists and clients out of a group
+    Remove(DnsAdblockGroupMembersArgs),
+    /// Delete a group and its rules file
+    Delete {
+        /// Group name
+        name: String,
+    },
+}
+
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+#[command(group(
+    clap::ArgGroup::new("members")
+        .required(true)
+        .multiple(true)
+        .args(["lists", "clients"])
+))]
+pub struct DnsAdblockGroupMembersArgs {
+    /// Group name
+    pub name: String,
+    /// List source (name or URL); repeatable
+    #[arg(short, long = "list", value_name = "NAME|URL")]
+    pub lists: Vec<String>,
+    /// Client (`192.168.1.64/28`, `dev:<name|mac>`); repeatable
+    #[arg(short, long = "client", value_name = "SELECTOR")]
+    pub clients: Vec<String>,
+}
+
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq, Default)]
+pub struct DnsAdblockBypassArgs {
+    #[command(subcommand)]
+    pub action: Option<DnsAdblockBypassAction>,
+}
+
+#[derive(clap::Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum DnsAdblockBypassAction {
+    /// List the bypassed clients (default)
+    List,
+    /// Never filter these clients (`192.168.1.64/28`, `dev:<name|mac>`)
+    Add {
+        #[arg(required = true, value_name = "SELECTOR")]
+        clients: Vec<String>,
+    },
+    /// Filter these clients again
+    Remove {
+        #[arg(required = true, value_name = "SELECTOR")]
+        clients: Vec<String>,
+    },
 }
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq, Default)]
@@ -1669,11 +1774,24 @@ async fn execute_adblock(
 ) -> Result<()> {
     match args.action.unwrap_or(DnsAdblockAction::Status) {
         DnsAdblockAction::Status => show_adblock_status(client, printer).await,
-        DnsAdblockAction::Block { domain } => add_adblock_block(domain, client, printer).await,
-        DnsAdblockAction::Allow { domain } => add_adblock_allow(domain, client, printer).await,
-        DnsAdblockAction::Unallow { domain } => remove_adblock_allow(domain, client, printer).await,
-        DnsAdblockAction::Allowlist => show_adblock_allowlist(client, printer).await,
-        DnsAdblockAction::Check { domain } => check_adblock_domain(domain, client, printer).await,
+        DnsAdblockAction::Block { domain, group } => {
+            add_adblock_block(domain, group, client, printer).await
+        }
+        DnsAdblockAction::Allow { domain, group } => {
+            add_adblock_allow(domain, group, client, printer).await
+        }
+        DnsAdblockAction::Unallow { domain, group } => {
+            remove_adblock_allow(domain, group, client, printer).await
+        }
+        DnsAdblockAction::Allowlist { group } => {
+            show_adblock_allowlist(group, client, printer).await
+        }
+        DnsAdblockAction::Groups(args) => execute_adblock_groups(args, client, printer).await,
+        DnsAdblockAction::Bypass(args) => execute_adblock_bypass(args, client, printer).await,
+        DnsAdblockAction::Check {
+            domain,
+            client: client_ip,
+        } => check_adblock_domain(domain, client_ip, client, printer).await,
         DnsAdblockAction::Sources(src_args) => {
             execute_adblock_sources(src_args, client, printer).await
         }
@@ -1738,8 +1856,14 @@ async fn show_adblock_status(client: &LanforgeClient, printer: &Printer) -> Resu
     Ok(())
 }
 
+/// " of group \"x\"" for a group's rules file, nothing for the global one.
+fn in_group(group: Option<&str>) -> String {
+    group.map_or_else(String::new, |g| format!(" of group \"{g}\""))
+}
+
 async fn add_adblock_block(
     domain_opt: Option<String>,
+    group: Option<String>,
     client: &LanforgeClient,
     printer: &Printer,
 ) -> Result<()> {
@@ -1748,12 +1872,13 @@ async fn add_adblock_block(
         None => Text::new("Domain name to block:").prompt()?,
     };
 
-    let resp = client.dns_block(domain.clone()).await?;
+    let at = in_group(group.as_deref());
+    let resp = client.dns_block(domain.clone(), group).await?;
     if printer.json {
         return printer.print_json(&resp);
     }
     printer.success(&format!(
-        "Domain '{domain}' added to blocklist: {}",
+        "Domain '{domain}' added to the blocklist{at}: {}",
         resp.message
     ));
     Ok(())
@@ -1761,6 +1886,7 @@ async fn add_adblock_block(
 
 async fn add_adblock_allow(
     domain_opt: Option<String>,
+    group: Option<String>,
     client: &LanforgeClient,
     printer: &Printer,
 ) -> Result<()> {
@@ -1769,12 +1895,13 @@ async fn add_adblock_allow(
         None => Text::new("Domain name to allow:").prompt()?,
     };
 
-    let resp = client.dns_allow(domain.clone()).await?;
+    let at = in_group(group.as_deref());
+    let resp = client.dns_allow(domain.clone(), group).await?;
     if printer.json {
         return printer.print_json(&resp);
     }
     printer.success(&format!(
-        "Domain '{domain}' added to allowlist: {}",
+        "Domain '{domain}' added to the allowlist{at}: {}",
         resp.message
     ));
     Ok(())
@@ -1782,13 +1909,14 @@ async fn add_adblock_allow(
 
 async fn remove_adblock_allow(
     domain_opt: Option<String>,
+    group: Option<String>,
     client: &LanforgeClient,
     printer: &Printer,
 ) -> Result<()> {
     let domain = if let Some(d) = domain_opt {
         d
     } else {
-        let resp = client.dns_allowlist().await?;
+        let resp = client.dns_allowlist(group.clone()).await?;
         if resp.allowlist.is_empty() {
             bail!("No allowlist entries configured.");
         }
@@ -1802,29 +1930,37 @@ async fn remove_adblock_allow(
         parts[0].to_string()
     };
 
-    let resp = client.dns_unallow(domain.clone()).await?;
+    let at = in_group(group.as_deref());
+    let resp = client.dns_unallow(domain.clone(), group).await?;
     if printer.json {
         return printer.print_json(&resp);
     }
-    printer.success(&format!("Removed domain '{domain}' from allowlist."));
+    printer.success(&format!(
+        "Removed domain '{domain}' from the allowlist{at}."
+    ));
     Ok(())
 }
 
-async fn show_adblock_allowlist(client: &LanforgeClient, printer: &Printer) -> Result<()> {
-    let resp = client.dns_allowlist().await?;
+async fn show_adblock_allowlist(
+    group: Option<String>,
+    client: &LanforgeClient,
+    printer: &Printer,
+) -> Result<()> {
+    let at = in_group(group.as_deref());
+    let resp = client.dns_allowlist(group).await?;
 
     if printer.json {
         return printer.print_json(&resp);
     }
 
     if resp.allowlist.is_empty() {
-        printer.info("DNS allowlist is currently empty.");
+        printer.info(&format!("The DNS allowlist{at} is empty."));
         return Ok(());
     }
 
     println!();
     println!(
-        " {} Custom DNS Allowlist ({} entries)",
+        " {} Custom DNS Allowlist{at} ({} entries)",
         printer.status_badge(true),
         resp.allowlist.len()
     );
@@ -1841,6 +1977,7 @@ async fn show_adblock_allowlist(client: &LanforgeClient, printer: &Printer) -> R
 
 async fn check_adblock_domain(
     domain_opt: Option<String>,
+    client_ip: Option<IpAddr>,
     client: &LanforgeClient,
     printer: &Printer,
 ) -> Result<()> {
@@ -1849,7 +1986,7 @@ async fn check_adblock_domain(
         None => Text::new("Domain name to check:").prompt()?,
     };
 
-    let resp = client.dns_adblock_check(domain.clone()).await?;
+    let resp = client.dns_adblock_check(domain.clone(), client_ip).await?;
 
     if printer.json {
         return printer.print_json(&resp);
@@ -1861,6 +1998,16 @@ async fn check_adblock_domain(
         printer.status_badge(true),
         domain.bold().white()
     );
+    if let Some(ip) = client_ip {
+        let layers = if resp.bypass {
+            "bypass (never filtered)".to_string()
+        } else if resp.groups.is_empty() {
+            "global layer only".to_string()
+        } else {
+            format!("groups {}", resp.groups.join(", "))
+        };
+        println!("    {:<18} {ip}: {layers}", "Client:".dimmed());
+    }
 
     if let Some(ref m) = resp.filter {
         let action_str = match m.action {
@@ -1869,10 +2016,15 @@ async fn check_adblock_domain(
         };
         println!("    {:<18} {action_str}", "Verdict:".dimmed());
 
-        let origin_str = match m.origin {
+        let origin_str = match &m.origin {
             FilterOrigin::UserRule => "Custom User Rule".to_string(),
             FilterOrigin::UserAllowlist => "User Allowlist".to_string(),
             FilterOrigin::List { source_id } => format!("Filter Source #{source_id}"),
+            FilterOrigin::GroupRule { group } => format!("Group \"{group}\" rule"),
+            FilterOrigin::GroupAllowlist { group } => format!("Group \"{group}\" allowlist"),
+            FilterOrigin::GroupList { group, source_id } => {
+                format!("Group \"{group}\" source #{source_id}")
+            }
         };
         println!("    {:<18} {}", "Origin:".dimmed(), origin_str.cyan());
 
@@ -1921,9 +2073,13 @@ async fn execute_adblock_sources(
 ) -> Result<()> {
     match args.action.unwrap_or(DnsAdblockSourcesAction::List) {
         DnsAdblockSourcesAction::List => list_adblock_sources(client, printer).await,
-        DnsAdblockSourcesAction::Add { url, format, kind } => {
-            add_adblock_source(url, format, kind, client, printer).await
-        }
+        DnsAdblockSourcesAction::Add {
+            url,
+            name,
+            group,
+            format,
+            kind,
+        } => add_adblock_source(url, name, group, format, kind, client, printer).await,
         DnsAdblockSourcesAction::Remove { url } => {
             remove_adblock_source(url, client, printer).await
         }
@@ -1953,6 +2109,7 @@ async fn list_adblock_sources(client: &LanforgeClient, printer: &Printer) -> Res
     let mut table = printer.new_table();
     table.set_header(vec![
         "ID",
+        "Name",
         "Format",
         "Blocks",
         "Exceptions",
@@ -1977,6 +2134,7 @@ async fn list_adblock_sources(client: &LanforgeClient, printer: &Printer) -> Res
 
         table.add_row(vec![
             s.id.to_string(),
+            s.name.clone().unwrap_or_default(),
             fmt_str,
             s.blocks.to_string(),
             s.exceptions.to_string(),
@@ -1991,6 +2149,8 @@ async fn list_adblock_sources(client: &LanforgeClient, printer: &Printer) -> Res
 
 async fn add_adblock_source(
     url_opt: Option<String>,
+    name: Option<String>,
+    group: Option<String>,
     format: Option<AdblockSourceFormat>,
     kind: AdblockUrlKind,
     client: &LanforgeClient,
@@ -2001,13 +2161,16 @@ async fn add_adblock_source(
         None => Text::new("Filter source URL:").prompt()?,
     };
 
+    let at = group
+        .as_deref()
+        .map_or_else(String::new, |g| format!(" to group \"{g}\""));
     let resp = client
-        .dns_adblock_url_add(url.clone(), kind, format)
+        .dns_adblock_url_add(name, url.clone(), kind, format, group)
         .await?;
     if printer.json {
         return printer.print_json(&resp);
     }
-    printer.success(&format!("Added adblock source URL: {url}"));
+    printer.success(&format!("Added adblock source URL{at}: {url}"));
     Ok(())
 }
 
@@ -2240,9 +2403,319 @@ fn health_cell(status: UpstreamStatus) -> String {
     }
 }
 
+async fn execute_adblock_groups(
+    args: DnsAdblockGroupsArgs,
+    client: &LanforgeClient,
+    printer: &Printer,
+) -> Result<()> {
+    match args.action.unwrap_or(DnsAdblockGroupsAction::List) {
+        DnsAdblockGroupsAction::List => list_adblock_groups(client, printer).await,
+        DnsAdblockGroupsAction::Show { name } => show_adblock_group(name, client, printer).await,
+        DnsAdblockGroupsAction::Create {
+            name,
+            lists,
+            clients,
+        } => {
+            let resp = client
+                .dns_adblock_group_create(name.clone(), lists, clients)
+                .await?;
+            if printer.json {
+                return printer.print_json(&resp);
+            }
+            printer.success(&format!("Adblock group \"{name}\" created."));
+            Ok(())
+        }
+        DnsAdblockGroupsAction::Add(m) => {
+            let change = AdblockGroupChange {
+                add_lists: m.lists,
+                add_clients: m.clients,
+                ..AdblockGroupChange::default()
+            };
+            change_adblock_group(m.name, change, client, printer).await
+        }
+        DnsAdblockGroupsAction::Remove(m) => {
+            let change = AdblockGroupChange {
+                remove_lists: m.lists,
+                remove_clients: m.clients,
+                ..AdblockGroupChange::default()
+            };
+            change_adblock_group(m.name, change, client, printer).await
+        }
+        DnsAdblockGroupsAction::Delete { name } => {
+            if !printer.json
+                && !printer.yes
+                && !Confirm::new(&format!(
+                    "Delete adblock group \"{name}\" and its rules file?"
+                ))
+                .with_default(false)
+                .prompt()?
+            {
+                return Ok(());
+            }
+            let resp = client.dns_adblock_group_delete(name.clone()).await?;
+            if printer.json {
+                return printer.print_json(&resp);
+            }
+            printer.success(&format!("Adblock group \"{name}\" deleted."));
+            Ok(())
+        }
+    }
+}
+
+async fn change_adblock_group(
+    name: String,
+    change: AdblockGroupChange,
+    client: &LanforgeClient,
+    printer: &Printer,
+) -> Result<()> {
+    let resp = client
+        .dns_adblock_group_change(name.clone(), change)
+        .await?;
+    if printer.json {
+        return printer.print_json(&resp);
+    }
+    printer.success(&format!("Adblock group \"{name}\" updated."));
+    Ok(())
+}
+
+/// A client selector with the names of the devices it names now: `dev:aa:bb:..` shows the
+/// device's name, a `dev:` naming nobody says so, a subnet stays as written.
+fn adblock_client_label(entry: &AdblockClientEntry) -> String {
+    if !entry.selector.starts_with("dev:") {
+        return entry.selector.clone();
+    }
+    if entry.devices.is_empty() {
+        return format!("{} {}", entry.selector, "(no device now)".dimmed());
+    }
+    let target = &entry.selector["dev:".len()..];
+    let mut names: Vec<&str> = entry
+        .devices
+        .iter()
+        .map(|d| d.name.as_str())
+        .filter(|n| !n.is_empty() && !n.eq_ignore_ascii_case(target))
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    let mut label = entry.selector.clone();
+    if !names.is_empty() {
+        let _ = write!(label, " ({})", names.join(", "));
+    }
+    if entry.devices.len() > 1 {
+        let _ = write!(label, " {}", format!("×{}", entry.devices.len()).dimmed());
+    }
+    label
+}
+
+fn adblock_clients_text(entries: &[AdblockClientEntry]) -> String {
+    if entries.is_empty() {
+        return "-".dimmed().to_string();
+    }
+    entries
+        .iter()
+        .map(adblock_client_label)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+async fn list_adblock_groups(client: &LanforgeClient, printer: &Printer) -> Result<()> {
+    let resp = client.dns_adblock_groups().await?;
+    if printer.json {
+        return printer.print_json(&resp);
+    }
+
+    println!();
+    if resp.groups.is_empty() {
+        printer.info("No adblock groups: every client gets the global layer.");
+    } else {
+        println!(
+            " {} Adblock Groups ({})",
+            printer.status_badge(true),
+            resp.groups.len()
+        );
+        let mut table = printer.new_table();
+        table.set_header(vec!["Group", "Lists", "Clients", "Allow", "Block"]);
+        for g in &resp.groups {
+            let lists = if g.lists.is_empty() {
+                "-".dimmed().to_string()
+            } else {
+                g.lists.join("\n")
+            };
+            table.add_row(vec![
+                g.name.clone(),
+                lists,
+                adblock_clients_text(&g.clients),
+                g.allow_rules.to_string(),
+                g.block_rules.to_string(),
+            ]);
+        }
+        println!("{table}");
+    }
+    println!(
+        "    {:<10} {}",
+        "Bypass:".dimmed(),
+        adblock_clients_text(&resp.bypass).replace('\n', ", ")
+    );
+    println!();
+    Ok(())
+}
+
+async fn show_adblock_group(
+    name: String,
+    client: &LanforgeClient,
+    printer: &Printer,
+) -> Result<()> {
+    let groups = client.dns_adblock_groups().await?;
+    let Some(group) = groups.groups.into_iter().find(|g| g.name == name) else {
+        bail!("adblock group \"{name}\" not found");
+    };
+    let rules = client.dns_adblock_rules(Some(name)).await?;
+    if printer.json {
+        return printer.print_json(&serde_json::json!({ "group": group, "rules": rules.rules }));
+    }
+
+    println!();
+    println!(
+        " {} Adblock Group {}",
+        printer.status_badge(true),
+        group.name.bold().white()
+    );
+    let dash = || "-".dimmed().to_string();
+    let lists = if group.lists.is_empty() {
+        dash()
+    } else {
+        group.lists.join(", ")
+    };
+    println!("    {:<12} {lists}", "Lists:".dimmed());
+    println!(
+        "    {:<12} {}",
+        "Rules file:".dimmed(),
+        group.rules_file.clone().unwrap_or_else(dash)
+    );
+    println!("    {:<12}", "Clients:".dimmed());
+    if group.clients.is_empty() {
+        println!("      {}", dash());
+    }
+    for c in &group.clients {
+        println!("      {}", adblock_client_label(c));
+    }
+
+    if rules.rules.is_empty() {
+        println!("    {:<12} {}", "Rules:".dimmed(), dash());
+    } else {
+        let mut table = printer.new_table();
+        table.set_header(vec!["Action", "Enabled", "Rule"]);
+        for r in &rules.rules {
+            let action = if r.is_allow() {
+                "ALLOW".green().to_string()
+            } else {
+                "BLOCK".red().to_string()
+            };
+            let enabled = if r.enabled {
+                "yes".to_string()
+            } else {
+                "no".dimmed().to_string()
+            };
+            table.add_row(vec![action, enabled, r.domain.clone()]);
+        }
+        println!("{table}");
+    }
+    println!();
+    Ok(())
+}
+
+async fn execute_adblock_bypass(
+    args: DnsAdblockBypassArgs,
+    client: &LanforgeClient,
+    printer: &Printer,
+) -> Result<()> {
+    let (add, remove) = match args.action.unwrap_or(DnsAdblockBypassAction::List) {
+        DnsAdblockBypassAction::List => {
+            let resp = client.dns_adblock_groups().await?;
+            if printer.json {
+                return printer.print_json(&resp.bypass);
+            }
+            if resp.bypass.is_empty() {
+                printer.info("No client bypasses adblock.");
+                return Ok(());
+            }
+            println!();
+            println!(
+                " {} Adblock Bypass ({} clients, never filtered)",
+                printer.status_badge(true),
+                resp.bypass.len()
+            );
+            for c in &resp.bypass {
+                println!("    {}", adblock_client_label(c));
+            }
+            println!();
+            return Ok(());
+        }
+        DnsAdblockBypassAction::Add { clients } => (clients, Vec::new()),
+        DnsAdblockBypassAction::Remove { clients } => (Vec::new(), clients),
+    };
+    let resp = client.dns_adblock_bypass_change(add, remove).await?;
+    if printer.json {
+        return printer.print_json(&resp);
+    }
+    printer.success("Adblock bypass updated.");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::args::{Cli, Command};
+    use clap::Parser;
+
+    fn adblock(args: &[&str]) -> Result<DnsAdblockAction, clap::Error> {
+        let cli = Cli::try_parse_from(["lanforge", "dns", "adblock"].iter().chain(args))?;
+        let Some(Command::Dns(DnsArgs {
+            subcommand:
+                Some(DnsSubcommand::Adblock(DnsAdblockArgs {
+                    action: Some(action),
+                })),
+        })) = cli.command
+        else {
+            panic!("not an adblock command: {args:?}");
+        };
+        Ok(action)
+    }
+
+    /// Group members are repeatable flags; taking out nothing is a usage error, not a no-op.
+    #[test]
+    fn adblock_group_members_parse() {
+        let action = adblock(&[
+            "groups",
+            "add",
+            "kids",
+            "-l",
+            "k",
+            "-c",
+            "dev:tab",
+            "--client",
+            "10.0.0.0/24",
+        ])
+        .unwrap();
+        let DnsAdblockAction::Groups(DnsAdblockGroupsArgs {
+            action: Some(DnsAdblockGroupsAction::Add(m)),
+        }) = action
+        else {
+            panic!("{action:?}");
+        };
+        assert_eq!(m.name, "kids");
+        assert_eq!(m.lists, ["k"]);
+        assert_eq!(m.clients, ["dev:tab", "10.0.0.0/24"]);
+        assert!(adblock(&["groups", "remove", "kids"]).is_err());
+        assert!(adblock(&["bypass", "add"]).is_err());
+        let action = adblock(&["allow", "bank.example", "--group", "bank"]).unwrap();
+        assert_eq!(
+            action,
+            DnsAdblockAction::Allow {
+                domain: Some("bank.example".into()),
+                group: Some("bank".into()),
+            }
+        );
+    }
 
     #[test]
     fn test_infer_upstream_protocol() {

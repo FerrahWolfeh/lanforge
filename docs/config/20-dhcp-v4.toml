@@ -1,31 +1,22 @@
-# Lanforge DHCPv4 Configuration
-# Features: Multi-pool support, dnsmasq-style typed options.
+# Lanforge DHCPv4: scope settings, then named pools (a pool key left out takes the scope's).
 
 [dhcp.v4]
 enabled = true
-lease_time = 86400
+lease = "1d"
 router = "192.168.1.1"
 subnet_mask = "255.255.255.0"
-
-# Global DNS for all pools.
 dns = ["192.168.1.1"]
+# Absent: public NTP servers; `ntp = []` announces none.
+ntp = ["192.168.1.1"]
+# Network boot: file name (option 67) and TFTP server (option 66).
+# boot_file = "ipxe.efi"
+# tftp_server = "192.168.1.1"
+# Raw options by code, typed: `s:`/`ascii:` text, `ip:` address, `hex:` bytes (default).
+options = { "43" = "s:lanforge-provision", "150" = "ip:192.168.1.10", "224" = "hex:00aabbcc" }
 
-# Custom DHCP options using dnsmasq-style prefixes.
-[dhcp.v4.options]
-# 43: Vendor Specific (String)
-43 = "s:lanforge-provision"
-# 150: TFTP Server List (IP)
-150 = "ip:192.168.1.10"
-# 160: Captive Portal URL
-160 = "ascii:http://lan.lanforge/login"
-# Raw Hex (Default)
-224 = "00aabbcc"
+[dhcp.v4.pools.main]
+range = "192.168.1.100-192.168.1.200"
 
-# Address Pools
-[[dhcp.v4.pools]]
-range_start = "192.168.1.100"
-range_end = "192.168.1.200"
-
-[[dhcp.v4.pools]]
-range_start = "192.168.1.210"
-range_end = "192.168.1.250"
+[dhcp.v4.pools.guests]
+range = "192.168.1.210-192.168.1.250"
+lease = "2h"

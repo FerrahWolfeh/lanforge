@@ -1,6 +1,7 @@
-//! `[dns]`, in its own file form: the DNS server settings that live in `lanforge.toml` (listen,
-//! upstreams, reverse resolvers, rewrites). The query log, cache and TTL knobs, DoT/DoQ and the
-//! device visibility threshold are dynamic and stay out of the file.
+//! `[dns]`, in its own file form: the DNS server settings that live in `lanforge.toml` (listeners
+//! incl. DoT/DoQ, response cache, upstreams, reverse resolvers, rewrites). The query log is a
+//! logging knob and the local TTL and device visibility threshold keep their defaults: they stay
+//! out of the file.
 
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
@@ -14,6 +15,7 @@ use serde::de::Deserializer;
 use serde::ser::{SerializeSeq, Serializer};
 use serde::{Deserialize, Serialize};
 
+use super::duration::HumanDuration;
 use super::sections::named_tables;
 
 const fn default_true() -> bool {
@@ -30,6 +32,14 @@ pub struct DnsSettings {
     pub enabled: bool,
     /// `None` = the daemon's built-in `[::]:53`.
     pub listen: Option<ListenConfig>,
+    /// DNS-over-TLS listener; `None` = off.
+    pub dot_listen: Option<SocketAddr>,
+    /// DNS-over-QUIC listener; `None` = off.
+    pub doq_listen: Option<SocketAddr>,
+    /// Response cache entries; `None` = the default.
+    pub cache_size: Option<u64>,
+    /// Shortest TTL (seconds) a cached answer keeps; `None` = the default.
+    pub cache_min_ttl: Option<u32>,
     pub upstream_mode: UpstreamMode,
     /// In order: the order is the one the sequential mode tries.
     pub upstreams: Vec<NamedUpstream>,
@@ -39,8 +49,8 @@ pub struct DnsSettings {
 }
 
 impl DnsSettings {
-    /// `live` with what `[dns]` sets of it: `enabled` and the plain DNS listener (`None` = the
-    /// built-in `[::]:53`). `DoT`/`DoQ` and the TLS identity are not in `[dns]` and stay.
+    /// `live` with what `[dns]` sets of it: `enabled`, the listeners (`None` = the built-in
+    /// `[::]:53`, no `DoT`/`DoQ`) and the cache. The TLS identity is `[system]`'s and stays.
     #[must_use]
     pub fn listener(&self, live: &DnsListenConfig) -> DnsListenConfig {
         DnsListenConfig {
@@ -49,6 +59,16 @@ impl DnsSettings {
                 .listen
                 .clone()
                 .unwrap_or_else(|| ListenConfig::dual_stack(53)),
+            dot_listen: self.dot_listen,
+            dot_enabled: self.dot_listen.is_some(),
+            doq_listen: self.doq_listen,
+            doq_enabled: self.doq_listen.is_some(),
+            cache_size: self
+                .cache_size
+                .unwrap_or(DnsListenConfig::DEFAULT_CACHE_SIZE),
+            cache_min_ttl: self
+                .cache_min_ttl
+                .unwrap_or(DnsListenConfig::DEFAULT_CACHE_MIN_TTL),
             ..live.clone()
         }
     }
@@ -59,6 +79,10 @@ impl Default for DnsSettings {
         Self {
             enabled: true,
             listen: None,
+            dot_listen: None,
+            doq_listen: None,
+            cache_size: None,
+            cache_min_ttl: None,
             upstream_mode: UpstreamMode::default(),
             upstreams: Vec::new(),
             reverse: Vec::new(),
@@ -82,6 +106,18 @@ pub struct DnsFile {
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listen: Option<String>,
+    /// DNS-over-TLS listener (`"[::]:853"`), with `[system] tls_cert`/`tls_key`. Absent: off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dot_listen: Option<String>,
+    /// DNS-over-QUIC listener (`"[::]:853"`, UDP), same certificate. Absent: off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doq_listen: Option<String>,
+    /// Response cache entries. Absent: 5000.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_size: Option<u64>,
+    /// Shortest TTL a cached answer keeps. Absent: 30 s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_min_ttl: Option<HumanDuration>,
     /// `sequential`, `parallel`, `fastest` or `roundrobin`.
     #[serde(default = "default_upstream_mode")]
     pub upstream_mode: String,
@@ -105,6 +141,10 @@ impl Default for DnsFile {
         Self {
             enabled: true,
             listen: None,
+            dot_listen: None,
+            doq_listen: None,
+            cache_size: None,
+            cache_min_ttl: None,
             upstream_mode: default_upstream_mode(),
             upstreams: Vec::new(),
             reverse: Vec::new(),
@@ -588,6 +628,10 @@ impl DnsFile {
         Self {
             enabled: dns.enabled,
             listen: dns.listen.as_ref().map(ToString::to_string),
+            dot_listen: dns.dot_listen.map(|a| a.to_string()),
+            doq_listen: dns.doq_listen.map(|a| a.to_string()),
+            cache_size: dns.cache_size,
+            cache_min_ttl: dns.cache_min_ttl.map(HumanDuration::from),
             upstream_mode: dns.upstream_mode.to_string(),
             upstreams,
             reverse: dns
@@ -612,6 +656,40 @@ impl DnsFile {
                 .map_err(|e| {
                     issues.push(format!(
                         "[dns] listen = \"{text}\" is not valid ({e}); using \"[::]:53\""
+                    ));
+                })
+                .ok()
+        });
+
+        let socket = |key: &str, text: &Option<String>, issues: &mut Vec<String>| {
+            text.as_deref().and_then(|text| {
+                SocketAddr::from_str(text.trim())
+                    .map_err(|_| {
+                        issues.push(format!(
+                            "[dns] {key} = \"{text}\" is not an address:port (e.g. \"[::]:853\"); off"
+                        ));
+                    })
+                    .ok()
+            })
+        };
+        let dot_listen = socket("dot_listen", &self.dot_listen, &mut issues);
+        let doq_listen = socket("doq_listen", &self.doq_listen, &mut issues);
+        let cache_size = self.cache_size.filter(|&n| {
+            n > 0 || {
+                issues.push(format!(
+                    "[dns] cache_size = 0 is not a cache size; using {}",
+                    DnsListenConfig::DEFAULT_CACHE_SIZE
+                ));
+                false
+            }
+        });
+        let cache_min_ttl = self.cache_min_ttl.and_then(|ttl| {
+            u32::try_from(*ttl)
+                .map_err(|_| {
+                    issues.push(format!(
+                        "[dns] cache_min_ttl = {} s is too long; using {} s",
+                        *ttl,
+                        DnsListenConfig::DEFAULT_CACHE_MIN_TTL
                     ));
                 })
                 .ok()
@@ -704,6 +782,10 @@ impl DnsFile {
             DnsSettings {
                 enabled: self.enabled,
                 listen,
+                dot_listen,
+                doq_listen,
+                cache_size,
+                cache_min_ttl,
                 upstream_mode,
                 upstreams,
                 reverse,
@@ -765,6 +847,10 @@ mod tests {
         DnsSettings {
             enabled: true,
             listen: Some("[::]:53".parse().unwrap()),
+            dot_listen: None,
+            doq_listen: None,
+            cache_size: None,
+            cache_min_ttl: None,
             upstream_mode: UpstreamMode::Sequential,
             upstreams: vec![
                 cf("1.1.1.1:53"),
@@ -811,11 +897,37 @@ addresses = ["udp://1.1.1.1:53", "udp://1.0.0.1:53",
         assert!(text.contains("upstream_mode = \"sequential\""), "{text}");
     }
 
+    /// A listener that is not an address is off and a zero cache takes the default: reported,
+    /// the rest of `[dns]` applies.
+    #[test]
+    fn wrong_listeners_and_cache_are_issues() {
+        let (dns, issues) = parse(
+            "[dns]\ndot_listen = \"853\"\ndoq_listen = \"[::]:853\"\ncache_size = 0\n\
+             cache_min_ttl = \"10s\"\n",
+        )
+        .to_config();
+        assert_eq!(dns.dot_listen, None);
+        assert_eq!(dns.doq_listen, Some("[::]:853".parse().unwrap()));
+        assert_eq!(dns.cache_size, None);
+        assert_eq!(dns.cache_min_ttl, Some(10));
+        assert_eq!(
+            issues,
+            [
+                "[dns] dot_listen = \"853\" is not an address:port (e.g. \"[::]:853\"); off",
+                "[dns] cache_size = 0 is not a cache size; using 5000",
+            ]
+        );
+    }
+
     #[test]
     fn every_setting_survives_the_file_exactly() {
         let dns = DnsSettings {
             enabled: false,
             listen: Some("192.168.1.1:53, [fd00::1]:53".parse().unwrap()),
+            dot_listen: Some("[::]:853".parse().unwrap()),
+            doq_listen: Some("192.168.1.1:853".parse().unwrap()),
+            cache_size: Some(20_000),
+            cache_min_ttl: Some(60),
             upstream_mode: UpstreamMode::RoundRobin,
             upstreams: vec![
                 up("cloudflare", "tls://one.one.one.one@1.1.1.1:853"),

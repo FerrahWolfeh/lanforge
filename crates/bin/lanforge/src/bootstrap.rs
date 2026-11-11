@@ -337,7 +337,8 @@ impl Bootstrapper {
             patch = patch
                 .with_dns_adblock(cfg.adblock.config.clone())
                 .with_dns_adblock_urls(cfg.adblock.global_sources().cloned().collect())
-                .with_dns_adblock_rules(cfg.adblock_rules.clone());
+                .with_dns_adblock_rules(cfg.adblock_rules.clone())
+                .with_dns_adblock_policy(cfg.adblock_policy.clone());
             // The DNS service binds from the live listeners; the file is their source.
             let dns = cfg.to_dns_config();
             patch = patch.with_dns_listen(DnsListenConfig {
@@ -349,6 +350,8 @@ impl Bootstrapper {
                 tls_key: dns.tls_key,
                 doq_listen: dns.doq_listen,
                 doq_enabled: dns.doq_listen.is_some(),
+                cache_size: dns.cache_size,
+                cache_min_ttl: dns.cache_min_ttl,
             });
         }
 

@@ -1,29 +1,20 @@
-# Lanforge System Configuration
-# This file handles the core networking and persistence settings.
+# Lanforge system and persistence settings.
 
 [system]
-# Primary interface for all LAN operations.
+# LAN interface for DHCP, RA and DNS.
 iface = "end0"
-
-# Global search domains used across DNS and DHCP modules.
+# Search domains announced by DHCPv4, DHCPv6 and RA; `lan` is always added.
 search_domains = ["lan", "homelab.local"]
-
-# Global TLS certificate and key (inherited by DNS and HTTP).
+# The LAN's IPv6 addresses (ULA, GUA) are the interface's own (systemd-networkd, DHCPv6-PD):
+# lanforge detects them and never assigns addresses.
+# TLS certificate and key shared by DNS-over-TLS/QUIC and HTTPS.
 # tls_cert = "/etc/lanforge/certs/lanforge.crt"
 # tls_key = "/etc/lanforge/certs/lanforge.key"
 
-# IPv6 tracking prefix for local device identification.
-ula_prefix = "fd00:cafe:f00d::/64"
-
-# Event bus debouncing (seconds) to prevent thrashing.
-debounce_secs = 2
-
 [database]
-# Persistent configuration database (services, users, static hosts, DNS rewrites).
+# State only (devices, leases, users, statistics): configuration lives in lanforge.toml.
 config_path = "/var/lib/lanforge/config.redb"
-
-# Volatile runtime database in tmpfs (active leases, query logs, system event history).
+# Volatile data in tmpfs (query log, event history).
 runtime_path = "/run/lanforge/runtime.redb"
-
-# Flushing interval for state persistence (seconds).
-flush_interval = 60
+# How often state in memory is written to disk ("30s", "1m", or seconds).
+flush_interval = "1m"

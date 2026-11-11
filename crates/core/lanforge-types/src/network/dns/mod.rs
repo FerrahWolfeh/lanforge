@@ -780,6 +780,7 @@ impl AdblockUrlEntry {
 /// Status and metrics for an adblock filter list source.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AdblockSourceStatus {
+    #[serde(with = "crate::utils::serde::id_as_string")]
     pub id: i64,
     #[serde(default)]
     pub name: Option<String>,
@@ -796,6 +797,9 @@ pub struct AdblockSourceStatus {
     pub last_error: Option<String>,
     #[serde(default)]
     pub sample_unsupported: Vec<String>,
+    /// Blocklist or allowlist.
+    #[serde(default)]
+    pub kind: AdblockUrlKind,
 }
 
 /// Response containing status of all compiled adblock filter sources.
@@ -807,6 +811,7 @@ pub struct DnsAdblockSourcesResponse {
 /// Attribution for a single source list matching a domain.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AdblockSourceMatch {
+    #[serde(with = "crate::utils::serde::id_as_string")]
     pub source_id: i64,
     pub url: String,
     pub action: FilterAction,
@@ -817,7 +822,7 @@ pub struct AdblockSourceMatch {
 }
 
 /// Diagnostic check response for a domain against adblock rules and sources.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct AdblockCheckResponse {
     pub domain: String,
     pub matched: bool,
@@ -825,6 +830,12 @@ pub struct AdblockCheckResponse {
     pub filter: Option<FilterMatch>,
     #[serde(default)]
     pub source_matches: Vec<AdblockSourceMatch>,
+    /// The check was for a client that `bypass` exempts from filtering.
+    #[serde(default)]
+    pub bypass: bool,
+    /// The adblock groups of the client the check was for.
+    #[serde(default)]
+    pub groups: Vec<String>,
 }
 
 /// In-depth DNS cache statistics.
@@ -869,6 +880,8 @@ pub enum DnsRequest {
     AdblockSources,
     AdblockCheck {
         domain: String,
+        /// Check as this client gets it (its groups, `bypass`); `None` = the global layer.
+        client: Option<IpAddr>,
     },
     AdblockSet {
         enabled: bool,

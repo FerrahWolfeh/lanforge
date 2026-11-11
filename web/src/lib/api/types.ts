@@ -887,7 +887,11 @@ export type FilterAction = 'block' | 'allow';
 export type FilterOrigin =
 	| { type: 'user_rule' }
 	| { type: 'user_allowlist' }
-	| { type: 'list'; source_id: number };
+	// Source ids are 64-bit: sent as strings.
+	| { type: 'list'; source_id: string }
+	| { type: 'group_rule'; group: string }
+	| { type: 'group_allowlist'; group: string }
+	| { type: 'group_list'; group: string; source_id: string };
 
 export interface FilterMatch {
 	action: FilterAction;
@@ -904,18 +908,21 @@ export type AdblockSourceFormat =
 	| 'wildcard_domains';
 
 export interface AdblockSourceStatus {
-	source_id: number;
+	/** 64-bit source id, as a string. */
+	id: string;
 	name?: string | null;
 	url: string;
 	format: AdblockSourceFormat;
 	format_detected?: AdblockSourceFormat | null;
-	last_fetch_attempt?: number | null;
+	blocks: number;
+	exceptions: number;
+	unsupported: number;
+	last_attempt: number;
 	last_success?: number | null;
 	consecutive_failures: number;
 	last_error?: string | null;
-	rules_count: number;
-	exceptions_count: number;
-	unsupported_count: number;
+	sample_unsupported: string[];
+	kind: 'blocklist' | 'allowlist';
 }
 
 export interface DnsAdblockSourcesResponse {
@@ -923,7 +930,8 @@ export interface DnsAdblockSourcesResponse {
 }
 
 export interface AdblockSourceMatch {
-	source_id: number;
+	/** 64-bit source id, as a string. */
+	source_id: string;
 	url: string;
 	action: FilterAction;
 	rule?: string | null;
@@ -935,6 +943,10 @@ export interface AdblockCheckResponse {
 	matched: boolean;
 	filter?: FilterMatch | null;
 	source_matches: AdblockSourceMatch[];
+	/** The checked client is exempt from filtering (`bypass`). */
+	bypass?: boolean;
+	/** The adblock groups of the checked client. */
+	groups?: string[];
 }
 
 export interface TimeOfDay {
@@ -957,6 +969,34 @@ export interface DnsAdblockStatusResponse {
 	blocking_ip_v4?: string | null;
 	blocking_ip_v6?: string | null;
 	refresh_time: TimeOfDay;
+}
+
+/** A device an adblock client selector names now. */
+export interface AdblockClientDevice {
+	mac: string;
+	name: string;
+}
+
+/** A client of an adblock group or bypass: `192.168.1.64/28`, `10.0.0.5`, `dev:<name|mac>`. */
+export interface AdblockClientEntry {
+	selector: string;
+	devices: AdblockClientDevice[];
+}
+
+/** An adblock group: an override of the global layer for its clients. */
+export interface AdblockGroupEntry {
+	name: string;
+	/** Source names of the lists only this group adds. */
+	lists: string[];
+	rules_file?: string | null;
+	allow_rules: number;
+	block_rules: number;
+	clients: AdblockClientEntry[];
+}
+
+export interface DnsAdblockGroupsResponse {
+	groups: AdblockGroupEntry[];
+	bypass: AdblockClientEntry[];
 }
 
 export interface DnsAdblockUrlEntry {

@@ -166,6 +166,66 @@ pub struct DnsAdblockRulesResponse {
     pub rules: Vec<AdblockRuleEntry>,
 }
 
+/// A device an adblock client selector names now.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct AdblockClientDevice {
+    pub mac: MacAddr,
+    pub name: String,
+}
+
+/// A client selector of an adblock group or `bypass` (`192.168.1.64/28`, `dev:pixel`), with
+/// the devices it names now (none for a subnet).
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct AdblockClientEntry {
+    pub selector: String,
+    pub devices: Vec<AdblockClientDevice>,
+}
+
+/// An `[adblock.groups.<name>]`: its own lists (source names), its rules file and its clients.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct AdblockGroupEntry {
+    pub name: String,
+    pub lists: Vec<String>,
+    pub rules_file: Option<String>,
+    /// Enabled allow and block rules of its rules file.
+    pub allow_rules: usize,
+    pub block_rules: usize,
+    pub clients: Vec<AdblockClientEntry>,
+}
+
+/// Members to add to an adblock group and to take out of it: lists by source name or URL,
+/// clients by selector (`192.168.1.64/28`, `dev:<name|mac>`).
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct AdblockGroupChange {
+    #[serde(default)]
+    pub add_lists: Vec<String>,
+    #[serde(default)]
+    pub remove_lists: Vec<String>,
+    #[serde(default)]
+    pub add_clients: Vec<String>,
+    #[serde(default)]
+    pub remove_clients: Vec<String>,
+}
+
+/// The adblock groups, in file order, and the bypassed clients.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct DnsAdblockGroupsResponse {
+    pub groups: Vec<AdblockGroupEntry>,
+    pub bypass: Vec<AdblockClientEntry>,
+}
+
+impl HttpWrappedResponse for DnsAdblockGroupsResponse {
+    type Wrapper = HttpDataResponse<Self>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
 /// A configured DNS upstream entry.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct DnsUpstreamConfig {

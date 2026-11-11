@@ -15,6 +15,7 @@
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
+	import ShieldIcon from "@lucide/svelte/icons/shield";
 
 	let {
 		devices = [],
@@ -27,6 +28,7 @@
 		onInspect = () => {},
 		onWol = () => {},
 		onPromote = () => {},
+		onAdblock = () => {},
 		onPurge = () => {},
 	}: {
 		devices?: DeviceEntry[];
@@ -39,6 +41,7 @@
 		onInspect?: (dev: DeviceEntry) => void;
 		onWol?: (mac: string) => void;
 		onPromote?: (dev: DeviceEntry) => void;
+		onAdblock?: (dev: DeviceEntry) => void;
 		onPurge?: (mac: string) => void;
 	} = $props();
 
@@ -279,6 +282,10 @@
 						<DropdownMenu.Item onclick={() => onPromote(dev)} class="gap-2">
 							<BookmarkIcon class="size-3.5 text-amber-400" />
 							Promote to Static Host
+						</DropdownMenu.Item>
+						<DropdownMenu.Item onclick={() => onAdblock(dev)} class="gap-2">
+							<ShieldIcon class="size-3.5" />
+							Adblock groups...
 						</DropdownMenu.Item>
 						<DropdownMenu.Separator />
 						<DropdownMenu.Item onclick={() => copyText(dev.mac, "MAC")} class="gap-2">

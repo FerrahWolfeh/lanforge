@@ -341,7 +341,7 @@ impl ClientContext {
         let rules = dns_adblock_rules.unwrap_or_default();
         let (allow_count, rules_count) = (dns_allowlist.len(), rules.len());
         let rules_outcome = if overwrite || allow_count > 0 || rules_count > 0 {
-            self.change_adblock_rules(|live| {
+            self.change_adblock_rules(None, |live| {
                 let mut text = if overwrite {
                     String::new()
                 } else {

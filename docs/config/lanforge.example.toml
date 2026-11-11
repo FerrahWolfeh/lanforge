@@ -1,196 +1,195 @@
-# Lanforge Master Reference Configuration
-# Version: 0.28.0
-# This file documents all available sections and options.
+# Lanforge reference configuration (/etc/lanforge/lanforge.toml).
+#
+# This file is the configuration: the CLI, the API and the WebUI write their changes here, and
+# `lanforge reload` applies edits made by hand without restarting the daemon. A wrong value is
+# left out and reported (`lanforge status`, WebUI), never guessed; a section that cannot be read
+# is set aside and keeps running as it was. Every key below is optional unless marked.
+# Durations take seconds or a unit: "30s", "10m", "4h", "1d".
 
 [system]
-# LAN interface where the daemon listens for all services.
+# LAN interface where the daemon serves DHCP, RA and DNS.
 iface = "end0"
-# Target IPv6 SLAAC prefix used by the NDP (Neighbor Discovery Protocol) engine to track and
-# associate IPv6 SLAAC addresses with local LAN devices (e.g., "fd00:abcd:1234:1::/64").
-# If left empty (""), Lanforge automatically generates a unique RFC 4193-compliant random ULA prefix on first launch.
-ula_prefix = ""
-# Global search domains used by DHCPv4, DHCPv6, and RA.
+# Search domains announced by DHCPv4, DHCPv6 and RA; `lan` is always added.
 search_domains = ["lan", "home.arpa"]
-# Wait time before processing network events (prevents flapping).
-debounce_secs = 2
-# Global TLS certificate and key (inherited by DNS and HTTP).
+# The LAN's IPv6 addresses (ULA, GUA) are the interface's own (systemd-networkd, DHCPv6-PD):
+# lanforge detects them and never assigns addresses.
+# TLS certificate and key shared by DNS-over-TLS/QUIC and HTTPS.
 # tls_cert = "/etc/lanforge/certs/lanforge.crt"
 # tls_key = "/etc/lanforge/certs/lanforge.key"
 
 [database]
-# Persistent configuration database (services, users, static hosts, DNS rewrites):
+# State only (devices, leases, users, statistics): configuration lives in this file.
 config_path = "/var/lib/lanforge/config.redb"
-# Volatile runtime database in tmpfs (active leases, query logs, system event history):
+# Volatile data in tmpfs (query log, event history).
 runtime_path = "/run/lanforge/runtime.redb"
-# How often to flush in-memory state to disk/database (seconds).
-flush_interval_secs = 5
+# How often state in memory is written to disk.
+flush_interval = "5s"
 
 [api]
-# Enable the Unix Domain Socket control API.
+# The Unix socket the `lanforge` CLI talks to.
 enabled = true
-# Path to the control socket.
 socket_path = "/run/lanforge/control.sock"
 
 [http]
-# Enable the REST API, Web Console, and Prometheus metrics exporter.
+# REST API, WebUI and Prometheus metrics.
 enabled = true
-# Listen address for the HTTP service (dual-stack wildcard [::]:8088 covers IPv6 and IPv4).
 listen = "[::]:8088"
-# Enable HTTPS (inherits global system TLS if paths are omitted).
 https_enabled = false
-# Whether plaintext HTTP is explicitly allowed (for local development only).
 allow_plaintext_http = true
-# Enable DNS-over-HTTPS (DoH).
+# DNS-over-HTTPS on the same listener.
 doh_enabled = false
-# tls_cert = "/etc/lanforge/certs/http.crt"
-# tls_key = "/etc/lanforge/certs/http.key"
-
-# Secure hash of the API password (Argon2 or similar).
-# auth_password_hash = "$argon2id$..."
-# Directory for serving PXE/boot files over HTTP.
-# boot_dir = "/var/lib/lanforge/tftp"
-
-[ra]
-# Enable Router Advertisements (IPv6).
-enabled = true
-# M-flag: Clients should use DHCPv6 for address assignment.
-managed = true
-# O-flag: Clients should use DHCPv6 for options (DNS, etc.).
-other_config = true
-# Suggested hop limit for clients' unicast traffic (default: 64, 0 = unspecified).
-# hop_limit = 64
-# Maximum interval between advertisements (seconds).
-max_interval = 200
-# Advertisement lifetime (seconds). 0 = not a default gateway.
-# lifetime = 600
-
-# Prefix Information Option (PIO)
-[[ra.prefix]]
-source = "ula"
-address = "fd97:f00d:cafe:3731::"
-on_link = true
-autonomous = true
-
-[[ra.prefix]]
-source = "auto_gua" # Dynamically detects GUA from interface
-
-# Recursive DNS Server (RDNSS)
-[[ra.rdnss]]
-servers = ["fd97:f00d:cafe:3731::1"]
-lifetime = 600
-
-# DNS Search List (DNSSL)
-[[ra.dnssl]]
-domains = ["lan"]
-lifetime = 600
-
-[dhcp.v4]
-enabled = true
-lease_time = 86400
-# Default gateway announced to clients.
-router = "192.168.1.1"
-# DNS servers announced to clients.
-dns = ["192.168.1.1"]
-# Subnet mask (Option 1).
-subnet_mask = "255.255.255.0"
-# --- Network Boot (PXE/HTTP) ---
-# For traditional PXE (BIOS/UEFI), this is the filename (Option 67).
-# For UEFI HTTP Boot, this is auto-expanded to http://[server_ip]/boot/filename
-# and served alongside Option 60 = "HTTPClient".
-# boot_file = "ipxe.efi"
-
-# TFTP server for traditional PXE boot (Option 66). Defaults to server_id if unset.
-# tftp_server = "192.168.1.1"
-
-# Address pools for dynamic assignment.
-[[dhcp.v4.pools]]
-range_start = "192.168.1.100"
-range_end = "192.168.1.250"
-
-# Custom DHCPv4 options using typed prefixes:
-# - 's:' or 'ascii:' for strings
-# - 'ip:' for IPv4/IPv6 addresses
-# - 'hex:' for raw hex bytes (default)
-# [dhcp.v4.options]
-# 42 = "ip:192.168.1.1"    # NTP Server (Option 42)
-# 114 = "s:http://captive" # Captive Portal (Option 114)
-
-[dhcp.v6]
-enabled = true
-lease_time = 86400
-# DNS servers (Option 23).
-dns_servers = ["fd97:f00d:cafe:3731::1"]
-# Search domains (Option 24).
-search_domains = ["lan"]
-
-# HTTP Boot file (Option 59).
-# If a filename is provided, it's auto-expanded to http://[server_ip]:8088/boot/filename
-# If a full URL (http://...) is provided, it's used as-is.
-# boot_file = "ipxe.efi"
-
-# Custom DHCPv6 options (same typed prefixes as v4)
-# [dhcp.v6.options]
-# 7 = "ip:fd97:f00d:cafe::1" # Log Server
-
-[[dhcp.v6.pools]]
-# Pool based on suffixes (applies to both ULA and GUA).
-range_start = "::100"
-range_end = "::1fff"
 
 [dns]
 enabled = true
-# Standard DNS listen address (dual-stack UDP/TCP, or array of addrs).
+# One address or several, comma-separated.
 listen = "[::]:53"
-# Default TTL for local records.
-ttl = 60
-# Days to hide inactive devices from DNS.
-last_seen_threshold_days = 7
+# sequential, parallel, fastest or roundrobin.
+upstream_mode = "sequential"
+# DNS-over-TLS / DNS-over-QUIC listeners, with the `[system]` certificate. Absent: off.
+# dot_listen = "[::]:853"
+# doq_listen = "[::]:853"
+# Response cache: entries and the shortest TTL kept.
+cache_size = 5000
+cache_min_ttl = "30s"
 
-# DNS-over-TLS (DoT)
-dot_enabled = false
-dot_listen = "0.0.0.0:853"
-# tls_cert = "/etc/lanforge/certs/dns.crt"
-# tls_key = "/etc/lanforge/certs/dns.key"
+[dns.upstreams.cloudflare]
+addresses = ["udp://1.1.1.1:53", "udp://[2606:4700:4700::1111]:53"]
 
-# DNS-over-QUIC (DoQ)
-doq_enabled = false
-doq_listen = "0.0.0.0:853"
+# A group with `domain` only answers that domain (conditional forwarding).
+# [dns.upstreams.corp]
+# addresses = ["udp://10.0.0.1:53"]
+# domain = "corp.example"
 
-# Note: Operational configurations like Upstream Resolvers, DNS Rewrites,
-# and Adblock settings (enable toggle, blocklist URLs, blocking mode, allowlist, etc.)
-# have been migrated to the database. Configure them dynamically at runtime
-# using the CLI (`lanforge dns ...`) or the HTTP/UDS API.
+# PTR queries for a subnet go to its resolver.
+# [dns.reverse]
+# "10.0.0.0/8" = "udp://10.0.0.1:53"
 
-[mdns]
-# Actively probe for hostnames and device classes via mDNS.
+[dns.rewrites]
+# A fixed answer, or `dev:<name|mac>`: the device's current addresses.
+"router.lan" = "192.168.1.1"
+"files.lan" = "dev:nas"
+
+[adblock]
 enabled = true
-probe_interval = 3600
+# nxdomain, null_ip, custom_ip or refused.
+blocking_mode = "nxdomain"
+# Daily list update, local time.
+refresh_time = "03:00"
+# The global layer: lists and a rules file every client gets.
+lists = ["stevenblack"]
+# Manual rules, one per line: `||ads.example^` blocks, `@@||bank.example^` allows.
+# Relative to this file's directory.
+rules = "adblock/global.rules"
+# Clients never filtered: a subnet, an address, or `dev:<name|mac>`.
+bypass = ["dev:work-laptop"]
 
-[monitor]
-enabled = true
-# Pacing between probes during a network scan (ms).
-scan_pacing_ms = 100
-# How long to wait before marking a neighbor as stale (seconds).
-stale_timeout_secs = 3600
+[adblock.sources.stevenblack]
+url = "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
 
-[tftp]
+[adblock.sources.nsfw]
+url = "https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/porn-only/hosts"
+
+# Groups override the global layer for their clients: their rules and lists decide first
+# (a group allow wins over a global block), then the global layer. `dev:<name>` follows the
+# device's name whatever MAC it has (randomized Android MACs).
+[adblock.groups.banking]
+rules = "adblock/banking.rules"
+clients = ["dev:my-phone"]
+
+[adblock.groups.kids]
+lists = ["nsfw"]
+clients = ["192.168.1.64/28", "dev:tablet"]
+
+[dhcp.v4]
 enabled = true
-# Root directory for PXE boot files.
-root_dir = "/var/lib/lanforge/tftp"
-listen_addr = "[::]:69"
+lease = "1d"
+router = "192.168.1.1"
+dns = ["192.168.1.1"]
+subnet_mask = "255.255.255.0"
+# Absent: public NTP servers; `ntp = []` announces none.
+# ntp = ["192.168.1.1"]
+# Network boot: the file name (PXE, option 67) and its TFTP server (option 66).
+# boot_file = "ipxe.efi"
+# tftp_server = "192.168.1.1"
+# Raw options by code, with a type prefix (`s:` text, `ip:` address, `hex:` bytes).
+# options = { "114" = "s:http://captive.lan" }
+
+[dhcp.v4.pools.main]
+range = "192.168.1.100-192.168.1.250"
+
+[dhcp.v6]
+enabled = true
+lease = "1d"
+# Absent: this router's own LAN address.
+# dns = ["fd00::1"]
+
+# A suffix range follows the LAN prefix, whatever the ISP delegates.
+[dhcp.v6.pools.main]
+range = "::100-::1fff"
+
+[ra]
+enabled = true
+# M flag: addresses from DHCPv6. O flag: other settings from DHCPv6.
+managed = true
+other_config = true
+max_interval = "200s"
+# Absent: the interface's ULA and delegated GUA prefixes, and RDNSS/DNSSL from DHCPv6 and the
+# search domains. A prefix written here replaces them.
+# [ra.prefixes.lan]
+# source = "auto_gua"
+
+[firewall]
+enabled = true
+default_input_policy = "drop"
+default_forward_policy = "drop"
+
+[firewall.zones.external]
+interfaces = ["wan0"]
+input = "drop"
+forward = "drop"
+masquerade = true
+mtu_fix = true
+
+[firewall.zones.internal]
+interfaces = ["lan0"]
+input = "accept"
+forward = "accept"
+open_ports = ["53/udp", "53/tcp", "67/udp", "8088/tcp"]
+
+# WAN to a LAN host; `to` takes an address or `dev:<name|mac>`.
+[firewall.port_forwards.torrent]
+proto = "tcp"
+port = 6881
+to = "dev:nas"
 
 [pppoe]
-# Integrated PPPoE client service for direct WAN broadband dial-in.
+# PPPoE WAN client (the WAN interface becomes ppp0).
 enabled = false
 wan_iface = "eth1"
-username = "user@isp.com"
-password = "secretpassword"
+username = "user@isp.example"
+password = "secret"
+# none, pap or chap_md5.
 auth = "chap_md5"
 mru = 1492
 
-[pppoe.nftables]
+# Static hosts: the table name is the hostname.
+[hosts.nas]
+mac = "02:00:00:00:05:01"
+v4 = "192.168.1.10"
+# A suffix follows the LAN prefix; a full address is fixed.
+v6_suffix = "::10"
+
+[mdns]
+# Probe devices for their names over mDNS.
 enabled = true
-table_name = "lanforge"
-flow_offload = true
-mss_clamping = true
-masquerade = true
+probe_interval = "1h"
+
+[monitor]
+enabled = true
+scan_pacing_ms = 100
+stale_timeout_secs = 3600
+
+[tftp]
+enabled = false
+listen = "[::]:69"
+root_dir = "/var/lib/lanforge/tftp"

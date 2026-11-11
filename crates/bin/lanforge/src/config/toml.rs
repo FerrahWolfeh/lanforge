@@ -34,7 +34,11 @@ use lanforge_api::config_file::DhcpSettings;
 #[cfg(feature = "dns")]
 use lanforge_api::config_file::{AdblockSettings, DnsSettings};
 use lanforge_api::config_file::{ConfigFile, Section};
+#[cfg(feature = "dns")]
+use lanforge_types::config::DnsListenConfig;
 use lanforge_types::device::StaticHost;
+#[cfg(feature = "dns")]
+use lanforge_types::network::dns::adblock::AdblockPolicy;
 
 /// Root structure of the TOML file.
 #[derive(Deserialize, Serialize, Debug, Default, Clone)]
@@ -60,6 +64,10 @@ pub struct TomlConfig {
     #[cfg(feature = "dns")]
     #[serde(skip)]
     pub adblock_rules: String,
+    /// The adblock groups and `bypass`, with the groups' rules files read.
+    #[cfg(feature = "dns")]
+    #[serde(skip)]
+    pub adblock_policy: AdblockPolicy,
     #[cfg(feature = "discovery")]
     pub monitor: MonitorConfig,
     #[cfg(feature = "discovery")]
@@ -248,6 +256,14 @@ impl From<&ConfigFile> for TomlConfig {
             if let Some(ref listen) = dns.listen {
                 cfg.dns.listen = listen.clone();
             }
+            // The listeners and the cache, as a reload applies them (`DnsSettings::listener`).
+            let live = dns.listener(&DnsListenConfig::default());
+            cfg.dns.dot_listen = live.dot_listen;
+            cfg.dns.dot_enabled = live.dot_enabled;
+            cfg.dns.doq_listen = live.doq_listen;
+            cfg.dns.doq_enabled = live.doq_enabled;
+            cfg.dns.cache_size = live.cache_size;
+            cfg.dns.cache_min_ttl = live.cache_min_ttl;
             // Upstreams, mode, rewrites and reverse resolvers reach the service through the
             // context (`dns_settings`), never through `DnsConfig`: its upstream list feeds the
             // DHCPv6 DNS fallback and must stay as it was.
@@ -331,6 +347,11 @@ pub fn load_toml(path: &str) -> TomlConfig {
                 cfg.config_issues.extend(file_cfg.adblock.to_config().1);
                 let (rules, issues) = cfg.adblock.load_rules(Path::new(path));
                 cfg.adblock_rules = rules.unwrap_or_default();
+                cfg.config_issues.extend(issues);
+                let (policy, issues) = cfg
+                    .adblock
+                    .policy(Some(Path::new(path)), &AdblockPolicy::default());
+                cfg.adblock_policy = policy;
                 cfg.config_issues.extend(issues);
             }
             if !set_aside.iter().any(|(sec, _)| *sec == Section::Hosts) {
@@ -534,22 +555,75 @@ source = "broken" # Invalid variant
         );
     }
 
+    /// `[dns]`'s `DoT`/`DoQ` listeners and cache reach the DNS service's start-up config.
+    #[cfg(feature = "dns")]
+    #[test]
+    fn dns_listeners_and_cache_come_from_the_file() {
+        let file = ConfigFile::parse(
+            "[dns]\ndot_listen = \"[::]:853\"\ncache_size = 20000\ncache_min_ttl = \"1m\"\n",
+        )
+        .unwrap();
+        let toml = TomlConfig::from(&file);
+        assert_eq!(toml.dns.dot_listen, Some("[::]:853".parse().unwrap()));
+        assert!(toml.dns.dot_enabled);
+        assert_eq!(toml.dns.doq_listen, None);
+        assert_eq!((toml.dns.cache_size, toml.dns.cache_min_ttl), (20_000, 60));
+    }
+
+    /// A config file in `docs/config/` as the daemon reads it: the strict file form takes every
+    /// section (nothing set aside) and no value in it is an issue.
+    fn docs_config(name: &str) -> ConfigFile {
+        let path = format!("{}/../../../docs/config/{name}", env!("CARGO_MANIFEST_DIR"));
+        let content =
+            fs::read_to_string(&path).unwrap_or_else(|e| panic!("docs/config/{name}: {e}"));
+        let file =
+            ConfigFile::parse(&content).unwrap_or_else(|e| panic!("docs/config/{name}: {e}"));
+        let mut issues = Vec::new();
+        issues.extend(file.firewall.to_config().1);
+        issues.extend(file.dhcp.to_config().1);
+        issues.extend(file.ra.to_config().1);
+        issues.extend(file.pppoe.checked().1);
+        issues.extend(file.dns.to_config().1);
+        issues.extend(file.static_hosts().1);
+        issues.extend(file.adblock.to_config().1);
+        assert_eq!(issues, Vec::<String>::new(), "docs/config/{name}");
+        file
+    }
+
+    /// Every snippet in `docs/config/` is valid on its own (they are copied into a config).
+    #[test]
+    fn test_docs_config_snippets_parse_cleanly() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../docs/config");
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| {
+                let path = e.ok()?.path();
+                let toml = path
+                    .extension()
+                    .is_some_and(|x| x.eq_ignore_ascii_case("toml"));
+                toml.then(|| path.file_name()?.to_str().map(String::from))?
+            })
+            .collect();
+        names.sort();
+        assert!(names.len() > 1, "{names:?}");
+        for name in names {
+            docs_config(&name);
+        }
+    }
+
+    /// The reference config: every section, as the daemon loads it.
     #[test]
     fn test_docs_example_config_parses_cleanly() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../docs/config/lanforge.example.toml"
-        );
-        let content = fs::read_to_string(path).unwrap_or_else(|e| {
-            panic!("Failed to read docs/config/lanforge.example.toml at {path}: {e}")
-        });
-        let cfg: TomlConfig = toml::from_str(&content)
-            .unwrap_or_else(|e| panic!("Failed to parse docs/config/lanforge.example.toml: {e}"));
+        let file = docs_config("lanforge.example.toml");
+        let (adblock, _) = file.adblock.to_config();
+        assert_eq!(adblock.groups.len(), 2);
+        assert_eq!(adblock.bypass.len(), 1);
 
+        // As the daemon loads it.
+        let cfg = TomlConfig::from(&file);
         assert_eq!(cfg.system.iface, "end0");
         #[cfg(feature = "http")]
         assert_eq!(cfg.http.listen.port(), 8088);
-        assert!(!cfg.database.config_path.contains("sqlite"));
     }
 
     fn load_section<T: DeserializeOwned + Default>(v: &toml::Value, key: &str) -> T {

@@ -22,7 +22,8 @@ impl AdblockMiddleware {
         resp: &mut Vec<u8>,
     ) -> Result<bool, DnsError> {
         if let Some(filter) = &ctx.filter {
-            let Some(m) = filter.check_domain(&req.domain) else {
+            let client = filter.client_layers(&ctx.ctx, req.src_ip);
+            let Some(m) = filter.check(&req.domain, client) else {
                 return Ok(false);
             };
             if m.action == FilterAction::Block {

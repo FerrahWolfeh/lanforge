@@ -1,7 +1,8 @@
 use crate::api::{
-    AdblockCheckResponse, AuthTokenResponse, AuthTokensResponse, CreateUserPayload,
-    DeviceListQuery, DevicesResponse, DhcpOptionsResponse, DhcpPoolsConfigResponse,
-    DhcpPoolsResponse, DhcpReconcileResponse, DnsAdblockSourcesResponse, DnsAdblockStatusResponse,
+    AdblockCheckResponse, AdblockGroupChange, AuthTokenResponse, AuthTokensResponse,
+    CreateUserPayload, DeviceListQuery, DevicesResponse, DhcpOptionsResponse,
+    DhcpPoolsConfigResponse, DhcpPoolsResponse, DhcpReconcileResponse, DnsAdblockGroupsResponse,
+    DnsAdblockRulesResponse, DnsAdblockSourcesResponse, DnsAdblockStatusResponse,
     DnsAdblockUrlsResponse, DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse,
     DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse,
     DnsRewritesResponse, DnsStatsResponse, DnsUpstreamModeResponse, DnsUpstreamsResponse,
@@ -36,7 +37,7 @@ use lanforge_types::{
 
 use std::{
     future::Future,
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -208,14 +209,17 @@ pub trait LanforgeRpc {
     fn dns_block(
         &self,
         domain: String,
+        group: Option<String>,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn dns_allow(
         &self,
         domain: String,
+        group: Option<String>,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn dns_unallow(
         &self,
         domain: String,
+        group: Option<String>,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn dns_rewrite_add(
         &self,
@@ -239,12 +243,15 @@ pub trait LanforgeRpc {
     ) -> impl Future<Output = Result<DnsRewritesResponse, RpcCallError>> + Send;
     fn dns_allowlist(
         &self,
+        group: Option<String>,
     ) -> impl Future<Output = Result<DnsAllowlistResponse, RpcCallError>> + Send;
     fn dns_adblock_url_add(
         &self,
+        name: Option<String>,
         url: String,
         kind: AdblockUrlKind,
         format: Option<AdblockSourceFormat>,
+        group: Option<String>,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn dns_adblock_url_remove(
         &self,
@@ -259,7 +266,42 @@ pub trait LanforgeRpc {
     fn dns_adblock_check(
         &self,
         domain: String,
+        client: Option<IpAddr>,
     ) -> impl Future<Output = Result<Box<AdblockCheckResponse>, RpcCallError>> + Send;
+    fn dns_adblock_rules(
+        &self,
+        group: Option<String>,
+    ) -> impl Future<Output = Result<DnsAdblockRulesResponse, RpcCallError>> + Send;
+    fn dns_adblock_groups(
+        &self,
+    ) -> impl Future<Output = Result<Box<DnsAdblockGroupsResponse>, RpcCallError>> + Send;
+    fn dns_adblock_group_create(
+        &self,
+        name: String,
+        lists: Vec<String>,
+        clients: Vec<String>,
+    ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
+    fn dns_adblock_group_change(
+        &self,
+        name: String,
+        change: AdblockGroupChange,
+    ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
+    fn dns_adblock_group_delete(
+        &self,
+        name: String,
+    ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
+    fn dns_adblock_bypass_change(
+        &self,
+        add: Vec<String>,
+        remove: Vec<String>,
+    ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
+    fn dns_adblock_device_change(
+        &self,
+        mac: MacAddr,
+        join: Vec<String>,
+        leave: Vec<String>,
+        bypass: Option<bool>,
+    ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn context_dump(
         &self,
         only_devices: bool,

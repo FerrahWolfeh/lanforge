@@ -127,7 +127,7 @@ pub struct RaPrefixAddArgs {
     pub prefix: Option<String>,
 
     /// Prefix source mode: static, ula, autogua (default: static, or ula if `fd00::`)
-    #[arg(short, long)]
+    #[arg(long)]
     pub source: Option<String>,
 
     /// Valid lifetime (e.g. '30d', '24h', '86400', 'infinity')

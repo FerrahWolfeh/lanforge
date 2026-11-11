@@ -35,7 +35,14 @@ use chrono::Datelike;
 #[cfg(feature = "adblock")]
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 #[cfg(feature = "adblock")]
+use std::collections::HashSet;
+
+#[cfg(feature = "adblock")]
+use lanforge_core::context::LanforgeContext;
+#[cfg(feature = "adblock")]
 use lanforge_types::network::dns::AdblockUrlEntry;
+#[cfg(feature = "adblock")]
+use lanforge_types::network::dns::adblock::AdblockPolicy;
 #[cfg(feature = "adblock")]
 use lanforge_types::network::dns::adblock::syntax::ParseStats;
 #[cfg(feature = "adblock")]
@@ -47,6 +54,21 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
 #[cfg(feature = "adblock")]
 use tracing::{debug, error, info, warn};
+
+/// Every list to download and index: the global layer's, then those only groups add (once
+/// each, in group order).
+#[cfg(feature = "adblock")]
+pub(crate) fn adblock_sources(ctx: &LanforgeContext) -> Vec<AdblockUrlEntry> {
+    ctx.with_config(|c| {
+        let mut sources = c.dns_adblock_urls.clone();
+        for source in c.dns_adblock_policy.groups.iter().flat_map(|g| &g.sources) {
+            if !sources.iter().any(|s| s.source_id() == source.source_id()) {
+                sources.push(source.clone());
+            }
+        }
+        sources
+    })
+}
 
 /// Configured lists that have compiled artifacts, in configuration order (= bit order).
 #[cfg(feature = "adblock")]
@@ -122,6 +144,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
             // owns list downloads, so it watches the adblock settings and source URLs.
             let mut adblock_sub = ctx.ctx.config_subscription::<AdblockDbConfig>();
             let mut urls_sub = ctx.ctx.config_subscription::<Vec<AdblockUrlEntry>>();
+            let mut policy_sub = ctx.ctx.config_subscription::<AdblockPolicy>();
             let mut cache_loaded = false;
             let mut force_refresh = false;
             // When the last download pass ran: re-enabling within a day reuses the loaded lists.
@@ -183,7 +206,11 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                     info!("Adblock: re-enabled with recent lists, skipping download pass");
                 }
                 if !cache_loaded {
-                    let compiled = compiled_lists(&sources_dir, &ctx.ctx.get_dns_adblock_urls());
+                    let configured = adblock_sources(&ctx.ctx);
+                    let compiled = compiled_lists(&sources_dir, &configured);
+                    // A configured list never downloaded yet (added while the daemon was down)
+                    // needs the download pass, however fresh the others are.
+                    let all_compiled = compiled.len() == configured.len();
                     if !compiled.is_empty() {
                         info!("Adblock: loading compiled lists from disk");
                         if let Some(bl) = load_lists(&sources_dir, compiled).await
@@ -198,12 +225,14 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                 .unwrap_or_default()
                                 .as_secs();
                             let elapsed = now.saturating_sub(manifest.last_merge);
-                            if elapsed < 20 * 3600 {
+                            if elapsed < 20 * 3600 && all_compiled {
                                 skip_download_pass = true;
                                 info!(
                                     fingerprint = format_args!("{:016x}", manifest.fingerprint),
                                     "Adblock: cached lists are fresh, skipping startup download"
                                 );
+                            } else if !all_compiled {
+                                info!("Adblock: lists never downloaded are configured, updating");
                             } else {
                                 info!(
                                     "Adblock: cached lists are stale, scheduling background update"
@@ -217,7 +246,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                 let start = Instant::now();
                 // Upstream changes during this pass still wake the failure retry below.
                 upstreams_rx.borrow_and_update();
-                let configured_sources = ctx.ctx.get_dns_adblock_urls();
+                let configured_sources = adblock_sources(&ctx.ctx);
 
                 if skip_download_pass {
                     info!("Adblock: skipping blocklist download pass (cached FST is fresh)");
@@ -547,6 +576,17 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                         Some(_) = urls_sub.next() => {
                             info!("Adblock: source list changed, reloading");
                             break;
+                        }
+                        // A group's clients or rules are the DNS service's; only its lists
+                        // are downloaded here.
+                        Some(delta) = policy_sub.next() => {
+                            let lists = |p: &AdblockPolicy| {
+                                p.groups.iter().flat_map(|g| &g.sources).map(AdblockUrlEntry::source_id).collect::<HashSet<_>>()
+                            };
+                            if lists(&delta.old) != lists(&delta.new) {
+                                info!("Adblock: group lists changed, reloading");
+                                break;
+                            }
                         }
                         Ok(()) = upstreams_rx.changed(), if max_failures > 0 => {
                             if !ctx.recursive.is_empty() {
