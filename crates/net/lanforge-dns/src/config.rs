@@ -5,6 +5,7 @@
 //! and IPv6 prefix settings.
 
 use crate::resolver::recursive::UpstreamMode;
+use lanforge_types::config::DnsListenConfig;
 use lanforge_types::network::{
     ListenConfig,
     dns::{
@@ -146,8 +147,8 @@ impl Default for DnsConfig {
             doq_listen: None,
             doq_enabled: false,
             query_log: QueryLogConfig::default(),
-            cache_size: 5000,
-            cache_min_ttl: 30,
+            cache_size: DnsListenConfig::DEFAULT_CACHE_SIZE,
+            cache_min_ttl: DnsListenConfig::DEFAULT_CACHE_MIN_TTL,
         }
     }
 }

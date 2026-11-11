@@ -45,6 +45,12 @@ enabled = true
 listen = "[::]:53"
 # sequential, parallel, fastest or roundrobin.
 upstream_mode = "sequential"
+# DNS-over-TLS / DNS-over-QUIC listeners, with the `[system]` certificate. Absent: off.
+# dot_listen = "[::]:853"
+# doq_listen = "[::]:853"
+# Response cache: entries and the shortest TTL kept.
+cache_size = 5000
+cache_min_ttl = "30s"
 
 [dns.upstreams.cloudflare]
 addresses = ["udp://1.1.1.1:53", "udp://[2606:4700:4700::1111]:53"]

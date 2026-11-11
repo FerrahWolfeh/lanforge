@@ -684,7 +684,7 @@ async fn build_upstreams(
 
 /// Points the resolver at [`effective_upstream_targets`]. `force` rebuilds even an unchanged set
 /// (an explicit config change); otherwise an unchanged set is left alone, cache included.
-/// `cfg` with its listener fields taken from the live `DnsListenConfig`.
+/// `cfg` with its listener and cache fields taken from the live `DnsListenConfig`.
 fn with_live_listeners(cfg: &DnsConfig, live: &DnsListenConfig) -> DnsConfig {
     DnsConfig {
         enabled: live.enabled,
@@ -693,6 +693,8 @@ fn with_live_listeners(cfg: &DnsConfig, live: &DnsListenConfig) -> DnsConfig {
         doq_listen: live.doq_listen.filter(|_| live.doq_enabled),
         tls_cert: live.tls_cert.clone(),
         tls_key: live.tls_key.clone(),
+        cache_size: live.cache_size,
+        cache_min_ttl: live.cache_min_ttl,
         ..cfg.clone()
     }
 }

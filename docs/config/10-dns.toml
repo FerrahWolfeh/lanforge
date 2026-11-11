@@ -7,6 +7,14 @@ enabled = true
 listen = "[::]:53"
 # sequential (in order, next on failure), parallel, fastest or roundrobin.
 upstream_mode = "sequential"
+# DNS-over-TLS (TCP) and DNS-over-QUIC (UDP) listeners, with `[system]` tls_cert/tls_key.
+# Absent: off.
+dot_listen = "[::]:853"
+doq_listen = "[::]:853"
+# Response cache entries (default 5000) and the shortest TTL a cached answer keeps (default 30s).
+cache_size = 10000
+cache_min_ttl = "30s"
+# A change of the listeners or the cache restarts the DNS service alone.
 
 # Upstream resolvers, grouped by name: udp://, tcp://, tls:// (DoT), https:// (DoH), quic:// (DoQ).
 [dns.upstreams.cloudflare]

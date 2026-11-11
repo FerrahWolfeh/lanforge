@@ -104,6 +104,7 @@ impl RunningDns {
             doq_enabled: true,
             tls_cert: Some(cert.cert_pem.clone()),
             tls_key: Some(cert.key_pem.clone()),
+            ..DnsListenConfig::default()
         });
         let cfg = DnsConfig {
             enabled: true,

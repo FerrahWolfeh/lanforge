@@ -400,7 +400,9 @@ The stats are attached to the `LanforgeContext` via `ctx.set_dns_stats()` during
 ### `DnsConfig`
 
 The service's start-up settings, built by the daemon from `lanforge.toml` (`[dns]`, `[adblock]`,
-`[system]`) and defaults; it is not read from a file itself. Upstreams, rewrites, the adblock
+`[system]`) and defaults; it is not read from a file itself. Its listeners and cache are
+replaced at each start by the live `DnsListenConfig` (`[dns] listen`, `dot_listen`,
+`doq_listen`, `cache_size`, `cache_min_ttl`). Upstreams, rewrites, the adblock
 lists, rules and groups reach the running service as live config (`ctx.config_subscription`),
 not through this struct.
 

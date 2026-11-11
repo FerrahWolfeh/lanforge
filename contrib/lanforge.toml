@@ -169,7 +169,9 @@ mtu = 1500
 
 # ------------------------------------------------------------------------------
 # [dns] — authoritative rewrites and recursive DNS
-# Defaults: enabled = true; listen = "[::]:53".
+# Defaults: enabled = true; listen = "[::]:53"; no DoT/DoQ listener;
+# cache_size = 5000; cache_min_ttl = "30s". DoT/DoQ use [system] tls_cert/tls_key.
+# A change of listen, dot_listen, doq_listen or the cache restarts the DNS service alone.
 # Upstream addresses accept udp://, tls://, quic://, and https:// prefixes.
 # The URI scheme selects the protocol, so it does not need a separate protocol key.
 # The table key is a human-readable identifier. Set domain only for conditional
@@ -178,6 +180,10 @@ mtu = 1500
 [dns]
 enabled = true
 listen = "[::]:53"
+# dot_listen = "[::]:853"  # DNS-over-TLS
+# doq_listen = "[::]:853"  # DNS-over-QUIC (UDP)
+# cache_size = 5000
+# cache_min_ttl = "30s"
 
 # A named upstream set accepts several endpoints with shared conditional-routing
 # options. Entries are tried according to the configured DNS upstream mode.

@@ -234,8 +234,9 @@ pub trait ConfigSection: Clone + PartialEq + Send + Sync + 'static {
 // Section types and implementations
 // ---------------------------------------------------------------------------
 
-/// DNS listener configuration for UDP/TCP port 53, `DoT`, and `DoQ`, and whether the DNS
-/// service runs at all (`[dns] enabled`).
+/// What the DNS service binds and builds when it starts: whether it runs at all (`[dns]
+/// enabled`), its UDP/TCP, `DoT` and `DoQ` listeners and its response cache. A change restarts
+/// the DNS service alone.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DnsListenConfig {
     pub enabled: bool,
@@ -246,6 +247,15 @@ pub struct DnsListenConfig {
     pub tls_key: Option<String>,
     pub doq_listen: Option<SocketAddr>,
     pub doq_enabled: bool,
+    /// Response cache entries.
+    pub cache_size: u64,
+    /// Shortest TTL (seconds) a cached answer keeps.
+    pub cache_min_ttl: u32,
+}
+
+impl DnsListenConfig {
+    pub const DEFAULT_CACHE_SIZE: u64 = 5000;
+    pub const DEFAULT_CACHE_MIN_TTL: u32 = 30;
 }
 
 impl Default for DnsListenConfig {
@@ -259,6 +269,8 @@ impl Default for DnsListenConfig {
             tls_key: None,
             doq_listen: None,
             doq_enabled: false,
+            cache_size: Self::DEFAULT_CACHE_SIZE,
+            cache_min_ttl: Self::DEFAULT_CACHE_MIN_TTL,
         }
     }
 }

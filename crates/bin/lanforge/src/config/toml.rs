@@ -34,6 +34,8 @@ use lanforge_api::config_file::DhcpSettings;
 #[cfg(feature = "dns")]
 use lanforge_api::config_file::{AdblockSettings, DnsSettings};
 use lanforge_api::config_file::{ConfigFile, Section};
+#[cfg(feature = "dns")]
+use lanforge_types::config::DnsListenConfig;
 use lanforge_types::device::StaticHost;
 #[cfg(feature = "dns")]
 use lanforge_types::network::dns::adblock::AdblockPolicy;
@@ -254,6 +256,14 @@ impl From<&ConfigFile> for TomlConfig {
             if let Some(ref listen) = dns.listen {
                 cfg.dns.listen = listen.clone();
             }
+            // The listeners and the cache, as a reload applies them (`DnsSettings::listener`).
+            let live = dns.listener(&DnsListenConfig::default());
+            cfg.dns.dot_listen = live.dot_listen;
+            cfg.dns.dot_enabled = live.dot_enabled;
+            cfg.dns.doq_listen = live.doq_listen;
+            cfg.dns.doq_enabled = live.doq_enabled;
+            cfg.dns.cache_size = live.cache_size;
+            cfg.dns.cache_min_ttl = live.cache_min_ttl;
             // Upstreams, mode, rewrites and reverse resolvers reach the service through the
             // context (`dns_settings`), never through `DnsConfig`: its upstream list feeds the
             // DHCPv6 DNS fallback and must stay as it was.
@@ -543,6 +553,21 @@ source = "broken" # Invalid variant
             None,
             "no file: not read"
         );
+    }
+
+    /// `[dns]`'s `DoT`/`DoQ` listeners and cache reach the DNS service's start-up config.
+    #[cfg(feature = "dns")]
+    #[test]
+    fn dns_listeners_and_cache_come_from_the_file() {
+        let file = ConfigFile::parse(
+            "[dns]\ndot_listen = \"[::]:853\"\ncache_size = 20000\ncache_min_ttl = \"1m\"\n",
+        )
+        .unwrap();
+        let toml = TomlConfig::from(&file);
+        assert_eq!(toml.dns.dot_listen, Some("[::]:853".parse().unwrap()));
+        assert!(toml.dns.dot_enabled);
+        assert_eq!(toml.dns.doq_listen, None);
+        assert_eq!((toml.dns.cache_size, toml.dns.cache_min_ttl), (20_000, 60));
     }
 
     /// A config file in `docs/config/` as the daemon reads it: the strict file form takes every

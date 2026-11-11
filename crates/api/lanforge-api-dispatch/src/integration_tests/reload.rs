@@ -1,7 +1,6 @@
 //! `lanforge reload` (`handle_reload`): the file-owned sections apply as the boot applies them.
 
 use std::fs;
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -353,29 +352,33 @@ async fn reload_applies_a_dns_edit_and_leaves_out_a_wrong_answer() {
     assert_eq!(fs::read_to_string(&path).unwrap(), text, "file untouched");
 }
 
-/// `[dns] listen` and `enabled` apply on reload only when they changed (the DNS service alone
-/// restarts or goes dormant); `DoT`/`DoQ`, not in `[dns]`, stay as they run.
+/// `[dns]`'s listeners (plain, `DoT`, `DoQ`), cache and `enabled` apply on reload only when
+/// they changed (the DNS service alone restarts or goes dormant). The file is their source: a
+/// `DoT` listener the file does not name is off.
 #[tokio::test]
 async fn reload_applies_the_dns_listener_only_when_it_changed() {
     use lanforge_types::config::DnsListenConfig;
     use std::time::Duration;
 
     let (client, _dir, path) = with_file(
-        "[dns]
-listen = \"127.0.0.1:5353\"\n",
+        "[dns]\nlisten = \"127.0.0.1:5353\"\ndot_listen = \"[::]:853\"\n\
+         cache_size = 20000\ncache_min_ttl = \"1m\"\n",
     );
     let ctx = &client.ctx;
-    let dot: SocketAddr = "[::]:853".parse().unwrap();
+    // The TLS identity is `[system]`'s: a reload of `[dns]` keeps it.
     ctx.update_dns_listen(DnsListenConfig {
-        dot_listen: Some(dot),
-        dot_enabled: true,
+        tls_cert: Some("/etc/lanforge/cert.pem".into()),
         ..DnsListenConfig::default()
     });
     reload(&client).await;
     let live = ctx.get_dns_listen();
     assert_eq!(live.listen.to_string(), "127.0.0.1:5353");
     assert!(live.enabled);
-    assert_eq!(live.dot_listen, Some(dot), "DoT is not in [dns]: kept");
+    assert_eq!(live.dot_listen, Some("[::]:853".parse().unwrap()));
+    assert!(live.dot_enabled);
+    assert!(live.doq_listen.is_none() && !live.doq_enabled);
+    assert_eq!((live.cache_size, live.cache_min_ttl), (20_000, 60));
+    assert_eq!(live.tls_cert.as_deref(), Some("/etc/lanforge/cert.pem"));
 
     // Unchanged: the listener is not touched (no DNS restart).
     let mut sub = ctx.config_subscription::<DnsListenConfig>();
@@ -393,7 +396,47 @@ listen = \"127.0.0.1:5353\"\n",
     )
     .unwrap();
     reload(&client).await;
-    assert!(!ctx.get_dns_listen().enabled, "disabled by the file");
+    let live = ctx.get_dns_listen();
+    assert!(!live.enabled, "disabled by the file");
+    assert!(
+        live.dot_listen.is_none() && !live.dot_enabled,
+        "DoT left the file"
+    );
+    assert_eq!(live.cache_size, DnsListenConfig::DEFAULT_CACHE_SIZE);
+}
+
+/// A `[dns]` change from the API/WebUI (here a rewrite) rewrites the section from the live
+/// settings: the listeners and the cache it does not touch stay in the file as written.
+#[tokio::test]
+async fn a_dns_change_keeps_the_listeners_and_cache_in_the_file() {
+    use lanforge_types::network::dns::DnsRecordType;
+    use lanforge_types::network::dns::adblock::{RewriteAnswer, RewriteRule};
+
+    let (client, _dir, path) = with_file(
+        "[dns]\ndot_listen = \"[::]:853\"\ndoq_listen = \"[::]:853\"\ncache_size = 20000\n\
+         cache_min_ttl = \"1m\"\n",
+    );
+    reload(&client).await;
+    client
+        .change_dns(|dns| {
+            dns.rewrites.push(RewriteRule {
+                id: None,
+                domain: "nas.lan".into(),
+                rtype: DnsRecordType::A,
+                answer: RewriteAnswer::A("192.0.2.10".parse().unwrap()),
+            });
+        })
+        .expect("dns change");
+    let written = fs::read_to_string(&path).unwrap();
+    for line in [
+        "dot_listen = \"[::]:853\"",
+        "doq_listen = \"[::]:853\"",
+        "cache_size = 20000",
+        "\"nas.lan\"",
+    ] {
+        assert!(written.contains(line), "{line} missing:\n{written}");
+    }
+    assert!(written.contains("cache_min_ttl = "), "{written}");
 }
 
 /// A `[dns]` that does not fit its type is set aside: the running DNS keeps working.
