@@ -55,6 +55,26 @@ pub struct AdblockGroup {
     pub clients: Vec<ClientSelector>,
 }
 
+impl AdblockGroup {
+    /// Whether `name` can name a group the API creates: letters, digits, `-` and `_` (it names
+    /// the group's rules file and appears in URLs).
+    #[must_use]
+    pub fn is_valid_name(name: &str) -> bool {
+        !name.is_empty()
+            && name.len() <= 64
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    }
+
+    /// The rules file the API creates for this group when it has none: `adblock/<name>.rules`,
+    /// when the name can name a file.
+    #[must_use]
+    pub fn default_rules(&self) -> Option<String> {
+        Self::is_valid_name(&self.name).then(|| format!("adblock/{}.rules", self.name))
+    }
+}
+
 impl AdblockSettings {
     /// The default global rules file, as the API creates it.
     pub const DEFAULT_RULES: &str = "adblock/global.rules";
@@ -91,8 +111,9 @@ impl AdblockSettings {
     /// The groups and `bypass` as the filter runs them, each group with its sources and the
     /// text of its rules file, plus one issue per rules line it ignores. A group rules file that
     /// cannot be read is an issue and keeps the text `live` has for that group: a reload keeps
-    /// the rules that run, a boot starts the group without any. Without a config file
-    /// (`config_path` `None`) no rules file is read and the groups keep their live rules.
+    /// the rules that run, a boot starts the group without any. Without a config file to read
+    /// (`config_path` `None`: none, or a read-only one whose edits live in memory) no rules
+    /// file is read and the groups keep their live rules.
     #[must_use]
     pub fn policy(
         &self,
@@ -110,8 +131,8 @@ impl AdblockSettings {
         let mut groups = Vec::with_capacity(self.groups.len());
         for group in &self.groups {
             let rules = match (group.rules.as_deref(), config_path) {
-                (None, _) => String::new(),
-                (Some(_), None) => live_rules(&group.name),
+                (_, None) => live_rules(&group.name),
+                (None, Some(_)) => String::new(),
                 (Some(rules), Some(config_path)) => {
                     let at = format!("[adblock.groups.\"{}\"] rules \"{rules}\"", group.name);
                     let path = config_path.parent().unwrap_or(Path::new(".")).join(rules);
@@ -450,10 +471,8 @@ impl AdblockFile {
                 ));
             }
             let group_lists = known(&at, &own, &mut issues);
+            // A group without clients is valid (created first, members added later).
             let clients = selectors(&at, "clients", &file.clients, &mut issues);
-            if clients.is_empty() {
-                issues.push(format!("{at} has no clients; it applies to nobody"));
-            }
             groups.push(AdblockGroup {
                 name: name.clone(),
                 lists: group_lists,
@@ -777,7 +796,6 @@ clients = ["dev:galaxy tab"]
             "[adblock.groups.\"kids\"] lists repeats lists of the global layer",
             "[adblock.groups.\"kids\"] lists \"unknown\" is not a source",
             "[adblock.groups.\"kids\"] clients \"dev:galaxy tab\"",
-            "[adblock.groups.\"kids\"] has no clients",
             "[adblock.groups.\"kids\"] rules = \"/etc/lanforge/kids.rules\"",
             "[adblock.sources.\"unused\"] is not in `lists` nor in a group; not downloaded",
         ];
@@ -788,6 +806,16 @@ clients = ["dev:galaxy tab"]
             );
         }
         assert_eq!(issues.len(), expected.len(), "{issues:#?}");
+    }
+
+    /// A group without clients is a valid state (the `WebUI` creates a group, then adds devices,
+    /// or removes its last member): not an issue, it just applies to nobody.
+    #[test]
+    fn a_group_without_clients_is_not_an_issue() {
+        let (adblock, issues) = parse("[adblock.groups.empty]\n").to_config();
+        assert_eq!(issues, Vec::<String>::new());
+        assert_eq!(adblock.groups.len(), 1);
+        assert!(adblock.groups[0].clients.is_empty());
     }
 
     #[test]

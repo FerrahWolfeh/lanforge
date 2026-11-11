@@ -15,7 +15,7 @@ use lanforge_types::network::dns::adblock::{AdblockRuleAction, AdblockRuleEntry}
 impl ClientContext {
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_block(&self, domain: String) -> Response {
-        self.add_adblock_rule(&domain, AdblockRuleAction::Block)
+        self.add_adblock_rule(&domain, AdblockRuleAction::Block, None)
     }
 
     #[cfg(not(feature = "adblock"))]
@@ -28,7 +28,7 @@ impl ClientContext {
 
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_allow(&self, domain: String) -> Response {
-        self.add_adblock_rule(&domain, AdblockRuleAction::Allow)
+        self.add_adblock_rule(&domain, AdblockRuleAction::Allow, None)
     }
 
     #[cfg(not(feature = "adblock"))]
@@ -46,7 +46,7 @@ impl ClientContext {
             AdblockRuleAction::Allow,
         ));
         dns_reply(
-            self.change_adblock_rules(|text| {
+            self.change_adblock_rules(None, |text| {
                 RulesFile::new(text)
                     .without_rule(id)
                     .map(Some)

@@ -149,4 +149,5 @@ pub enum Response {
     TrafficTelemetry(Box<TrafficTelemetryResponse>),
     /// What a bulk import of adblock rules did.
     DnsAdblockRulesImport(Box<RulesImport>),
+    DnsAdblockGroups(Box<DnsAdblockGroupsResponse>),
 }

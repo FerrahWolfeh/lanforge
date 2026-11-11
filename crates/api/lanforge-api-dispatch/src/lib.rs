@@ -545,7 +545,7 @@ impl LanforgeRpc for ClientContext {
         format: Option<AdblockSourceFormat>,
     ) -> Result<SimpleSuccess, RpcCallError> {
         match self
-            .handle_dns_adblock_url_add(None, url, kind, format)
+            .handle_dns_adblock_url_add(None, url, kind, format, None)
             .await
         {
             Response::Success(s) => Ok(s),

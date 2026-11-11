@@ -6,6 +6,7 @@ use axum::{
     response::IntoResponse,
     routing::{delete, get, post, put},
 };
+use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::adblock::rules_file::RulesFile;
 use lanforge_types::network::dns::adblock::{
     AdblockSourceFormat, AdblockUrlKind, BlockingMode, TimeOfDay,
@@ -84,6 +85,44 @@ pub struct AdblockRuleTextStatusRequest {
     pub enabled: bool,
 }
 
+/// `?group=<name>`: the rules file (or the lists) of a group instead of the global layer.
+#[derive(Debug, Deserialize)]
+pub struct AdblockGroupQuery {
+    #[serde(default)]
+    pub group: Option<String>,
+}
+
+/// A group's lists (source names) and clients (`192.168.1.64/28`, `dev:<name|mac>`).
+#[derive(Debug, Deserialize)]
+pub struct AdblockGroupRequest {
+    #[serde(default)]
+    pub lists: Vec<String>,
+    #[serde(default)]
+    pub clients: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdblockGroupCreateRequest {
+    pub name: String,
+    #[serde(default)]
+    pub lists: Vec<String>,
+    #[serde(default)]
+    pub clients: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdblockBypassRequest {
+    pub clients: Vec<String>,
+}
+
+/// The groups a device is in, and whether it is bypassed.
+#[derive(Debug, Deserialize)]
+pub struct AdblockDeviceRequest {
+    pub groups: Vec<String>,
+    #[serde(default)]
+    pub bypass: bool,
+}
+
 /// A pasted list can be a whole public blocklist (a few MB); the default body limit is 2 MB.
 const RULES_IMPORT_MAX_BYTES: usize = 16 * 1024 * 1024;
 
@@ -123,6 +162,16 @@ pub fn router() -> Router<AppState> {
             "/adblock/rules/{id}/status",
             put(handle_adblock_rule_status),
         )
+        .route(
+            "/adblock/groups",
+            get(handle_adblock_groups).post(handle_adblock_group_create),
+        )
+        .route(
+            "/adblock/groups/{name}",
+            put(handle_adblock_group_update).delete(handle_adblock_group_delete),
+        )
+        .route("/adblock/bypass", put(handle_adblock_bypass_set))
+        .route("/adblock/devices/{mac}", put(handle_adblock_device_set))
 }
 
 async fn handle_adblock_status(State(state): State<AppState>) -> impl IntoResponse {
@@ -187,11 +236,19 @@ async fn handle_adblock_urls(State(state): State<AppState>) -> impl IntoResponse
 
 async fn handle_adblock_url_add(
     State(state): State<AppState>,
+    Query(query): Query<AdblockGroupQuery>,
     Json(payload): Json<AdblockUrlRequest>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(
-        ctx.handle_dns_adblock_url_add(payload.name, payload.url, payload.kind, payload.format).await,
+        ctx.handle_dns_adblock_url_add(
+            payload.name,
+            payload.url,
+            payload.kind,
+            payload.format,
+            query.group
+        )
+        .await,
         Success => NoContent
     )
 }
@@ -212,29 +269,37 @@ async fn handle_allowlist(State(state): State<AppState>) -> impl IntoResponse {
     crate::http_response!(ctx.handle_dns_allowlist().await, DnsAllowlist)
 }
 
-async fn handle_adblock_rules(State(state): State<AppState>) -> impl IntoResponse {
+async fn handle_adblock_rules(
+    State(state): State<AppState>,
+    Query(query): Query<AdblockGroupQuery>,
+) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_dns_adblock_rules().await, DnsAdblockRules)
+    crate::http_response!(
+        ctx.handle_dns_adblock_rules(query.group).await,
+        DnsAdblockRules
+    )
 }
 
 async fn handle_adblock_rule_add(
     State(state): State<AppState>,
+    Query(query): Query<AdblockGroupQuery>,
     Json(payload): Json<AdblockRuleAddRequest>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(
-        ctx.handle_dns_adblock_rule_add(payload.domain, payload.action).await,
+        ctx.handle_dns_adblock_rule_add(payload.domain, payload.action, query.group).await,
         Success => NoContent
     )
 }
 
 async fn handle_adblock_rules_import(
     State(state): State<AppState>,
+    Query(query): Query<AdblockGroupQuery>,
     Json(payload): Json<AdblockRulesImportRequest>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(
-        ctx.handle_dns_adblock_rules_import(payload.text, payload.action)
+        ctx.handle_dns_adblock_rules_import(payload.text, payload.action, query.group)
             .await,
         DnsAdblockRulesImport
     )
@@ -243,10 +308,11 @@ async fn handle_adblock_rules_import(
 async fn handle_adblock_rule_remove(
     State(state): State<AppState>,
     Path(id): Path<i64>,
+    Query(query): Query<AdblockGroupQuery>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(
-        ctx.handle_dns_adblock_rule_remove(id).await,
+        ctx.handle_dns_adblock_rule_remove(id, query.group).await,
         Success => NoContent
     )
 }
@@ -254,22 +320,24 @@ async fn handle_adblock_rule_remove(
 async fn handle_adblock_rule_status(
     State(state): State<AppState>,
     Path(id): Path<i64>,
+    Query(query): Query<AdblockGroupQuery>,
     Json(payload): Json<AdblockRuleStatusRequest>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(
-        ctx.handle_dns_adblock_rule_status(id, payload.enabled).await,
+        ctx.handle_dns_adblock_rule_status(id, payload.enabled, query.group).await,
         Success => NoContent
     )
 }
 
 async fn handle_adblock_rule_remove_text(
     State(state): State<AppState>,
+    Query(query): Query<AdblockGroupQuery>,
     Json(payload): Json<AdblockRuleTextRequest>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(
-        ctx.handle_dns_adblock_rule_remove(RulesFile::rule_id(&payload.rule))
+        ctx.handle_dns_adblock_rule_remove(RulesFile::rule_id(&payload.rule), query.group)
             .await,
         Success => NoContent
     )
@@ -277,11 +345,81 @@ async fn handle_adblock_rule_remove_text(
 
 async fn handle_adblock_rule_status_text(
     State(state): State<AppState>,
+    Query(query): Query<AdblockGroupQuery>,
     Json(payload): Json<AdblockRuleTextStatusRequest>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(
-        ctx.handle_dns_adblock_rule_status(RulesFile::rule_id(&payload.rule), payload.enabled)
+        ctx.handle_dns_adblock_rule_status(
+            RulesFile::rule_id(&payload.rule),
+            payload.enabled,
+            query.group
+        )
+            .await,
+        Success => NoContent
+    )
+}
+
+async fn handle_adblock_groups(State(state): State<AppState>) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(ctx.handle_dns_adblock_groups().await, DnsAdblockGroups)
+}
+
+async fn handle_adblock_group_create(
+    State(state): State<AppState>,
+    Json(payload): Json<AdblockGroupCreateRequest>,
+) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(
+        ctx.handle_dns_adblock_group_create(payload.name, payload.lists, payload.clients)
+            .await,
+        Success => NoContent
+    )
+}
+
+async fn handle_adblock_group_update(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(payload): Json<AdblockGroupRequest>,
+) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(
+        ctx.handle_dns_adblock_group_update(name, payload.lists, payload.clients)
+            .await,
+        Success => NoContent
+    )
+}
+
+async fn handle_adblock_group_delete(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(
+        ctx.handle_dns_adblock_group_delete(name).await,
+        Success => NoContent
+    )
+}
+
+async fn handle_adblock_bypass_set(
+    State(state): State<AppState>,
+    Json(payload): Json<AdblockBypassRequest>,
+) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(
+        ctx.handle_dns_adblock_bypass_set(payload.clients).await,
+        Success => NoContent
+    )
+}
+
+async fn handle_adblock_device_set(
+    State(state): State<AppState>,
+    Path(mac): Path<MacAddr>,
+    Json(payload): Json<AdblockDeviceRequest>,
+) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(
+        ctx.handle_dns_adblock_device_set(mac, payload.groups, payload.bypass)
             .await,
         Success => NoContent
     )

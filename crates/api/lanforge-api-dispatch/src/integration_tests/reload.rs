@@ -660,3 +660,188 @@ async fn reload_applies_adblock_groups_and_bypass() {
     assert_eq!(client.ctx.get_dns_adblock_policy().groups.len(), 2);
     assert_eq!(client.ctx.get_dns_adblock_policy().bypass.len(), 1);
 }
+
+/// The adblock groups API (the `WebUI`'s): create an empty group, give it rules (its own rules
+/// file, named in `[adblock]`) and a list, put a device in it from the device side, move it to
+/// `bypass`, delete the group. Everything lands in the files and in what runs.
+#[cfg(feature = "adblock")]
+#[tokio::test]
+async fn adblock_groups_are_managed_through_the_api() {
+    use lanforge_api::api::Response;
+    use lanforge_types::network::dns::adblock::AdblockUrlKind;
+    use lanforge_types::update::DeviceUpdate;
+    use std::time::SystemTime;
+
+    let file = "[adblock]\nenabled = true\nlists = [\"g\"]\n\n\
+                [adblock.sources.g]\nurl = \"https://example.com/g\"\n";
+    let (client, dir, path) = with_file(file);
+    reload(&client).await;
+    let mac = MacAddr::parse("aa:aa:aa:aa:aa:01").unwrap();
+    let _ = client.ctx.apply(DeviceUpdate::V4LeaseGranted {
+        mac,
+        ip: "192.168.1.17".parse().unwrap(),
+        expires: SystemTime::now() + Duration::from_secs(3600),
+    });
+    let _ = client.ctx.apply(DeviceUpdate::DhcpHostnameHint {
+        mac,
+        hostname: "galaxy".into(),
+    });
+    let ok = |res: Response| assert!(matches!(res, Response::Success(_)), "{res:?}");
+    let groups = || async {
+        let Response::DnsAdblockGroups(g) = client.handle_dns_adblock_groups().await else {
+            panic!("groups");
+        };
+        g
+    };
+
+    // Bad names, then an empty group (valid: members come later).
+    for bad in ["", "a b", "../x"] {
+        let res = client
+            .handle_dns_adblock_group_create(bad.into(), Vec::new(), Vec::new())
+            .await;
+        assert!(matches!(res, Response::Rejected { .. }), "{bad:?}: {res:?}");
+    }
+    ok(client
+        .handle_dns_adblock_group_create("bradesco".into(), Vec::new(), Vec::new())
+        .await);
+    let res = client
+        .handle_dns_adblock_group_create("bradesco".into(), Vec::new(), Vec::new())
+        .await;
+    assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
+    assert_eq!(
+        client.ctx.get_dns_adblock_policy().groups[0].name,
+        "bradesco"
+    );
+
+    // A rule of the group: its own file, named in `[adblock]`, running at once.
+    ok(client
+        .handle_dns_adblock_rule_add(
+            "app-measurement.com".into(),
+            "allow".into(),
+            Some("bradesco".into()),
+        )
+        .await);
+    let rules = fs::read_to_string(dir.path().join("adblock/bradesco.rules")).unwrap();
+    assert!(rules.contains("@@||app-measurement.com^"), "{rules}");
+    assert!(
+        fs::read_to_string(&path)
+            .unwrap()
+            .contains("rules = \"adblock/bradesco.rules\"")
+    );
+    assert!(
+        client.ctx.get_dns_adblock_policy().groups[0]
+            .rules
+            .contains("@@||app-measurement.com^")
+    );
+    let Response::DnsAdblockRules(listed) = client
+        .handle_dns_adblock_rules(Some("bradesco".into()))
+        .await
+    else {
+        panic!("group rules");
+    };
+    assert_eq!(listed.rules.len(), 1);
+    assert!(
+        client.ctx.get_dns_adblock_rules().is_empty(),
+        "global untouched"
+    );
+    let res = client.handle_dns_adblock_rules(Some("nope".into())).await;
+    assert!(matches!(res, Response::NotFound { .. }), "{res:?}");
+
+    // The device side: in the group by name, then bypassed instead.
+    ok(client
+        .handle_dns_adblock_device_set(mac, vec!["bradesco".into()], false)
+        .await);
+    ok(client
+        .handle_dns_adblock_device_set(mac, vec!["bradesco".into()], false)
+        .await);
+    let g = groups().await;
+    assert_eq!(g.groups[0].clients.len(), 1, "added once");
+    assert_eq!(g.groups[0].clients[0].selector, "dev:galaxy");
+    assert_eq!(g.groups[0].clients[0].devices[0].mac, mac);
+    assert_eq!((g.groups[0].allow_rules, g.groups[0].block_rules), (1, 0));
+    ok(client
+        .handle_dns_adblock_device_set(mac, Vec::new(), true)
+        .await);
+    let g = groups().await;
+    assert!(g.groups[0].clients.is_empty());
+    assert_eq!(g.bypass[0].selector, "dev:galaxy");
+    assert_eq!(client.ctx.get_dns_adblock_policy().bypass.len(), 1);
+
+    // A list for the group only, then removed (a group-only source used to be "not found").
+    ok(client
+        .handle_dns_adblock_url_add(
+            Some("kids".into()),
+            "https://example.com/k".into(),
+            AdblockUrlKind::Blocklist,
+            None,
+            Some("bradesco".into()),
+        )
+        .await);
+    assert_eq!(groups().await.groups[0].lists, ["kids"]);
+    assert_eq!(client.ctx.get_dns_adblock_urls().len(), 1, "not global");
+    assert_eq!(
+        client.ctx.get_dns_adblock_policy().groups[0].sources.len(),
+        1
+    );
+    ok(client
+        .handle_dns_adblock_url_remove("https://example.com/k".into())
+        .await);
+    assert!(groups().await.groups[0].lists.is_empty());
+
+    // Delete: gone from `[adblock]`, its rules file stays.
+    ok(client
+        .handle_dns_adblock_group_delete("bradesco".into())
+        .await);
+    assert!(groups().await.groups.is_empty());
+    assert!(client.ctx.get_dns_adblock_policy().groups.is_empty());
+    assert!(dir.path().join("adblock/bradesco.rules").exists());
+    let res = client
+        .handle_dns_adblock_group_delete("bradesco".into())
+        .await;
+    assert!(matches!(res, Response::NotFound { .. }), "{res:?}");
+}
+
+/// A read-only configuration keeps adblock group changes in memory: each change builds on the
+/// running groups (not on the file, which does not have them), so a rule added to a group
+/// survives a later change of its clients, and the listing shows what runs.
+#[cfg(feature = "adblock")]
+#[tokio::test]
+async fn adblock_group_changes_add_up_on_a_read_only_config() {
+    use lanforge_api::api::Response;
+
+    let (client, _dir, path) = with_file("[adblock]\nenabled = true\n");
+    reload(&client).await;
+    client.ctx.set_config_writable(false);
+    let ok = |res: Response| assert!(matches!(res, Response::Success(_)), "{res:?}");
+    ok(client
+        .handle_dns_adblock_group_create("kids".into(), Vec::new(), Vec::new())
+        .await);
+    ok(client
+        .handle_dns_adblock_rule_add("games.example".into(), "block".into(), Some("kids".into()))
+        .await);
+    ok(client
+        .handle_dns_adblock_group_update("kids".into(), Vec::new(), vec!["10.0.0.0/24".into()])
+        .await);
+    ok(client
+        .handle_dns_adblock_group_create("guests".into(), Vec::new(), Vec::new())
+        .await);
+
+    let policy = client.ctx.get_dns_adblock_policy();
+    let names: Vec<&str> = policy.groups.iter().map(|g| g.name.as_str()).collect();
+    assert_eq!(names, ["kids", "guests"]);
+    assert!(
+        policy.groups[0].rules.contains("||games.example^"),
+        "{policy:?}"
+    );
+    assert_eq!(policy.groups[0].clients[0].to_string(), "10.0.0.0/24");
+    let Response::DnsAdblockGroups(listed) = client.handle_dns_adblock_groups().await else {
+        panic!("groups");
+    };
+    assert_eq!(listed.groups.len(), 2);
+    assert_eq!(listed.groups[0].block_rules, 1);
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        "[adblock]\nenabled = true\n",
+        "read-only: file untouched"
+    );
+}

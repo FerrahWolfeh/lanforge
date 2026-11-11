@@ -970,6 +970,77 @@ async fn test_adblock_check_client_contract() {
     assert!(status.is_client_error(), "got {status}");
 }
 
+/// The adblock groups routes the `WebUI` uses: list, create, rules of a group, a device's
+/// groups. Bad input is a 4xx, never a 500.
+#[cfg(feature = "adblock")]
+#[tokio::test]
+async fn test_adblock_groups_contract() {
+    let app = TestApp::no_auth().await;
+    let (status, body) = app.get("/api/v1/dns/adblock/groups").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["data"]["groups"].as_array().unwrap().is_empty());
+    assert!(body["data"]["bypass"].as_array().unwrap().is_empty());
+
+    let (status, body) = app
+        .post("/api/v1/dns/adblock/groups", &json!({"name": "kids"}))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    let (status, _) = app
+        .post("/api/v1/dns/adblock/groups", &json!({"name": "bad name"}))
+        .await;
+    assert!(status.is_client_error(), "got {status}");
+    let (status, body) = app
+        .post(
+            "/api/v1/dns/adblock/rules?group=kids",
+            &json!({"domain": "games.example", "action": "block"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    let (status, body) = app.get("/api/v1/dns/adblock/rules?group=kids").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["rules"][0]["domain"], "||games.example^");
+    let (status, _) = app.get("/api/v1/dns/adblock/rules?group=nope").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, body) = app
+        .put(
+            "/api/v1/dns/adblock/groups/kids",
+            &json!({"lists": [], "clients": ["192.168.1.64/28"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    let (_, body) = app.get("/api/v1/dns/adblock/groups").await;
+    assert_eq!(body["data"]["groups"][0]["name"], "kids");
+    assert_eq!(
+        body["data"]["groups"][0]["clients"][0]["selector"],
+        "192.168.1.64/28"
+    );
+    assert_eq!(body["data"]["groups"][0]["block_rules"], 1);
+    let (status, _) = app
+        .put(
+            "/api/v1/dns/adblock/groups/kids",
+            &json!({"clients": ["not a client"]}),
+        )
+        .await;
+    assert!(status.is_client_error(), "got {status}");
+
+    // An unknown device is a 404; a path that is not a MAC a 4xx.
+    let (status, _) = app
+        .put(
+            "/api/v1/dns/adblock/devices/aa:bb:cc:dd:ee:ff",
+            &json!({"groups": ["kids"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = app
+        .put("/api/v1/dns/adblock/devices/nope", &json!({"groups": []}))
+        .await;
+    assert!(status.is_client_error(), "got {status}");
+
+    let (status, _) = app.delete("/api/v1/dns/adblock/groups/kids").await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
 // ---------------------------------------------------------------------------
 // Group 4 — DNS Upstreams contract
 // ---------------------------------------------------------------------------

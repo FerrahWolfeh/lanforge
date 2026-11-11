@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 
 use lanforge_api::api::Response;
 use lanforge_api::config_file::{
-    AdblockFile, AdblockSettings, ConfigFile, DhcpSettings, DnsFile, DnsSettings, FirewallFile,
-    NamedUpstream, RaFile, SectionSet, persist_sections, write_toml_atomically,
+    AdblockFile, AdblockGroup, AdblockSettings, ConfigFile, DhcpSettings, DnsFile, DnsSettings,
+    FirewallFile, NamedUpstream, RaFile, SectionSet, persist_sections, write_toml_atomically,
 };
 use lanforge_core::context::ConfigPatch;
 use lanforge_crypto::stable_id_or_hash;
@@ -295,7 +295,7 @@ impl ClientContext {
             patch = self.dns_settings_patch(patch, dns);
         }
         if let Some(adblock) = adblock {
-            let path = self.resolve_config_path();
+            let path = self.writable_config_path();
             patch = self
                 .adblock_policy_patch(patch, &adblock, path.as_deref())
                 .0;
@@ -397,9 +397,10 @@ impl ClientContext {
         patch
     }
 
-    /// The adblock settings running now, as `[adblock]` holds them: the filter settings and the
-    /// global layer (its sources, in order) are the live ones; the groups, `bypass`, the rules
-    /// path and the sources no layer uses are not kept in memory and come from the file.
+    /// The adblock settings running now, as `[adblock]` holds them: the filter settings, the
+    /// global layer (its sources, in order), the groups (their lists and clients) and `bypass`
+    /// are the live ones; the rules files' paths and the sources no layer uses are not kept in
+    /// memory and come from the file.
     pub(crate) fn live_adblock_settings(&self) -> AdblockSettings {
         let mut adblock = self
             .ctx
@@ -433,6 +434,28 @@ impl ClientContext {
         }
         adblock.sources = sources;
         adblock.config = self.ctx.get_dns_adblock();
+
+        let policy = self.ctx.get_dns_adblock_policy();
+        let file_groups = mem::take(&mut adblock.groups);
+        for source in policy.groups.iter().flat_map(|g| &g.sources) {
+            if !adblock.sources.iter().any(|s| s.url == source.url) {
+                adblock.sources.push(source.clone());
+            }
+        }
+        adblock.groups = policy
+            .groups
+            .iter()
+            .map(|g| AdblockGroup {
+                name: g.name.clone(),
+                lists: g.sources.iter().filter_map(|s| s.name.clone()).collect(),
+                rules: file_groups
+                    .iter()
+                    .find(|f| f.name == g.name)
+                    .and_then(|f| f.rules.clone()),
+                clients: g.clients.clone(),
+            })
+            .collect();
+        adblock.bypass = policy.bypass;
         adblock
     }
 
@@ -466,7 +489,7 @@ impl ClientContext {
     /// [`Self::change_adblock_rules`] / the reload; the groups' rules files are read here.
     pub fn apply_adblock_settings(&self, adblock: &AdblockSettings) {
         let patch = self.adblock_settings_patch(ConfigPatch::new(), adblock);
-        let path = self.resolve_config_path();
+        let path = self.writable_config_path();
         let (patch, _) = self.adblock_policy_patch(patch, adblock, path.as_deref());
         let _ = self.ctx.apply_config(patch);
     }
@@ -505,27 +528,62 @@ impl ClientContext {
         patch
     }
 
-    /// Changes the global adblock rules file: `change` gets the live text and returns the new
-    /// one, or `None` when nothing changes. The file `[adblock] rules` names is written before
-    /// the text applies; without one, `adblock/global.rules` is created and named in
-    /// `[adblock]`. A read-only config applies in memory only.
+    /// Changes an adblock rules file: the global one (`group` `None`) or a group's. `change`
+    /// gets the live text and returns the new one, or `None` when nothing changes. The file the
+    /// config names is written before the text applies; without one, `adblock/global.rules` (a
+    /// group: `adblock/<group>.rules`) is created and named in `[adblock]`. A read-only config
+    /// applies in memory only. An unknown group is `NotFound`.
     pub fn change_adblock_rules(
         &self,
+        group: Option<&str>,
         change: impl FnOnce(&str) -> Result<Option<String>, ChangeError>,
     ) -> Result<Persisted, ChangeError> {
         let _serial = self.ctx.config_change_lock();
-        let live = self.ctx.get_dns_adblock_rules();
+        let mut policy = self.ctx.get_dns_adblock_policy();
+        let live = match group {
+            None => self.ctx.get_dns_adblock_rules(),
+            Some(name) => policy
+                .groups
+                .iter()
+                .find(|g| g.name == name)
+                .map(|g| g.rules.clone())
+                .ok_or_else(|| ChangeError::NotFound(format!("adblock group \"{name}\"")))?,
+        };
         let Some(text) = change(&live)? else {
             return Ok(Persisted::File);
         };
         let persisted = match self.ctx.config_path() {
             Some(path) if self.ctx.is_config_writable() => {
                 let mut adblock = self.live_adblock_settings();
-                let named = adblock.rules.is_some();
-                if !named {
-                    adblock.rules = Some(AdblockSettings::DEFAULT_RULES.to_string());
-                }
-                let rules_path = adblock.rules_path(&path).unwrap_or_default();
+                let (slot, default) = match group {
+                    None => (
+                        &mut adblock.rules,
+                        Some(AdblockSettings::DEFAULT_RULES.to_string()),
+                    ),
+                    Some(name) => {
+                        let g = adblock
+                            .groups
+                            .iter_mut()
+                            .find(|g| g.name == name)
+                            .ok_or_else(|| {
+                                ChangeError::NotFound(format!("adblock group \"{name}\""))
+                            })?;
+                        let default = g.default_rules();
+                        (&mut g.rules, default)
+                    }
+                };
+                let named = slot.is_some();
+                let relative = match slot.clone().or(default) {
+                    Some(relative) => relative,
+                    None => {
+                        return Err(ChangeError::Rejected(format!(
+                            "adblock group \"{}\" has no rules file and its name cannot name one; set `rules` in its section",
+                            group.unwrap_or_default()
+                        )));
+                    }
+                };
+                *slot = Some(relative.clone());
+                let rules_path = path.parent().unwrap_or(Path::new(".")).join(&relative);
                 if let Some(dir) = rules_path.parent() {
                     fs::create_dir_all(dir).map_err(|e| {
                         ChangeError::Failed(format!("cannot create {}: {e}", dir.display()))
@@ -542,9 +600,16 @@ impl ClientContext {
             }
             _ => Persisted::MemoryOnly,
         };
-        let _ = self
-            .ctx
-            .apply_config(ConfigPatch::new().with_dns_adblock_rules(text));
+        let patch = match group {
+            None => ConfigPatch::new().with_dns_adblock_rules(text),
+            Some(name) => {
+                if let Some(g) = policy.groups.iter_mut().find(|g| g.name == name) {
+                    g.rules = text;
+                }
+                ConfigPatch::new().with_dns_adblock_policy(policy)
+            }
+        };
+        let _ = self.ctx.apply_config(patch);
         Ok(persisted)
     }
 
@@ -555,6 +620,15 @@ impl ClientContext {
             .resolve_config_path()
             .ok_or_else(|| "no configuration file".to_string())?;
         fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))
+    }
+
+    /// The configuration file the API writes, `None` when it keeps changes in memory (no file,
+    /// or a read-only one): rules files are read back from it only when it holds what runs.
+    fn writable_config_path(&self) -> Option<PathBuf> {
+        self.ctx
+            .is_config_writable()
+            .then(|| self.ctx.config_path())
+            .flatten()
     }
 
     /// Resolves the candidate configuration file path for writes.
