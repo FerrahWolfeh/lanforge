@@ -2,7 +2,9 @@ use super::common::{
     Dhcpv4PacketBuilder, Dhcpv6PacketBuilder, create_test_v4_config, create_test_v6_config,
     init_test_context, init_test_context_with_interface,
 };
+use crate::v4::Dhcpv4Config;
 use crate::v4::io::Dhcpv4InertHandle;
+use crate::v4::system_dns::host_resolvers;
 use crate::{Dhcpv4Service, Dhcpv4Transport, Dhcpv6Service, Dhcpv6Transport};
 use dhcproto::v4::{
     DhcpOption as DhcpOptionV4, Message as MessageV4, MessageType as MessageTypeV4,
@@ -13,15 +15,17 @@ use dhcproto::v6::{
     OptionCode as OptionCodeV6,
 };
 use dhcproto::{Decodable, Decoder};
-use lanforge_core::bus::{DeviceEvent, LanforgeEvent, SystemEvent};
+use lanforge_core::bus::{DeviceEvent, LanforgeEvent, PppoeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
+use lanforge_core::context::config::ConfigPatch;
 use lanforge_core::service::{AsyncService, ServiceHandle};
+use lanforge_types::config::DnsListenConfig;
 use lanforge_types::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin};
 use lanforge_types::events::DhcpV4MessageType;
 use lanforge_types::identifiers::{Duid, MacAddr};
-use lanforge_types::network::dhcp::Dhcpv6Pool;
+use lanforge_types::network::dhcp::{Dhcpv4Options, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::{Ipv6Prefix, Ipv6Suffix};
-use lanforge_types::system::{ServiceId, ServiceState};
+use lanforge_types::system::{PppoeSessionState, PppoeStatusResponse, ServiceId, ServiceState};
 use lanforge_types::update::{CliHostUpdate, DeviceUpdate, InterfaceState};
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -1402,5 +1406,310 @@ async fn test_dhcpv6_renumbering_sends_nothing_unsolicited() -> Result<(), Box<d
 
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = timeout(TEST_TIMEOUT, task).await?;
+    Ok(())
+}
+
+/// The owner's `[dhcp.v4]`: router, mask and a pool, no `dns`. A file without `dns` must announce
+/// this server's own address (onboarding writes the LAN IP; the file may omit it). It announced
+/// the hard-coded default `192.168.0.1`: inside the /22, so nothing healed it, and every IPv4-only
+/// client (UPS, 3D printer) sent its queries to an address nobody answers.
+#[tokio::test]
+async fn test_dhcpv4_without_configured_dns_announces_this_server() -> Result<(), Box<dyn Error>> {
+    let (ctx, bus) = init_test_context();
+    ctx.set_target_interface_name("lan0".to_string());
+    let server = Ipv4Addr::new(192, 168, 3, 1);
+    let mask = Ipv4Addr::new(255, 255, 252, 0);
+    let pool = Dhcpv4Pool {
+        name: Some("Pool 1".to_string()),
+        range_start: Ipv4Addr::new(192, 168, 1, 2),
+        range_end: Ipv4Addr::new(192, 168, 1, 240),
+        lease_time: Some(86_400),
+        subnet_mask: Some(mask),
+        ..Default::default()
+    };
+    // What the daemon builds from the file: router and server id from `router`, DNS left alone.
+    let cfg = Dhcpv4Config {
+        enabled: true,
+        iface: "lan0".into(),
+        server_id: server,
+        router: server,
+        subnet_mask: mask,
+        pools: vec![pool.clone()],
+        ..Default::default()
+    };
+    let _ = ctx.apply_config(
+        ConfigPatch::new()
+            .with_dhcp_v4_pools(vec![pool])
+            .with_dhcp_v4_options(Dhcpv4Options {
+                router: Some(server),
+                subnet_mask: Some(mask),
+                dns_servers: Vec::new(),
+                ..Default::default()
+            }),
+    );
+
+    let (handle, transport) = Dhcpv4Transport::inert();
+    let mut service = Dhcpv4Service::with_transport(cfg, ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let serve_handle = tokio::spawn(async move {
+        let h = ServiceHandle::new(ServiceId::Dhcp4, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+    wait_for_service_online(&ctx, ServiceId::Dhcp4).await?;
+
+    let ack = dhcpv4_acquire(
+        &handle,
+        MacAddr([0x78, 0x1c, 0x3c, 0x3a, 0xe5, 0x28]),
+        server,
+    )
+    .await?;
+    assert_eq!(
+        ack.opts().get(OptionCodeV4::DomainNameServer),
+        Some(&DhcpOptionV4::DomainNameServer(vec![server]))
+    );
+    assert_eq!(
+        ack.opts().get(OptionCodeV4::Router),
+        Some(&DhcpOptionV4::Router(vec![server]))
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(TEST_TIMEOUT, serve_handle).await?;
+    Ok(())
+}
+
+/// A `[dhcp.v4]` without `router` must announce this server as the gateway. It announced the
+/// hard-coded default `192.168.0.1`, which the sanity pass keeps when it falls inside the LAN
+/// (a /22 such as 192.168.0.0/22): clients then route through an address nobody answers.
+#[tokio::test]
+async fn test_dhcpv4_without_configured_router_announces_this_server() -> Result<(), Box<dyn Error>>
+{
+    let (ctx, bus) = init_test_context();
+    ctx.set_target_interface_name("lan0".to_string());
+    let server = Ipv4Addr::new(192, 168, 3, 1);
+    let mask = Ipv4Addr::new(255, 255, 252, 0);
+    let pool = Dhcpv4Pool {
+        name: Some("Pool 1".to_string()),
+        range_start: Ipv4Addr::new(192, 168, 1, 2),
+        range_end: Ipv4Addr::new(192, 168, 1, 240),
+        lease_time: Some(86_400),
+        subnet_mask: Some(mask),
+        ..Default::default()
+    };
+    // The server id is this server's LAN address (the sanity pass sets it from the interface);
+    // the file names no router.
+    let cfg = Dhcpv4Config {
+        enabled: true,
+        iface: "lan0".into(),
+        server_id: server,
+        subnet_mask: mask,
+        pools: vec![pool.clone()],
+        ..Default::default()
+    };
+    let _ = ctx.apply_config(
+        ConfigPatch::new()
+            .with_dhcp_v4_pools(vec![pool])
+            .with_dhcp_v4_options(Dhcpv4Options {
+                router: None,
+                subnet_mask: Some(mask),
+                ..Default::default()
+            }),
+    );
+
+    let (handle, transport) = Dhcpv4Transport::inert();
+    let mut service = Dhcpv4Service::with_transport(cfg, ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let serve_handle = tokio::spawn(async move {
+        let h = ServiceHandle::new(ServiceId::Dhcp4, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+    wait_for_service_online(&ctx, ServiceId::Dhcp4).await?;
+
+    let ack = dhcpv4_acquire(
+        &handle,
+        MacAddr([0x00, 0x11, 0x22, 0x33, 0x44, 0x77]),
+        server,
+    )
+    .await?;
+    assert_eq!(
+        ack.opts().get(OptionCodeV4::Router),
+        Some(&DhcpOptionV4::Router(vec![server]))
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(TEST_TIMEOUT, serve_handle).await?;
+    Ok(())
+}
+
+/// Without a DNS server built in, a `[dhcp.v4]` without `dns` announces the ISP's IPv4 resolvers
+/// from the live `PPPoE` session, follows them when they change, and the host's own upstreams
+/// while the session is down (never this host, which answers no DNS, nor a guess).
+#[tokio::test]
+async fn test_dhcpv4_without_local_dns_announces_the_wan_resolvers() -> Result<(), Box<dyn Error>> {
+    let (ctx, bus) = init_test_context();
+    ctx.set_target_interface_name("lan0".to_string());
+    let server = Ipv4Addr::new(192, 168, 3, 1);
+    let pool = Dhcpv4Pool {
+        name: Some("Pool 1".to_string()),
+        range_start: Ipv4Addr::new(192, 168, 1, 2),
+        range_end: Ipv4Addr::new(192, 168, 1, 240),
+        lease_time: Some(86_400),
+        ..Default::default()
+    };
+    let cfg = Dhcpv4Config {
+        enabled: true,
+        iface: "lan0".into(),
+        server_id: server,
+        router: server,
+        subnet_mask: Ipv4Addr::new(255, 255, 252, 0),
+        pools: vec![pool.clone()],
+        local_dns: false,
+        ..Default::default()
+    };
+    let _ = ctx.apply_config(
+        ConfigPatch::new()
+            .with_dhcp_v4_pools(vec![pool])
+            .with_dhcp_v4_options(Dhcpv4Options {
+                router: Some(server),
+                subnet_mask: Some(Ipv4Addr::new(255, 255, 252, 0)),
+                ..Default::default()
+            }),
+    );
+    let isp_a = Ipv4Addr::new(200, 175, 5, 139);
+    let isp_b = Ipv4Addr::new(200, 175, 89, 139);
+    let session = |dns: Vec<IpAddr>| {
+        Some(PppoeStatusResponse {
+            enabled: true,
+            state: PppoeSessionState::Connected,
+            dns_servers: dns,
+            ..Default::default()
+        })
+    };
+    ctx.set_pppoe_status(session(vec![
+        IpAddr::V4(isp_a),
+        "2804:14d::1".parse::<IpAddr>()?,
+    ]));
+
+    let (handle, transport) = Dhcpv4Transport::inert();
+    let mut service = Dhcpv4Service::with_transport(cfg, ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let serve_handle = tokio::spawn(async move {
+        let h = ServiceHandle::new(ServiceId::Dhcp4, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+    wait_for_service_online(&ctx, ServiceId::Dhcp4).await?;
+
+    let dns_of = |ack: &MessageV4| match ack.opts().get(OptionCodeV4::DomainNameServer) {
+        Some(DhcpOptionV4::DomainNameServer(servers)) => Some(servers.clone()),
+        _ => None,
+    };
+    let mac = |n: u8| MacAddr([0x00, 0x11, 0x22, 0x33, 0x55, n]);
+
+    // Session up at start: the ISP's IPv4 resolver only.
+    let ack = dhcpv4_acquire(&handle, mac(1), server).await?;
+    assert_eq!(dns_of(&ack), Some(vec![isp_a]));
+
+    // The ISP's resolvers change: new clients get the new ones.
+    ctx.set_pppoe_status(session(vec![IpAddr::V4(isp_b)]));
+    let _ = bus.publish(LanforgeEvent::Pppoe(PppoeEvent::DnsServersChanged {
+        servers: vec![IpAddr::V4(isp_b)],
+    }));
+    sleep(Duration::from_millis(50)).await;
+    let ack = dhcpv4_acquire(&handle, mac(2), server).await?;
+    assert_eq!(dns_of(&ack), Some(vec![isp_b]));
+
+    // Session down: the host's own upstreams (none known: no option 6).
+    ctx.set_pppoe_status(None);
+    let _ = bus.publish(LanforgeEvent::Pppoe(PppoeEvent::SessionDown {
+        reason: "test".into(),
+    }));
+    sleep(Duration::from_millis(50)).await;
+    let ack = dhcpv4_acquire(&handle, mac(3), server).await?;
+    let host = host_resolvers(server);
+    assert_eq!(dns_of(&ack), (!host.is_empty()).then_some(host));
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(TEST_TIMEOUT, serve_handle).await?;
+    Ok(())
+}
+
+/// Built with the DNS server but `[dns] enabled = false`: nothing answers here, so a `[dhcp.v4]`
+/// without `dns` announces the ISP's resolvers, and this server again once DNS is switched on,
+/// in place.
+#[tokio::test]
+async fn test_dhcpv4_dns_follows_the_local_dns_server_being_switched() -> Result<(), Box<dyn Error>>
+{
+    let (ctx, bus) = init_test_context();
+    ctx.set_target_interface_name("lan0".to_string());
+    let server = Ipv4Addr::new(192, 168, 3, 1);
+    let mask = Ipv4Addr::new(255, 255, 252, 0);
+    let pool = Dhcpv4Pool {
+        name: Some("Pool 1".to_string()),
+        range_start: Ipv4Addr::new(192, 168, 1, 2),
+        range_end: Ipv4Addr::new(192, 168, 1, 240),
+        ..Default::default()
+    };
+    let cfg = Dhcpv4Config {
+        enabled: true,
+        iface: "lan0".into(),
+        server_id: server,
+        router: server,
+        subnet_mask: mask,
+        pools: vec![pool.clone()],
+        ..Default::default()
+    };
+    assert!(cfg.local_dns, "built with the DNS server");
+    let dns_on = DnsListenConfig::default();
+    let dns_off = DnsListenConfig {
+        enabled: false,
+        ..DnsListenConfig::default()
+    };
+    let _ = ctx.apply_config(
+        ConfigPatch::new()
+            .with_dhcp_v4_pools(vec![pool])
+            .with_dhcp_v4_options(Dhcpv4Options {
+                router: Some(server),
+                subnet_mask: Some(mask),
+                ..Default::default()
+            })
+            .with_dns_listen(dns_off.clone()),
+    );
+    let isp = Ipv4Addr::new(200, 175, 5, 139);
+    ctx.set_pppoe_status(Some(PppoeStatusResponse {
+        enabled: true,
+        state: PppoeSessionState::Connected,
+        dns_servers: vec![IpAddr::V4(isp)],
+        ..Default::default()
+    }));
+
+    let (handle, transport) = Dhcpv4Transport::inert();
+    let mut service = Dhcpv4Service::with_transport(cfg, ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let serve_handle = tokio::spawn(async move {
+        let h = ServiceHandle::new(ServiceId::Dhcp4, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+    wait_for_service_online(&ctx, ServiceId::Dhcp4).await?;
+
+    let dns_of = |ack: &MessageV4| match ack.opts().get(OptionCodeV4::DomainNameServer) {
+        Some(DhcpOptionV4::DomainNameServer(servers)) => Some(servers.clone()),
+        _ => None,
+    };
+    let mac = |n: u8| MacAddr([0x00, 0x11, 0x22, 0x33, 0x66, n]);
+
+    let ack = dhcpv4_acquire(&handle, mac(1), server).await?;
+    assert_eq!(dns_of(&ack), Some(vec![isp]), "DNS off: the ISP's");
+
+    ctx.update_dns_listen(dns_on);
+    sleep(Duration::from_millis(50)).await;
+    let ack = dhcpv4_acquire(&handle, mac(2), server).await?;
+    assert_eq!(dns_of(&ack), Some(vec![server]), "DNS on: this server");
+
+    ctx.update_dns_listen(dns_off);
+    sleep(Duration::from_millis(50)).await;
+    let ack = dhcpv4_acquire(&handle, mac(3), server).await?;
+    assert_eq!(dns_of(&ack), Some(vec![isp]), "DNS off again: the ISP's");
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(TEST_TIMEOUT, serve_handle).await?;
     Ok(())
 }

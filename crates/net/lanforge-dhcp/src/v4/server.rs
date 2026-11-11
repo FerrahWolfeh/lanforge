@@ -531,7 +531,11 @@ impl DhcpServer {
         }
         opts.insert(DhcpOption::SubnetMask(pool_mask));
         opts.insert(DhcpOption::Router(vec![pool_router]));
-        opts.insert(DhcpOption::DomainNameServer(pool_dns.clone()));
+        // No resolver known (no DNS server here and the WAN is down): send none rather than a
+        // guess (RFC 2132 §3.8 requires at least one address in the option).
+        if !pool_dns.is_empty() {
+            opts.insert(DhcpOption::DomainNameServer(pool_dns.clone()));
+        }
 
         if let Some(domain) = pool_domain {
             opts.insert(DhcpOption::DomainName(domain.clone()));
@@ -777,6 +781,7 @@ mod tests {
             lease_time: 3600,
             router: Ipv4Addr::new(192, 168, 1, 1),
             dns: vec![Ipv4Addr::new(1, 1, 1, 1)],
+            local_dns: true,
             subnet_mask: Ipv4Addr::new(255, 255, 255, 0),
             server_id: Ipv4Addr::new(192, 168, 1, 1),
             domain_name: Some("lanforge.local".to_string()),

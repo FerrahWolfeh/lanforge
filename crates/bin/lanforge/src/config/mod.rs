@@ -402,6 +402,8 @@ impl Config {
             cfg.iface.clone_from(&self.system.iface);
         }
         cfg.server_id = cfg.router;
+        // Without the DNS server built in, clients get the ISP's resolvers, not this host.
+        cfg.local_dns = cfg!(feature = "dns");
 
         if cfg.domain_name.is_none() {
             cfg.domain_name = self.search_domains.first().cloned();
