@@ -33,7 +33,7 @@
 
 	interface MergedSource {
 		id?: number | null;
-		source_id?: number;
+		source_id?: string;
 		name?: string | null;
 		url: string;
 		kind: "blocklist" | "allowlist";
@@ -92,15 +92,15 @@
 				const st = statusMap.get(u.url);
 				return {
 					id: u.id,
-					source_id: st?.source_id,
+					source_id: st?.id,
 					name: u.name ?? st?.name ?? null,
 					url: u.url,
 					kind: u.kind,
 					format: u.format ?? st?.format ?? "auto",
 					format_detected: st?.format_detected,
-					rules_count: st?.rules_count ?? 0,
-					exceptions_count: st?.exceptions_count ?? 0,
-					unsupported_count: st?.unsupported_count ?? 0,
+					rules_count: st?.blocks ?? 0,
+					exceptions_count: st?.exceptions ?? 0,
+					unsupported_count: st?.unsupported ?? 0,
 					last_success: st?.last_success,
 					consecutive_failures: st?.consecutive_failures ?? 0,
 					last_error: st?.last_error,

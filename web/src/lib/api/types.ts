@@ -887,10 +887,11 @@ export type FilterAction = 'block' | 'allow';
 export type FilterOrigin =
 	| { type: 'user_rule' }
 	| { type: 'user_allowlist' }
-	| { type: 'list'; source_id: number }
+	// Source ids are 64-bit: sent as strings.
+	| { type: 'list'; source_id: string }
 	| { type: 'group_rule'; group: string }
 	| { type: 'group_allowlist'; group: string }
-	| { type: 'group_list'; group: string; source_id: number };
+	| { type: 'group_list'; group: string; source_id: string };
 
 export interface FilterMatch {
 	action: FilterAction;
@@ -907,18 +908,20 @@ export type AdblockSourceFormat =
 	| 'wildcard_domains';
 
 export interface AdblockSourceStatus {
-	source_id: number;
+	/** 64-bit source id, as a string. */
+	id: string;
 	name?: string | null;
 	url: string;
 	format: AdblockSourceFormat;
 	format_detected?: AdblockSourceFormat | null;
-	last_fetch_attempt?: number | null;
+	blocks: number;
+	exceptions: number;
+	unsupported: number;
+	last_attempt: number;
 	last_success?: number | null;
 	consecutive_failures: number;
 	last_error?: string | null;
-	rules_count: number;
-	exceptions_count: number;
-	unsupported_count: number;
+	sample_unsupported: string[];
 }
 
 export interface DnsAdblockSourcesResponse {
@@ -926,7 +929,8 @@ export interface DnsAdblockSourcesResponse {
 }
 
 export interface AdblockSourceMatch {
-	source_id: number;
+	/** 64-bit source id, as a string. */
+	source_id: string;
 	url: string;
 	action: FilterAction;
 	rule?: string | null;

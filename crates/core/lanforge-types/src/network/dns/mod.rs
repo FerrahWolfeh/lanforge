@@ -780,6 +780,7 @@ impl AdblockUrlEntry {
 /// Status and metrics for an adblock filter list source.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AdblockSourceStatus {
+    #[serde(with = "crate::utils::serde::id_as_string")]
     pub id: i64,
     #[serde(default)]
     pub name: Option<String>,
@@ -807,6 +808,7 @@ pub struct DnsAdblockSourcesResponse {
 /// Attribution for a single source list matching a domain.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AdblockSourceMatch {
+    #[serde(with = "crate::utils::serde::id_as_string")]
     pub source_id: i64,
     pub url: String,
     pub action: FilterAction,

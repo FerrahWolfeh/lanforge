@@ -2,6 +2,7 @@ use crate::device::Device;
 use crate::identifiers::{DeviceIdentifier, MacAddr};
 use crate::network::dns::AdblockUrlEntry;
 use crate::network::{DnsRecordType, IpSubnet};
+use crate::utils::serde::id_as_string;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{self, Display, Formatter};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -432,10 +433,21 @@ impl Serialize for FilterOrigin {
             enum JsonFilterOrigin<'a> {
                 UserRule,
                 UserAllowlist,
-                List { source_id: i64 },
-                GroupRule { group: &'a str },
-                GroupAllowlist { group: &'a str },
-                GroupList { group: &'a str, source_id: i64 },
+                List {
+                    #[serde(with = "id_as_string")]
+                    source_id: i64,
+                },
+                GroupRule {
+                    group: &'a str,
+                },
+                GroupAllowlist {
+                    group: &'a str,
+                },
+                GroupList {
+                    group: &'a str,
+                    #[serde(with = "id_as_string")]
+                    source_id: i64,
+                },
             }
             let repr = match self {
                 Self::UserRule => JsonFilterOrigin::UserRule,
@@ -490,10 +502,21 @@ impl<'de> Deserialize<'de> for FilterOrigin {
             enum JsonFilterOrigin {
                 UserRule,
                 UserAllowlist,
-                List { source_id: i64 },
-                GroupRule { group: Box<str> },
-                GroupAllowlist { group: Box<str> },
-                GroupList { group: Box<str>, source_id: i64 },
+                List {
+                    #[serde(with = "id_as_string")]
+                    source_id: i64,
+                },
+                GroupRule {
+                    group: Box<str>,
+                },
+                GroupAllowlist {
+                    group: Box<str>,
+                },
+                GroupList {
+                    group: Box<str>,
+                    #[serde(with = "id_as_string")]
+                    source_id: i64,
+                },
             }
             match JsonFilterOrigin::deserialize(deserializer)? {
                 JsonFilterOrigin::UserRule => Ok(Self::UserRule),
@@ -946,6 +969,42 @@ mod tests {
         }
     }
 
+    /// Source ids are 63-bit hashes of the URL: past 2^53 a JSON number reaches the `WebUI`
+    /// rounded (another id). JSON carries them as strings; postcard keeps the `i64` bytes.
+    #[test]
+    fn large_source_ids_reach_json_exactly() {
+        use crate::network::dns::AdblockSourceMatch;
+
+        let id: i64 = 0x7FFF_FFFF_FFFF_FF01;
+        let origin = FilterOrigin::List { source_id: id };
+        let json = serde_json::to_string(&origin).unwrap();
+        assert_eq!(json, format!(r#"{{"type":"list","source_id":"{id}"}}"#));
+        assert_eq!(serde_json::from_str::<FilterOrigin>(&json).unwrap(), origin);
+        // A number (an older writer) still reads.
+        let number = format!(r#"{{"type":"list","source_id":{id}}}"#);
+        assert_eq!(
+            serde_json::from_str::<FilterOrigin>(&number).unwrap(),
+            origin
+        );
+        let bytes = postcard::to_stdvec(&origin).unwrap();
+        assert_eq!(bytes, postcard::to_stdvec(&(2u8, id)).unwrap());
+
+        let m = AdblockSourceMatch {
+            source_id: id,
+            url: "https://example.com/l".into(),
+            action: FilterAction::Block,
+            rule: None,
+            important: false,
+        };
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(json.contains(&format!(r#""source_id":"{id}""#)), "{json}");
+        let back: AdblockSourceMatch = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.source_id, id);
+        let back: AdblockSourceMatch =
+            postcard::from_bytes(&postcard::to_stdvec(&m).unwrap()).unwrap();
+        assert_eq!(back.source_id, id);
+    }
+
     #[test]
     fn test_filter_origin_postcard_and_json_dual_mode() {
         let origins = vec![
@@ -984,7 +1043,7 @@ mod tests {
                 FilterOrigin::UserAllowlist => assert!(json.contains(r#""type":"user_allowlist""#)),
                 FilterOrigin::List { source_id } => {
                     assert!(json.contains(r#""type":"list""#));
-                    assert!(json.contains(&format!(r#""source_id":{source_id}"#)));
+                    assert!(json.contains(&format!(r#""source_id":"{source_id}""#)));
                 }
                 FilterOrigin::GroupRule { .. } => {
                     assert!(json.contains(r#""type":"group_rule","group":"kids""#));
@@ -993,7 +1052,7 @@ mod tests {
                     assert!(json.contains(r#""type":"group_allowlist","group":"bradesco""#));
                 }
                 FilterOrigin::GroupList { .. } => {
-                    assert!(json.contains(r#""type":"group_list","group":"kids","source_id":7"#));
+                    assert!(json.contains(r#""type":"group_list","group":"kids","source_id":"7""#));
                 }
             }
             let from_json: FilterMatch = serde_json::from_str(&json).expect("json deserialize");

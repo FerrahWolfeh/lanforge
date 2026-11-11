@@ -244,6 +244,12 @@
 										Manual Allowlist
 									{:else if checkResult.filter.origin.type === 'list'}
 										Remote Source List #{checkResult.filter.origin.source_id}
+									{:else if checkResult.filter.origin.type === 'group_rule'}
+										Group "{checkResult.filter.origin.group}" Rule
+									{:else if checkResult.filter.origin.type === 'group_allowlist'}
+										Group "{checkResult.filter.origin.group}" Allowlist
+									{:else if checkResult.filter.origin.type === 'group_list'}
+										Group "{checkResult.filter.origin.group}" Source List #{checkResult.filter.origin.source_id}
 									{/if}
 								</div>
 							</div>
