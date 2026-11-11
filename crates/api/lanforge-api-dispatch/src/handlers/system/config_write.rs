@@ -463,7 +463,8 @@ impl ClientContext {
     /// `[adblock]` (see [`Self::persist_config_sections`]) and then applied as the file now holds
     /// it. A value the file form refuses (a source without an http(s) URL, a list name that is
     /// not a source, ...) is refused: nothing written, nothing applied. Issues the file already
-    /// had (a hand-written source no layer uses) do not block an unrelated change.
+    /// had (a hand-written source no layer uses) do not block an unrelated change. A source the
+    /// change leaves unused (its last group deleted or detached) is removed with it.
     pub fn change_adblock(
         &self,
         change: impl FnOnce(&mut AdblockSettings),
@@ -471,8 +472,26 @@ impl ClientContext {
         let _serial = self.ctx.config_change_lock();
         let live = self.live_adblock_settings();
         let (_, known) = AdblockFile::from_config(&live).to_config();
+        let uses = |a: &AdblockSettings, name: &str| {
+            a.lists
+                .iter()
+                .chain(a.groups.iter().flat_map(|g| &g.lists))
+                .any(|l| l == name)
+        };
+        let was_used: HashSet<String> = live
+            .sources
+            .iter()
+            .filter_map(|s| s.name.clone())
+            .filter(|n| uses(&live, n))
+            .collect();
         let mut wanted = live;
         change(&mut wanted);
+        // A source goes with its last use (a group deleted, a list taken out of a group); one
+        // no layer used before the change (hand-written) stays as it is.
+        let unused: Vec<String> = was_used.into_iter().filter(|n| !uses(&wanted, n)).collect();
+        wanted
+            .sources
+            .retain(|s| s.name.as_ref().is_none_or(|n| !unused.contains(n)));
         let file = AdblockFile::from_config(&wanted);
         let (adblock, issues) = file.to_config();
         let new: Vec<String> = issues.into_iter().filter(|i| !known.contains(i)).collect();

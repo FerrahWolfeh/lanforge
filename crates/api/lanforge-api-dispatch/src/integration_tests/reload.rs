@@ -882,3 +882,48 @@ async fn deleting_an_adblock_group_keeps_a_rules_file_still_in_use() {
     );
     assert!(dir.path().join("adblock/shared.rules").exists());
 }
+
+/// A source only a group uses goes with the group's last use of it: deleting the group, or
+/// replacing its lists, used to be refused ("not in `lists` nor in a group") and left the group
+/// in place. A source the global layer or another group still uses stays.
+#[cfg(feature = "adblock")]
+#[tokio::test]
+async fn a_group_change_drops_the_sources_nothing_uses_any_more() {
+    use lanforge_api::api::Response;
+
+    let file = "[adblock]\nenabled = true\nlists = [\"g\"]\n\n\
+                [adblock.sources.g]\nurl = \"https://example.com/g\"\n\n\
+                [adblock.sources.k]\nurl = \"https://example.com/k\"\n\n\
+                [adblock.sources.s]\nurl = \"https://example.com/s\"\n\n\
+                [adblock.groups.kids]\nlists = [\"k\", \"s\", \"g\"]\n\n\
+                [adblock.groups.teens]\nlists = [\"s\"]\n";
+    let (client, _dir, path) = with_file(file);
+    reload(&client).await;
+    let ok = |res: Response| assert!(matches!(res, Response::Success(_)), "{res:?}");
+
+    ok(client
+        .handle_dns_adblock_group_update("teens".into(), Vec::new(), Vec::new())
+        .await);
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(
+        text.contains("[adblock.sources.s]"),
+        "kids still uses s: {text}"
+    );
+    ok(client.handle_dns_adblock_group_delete("kids".into()).await);
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(!text.contains("[adblock.sources.k]"), "{text}");
+    assert!(!text.contains("[adblock.sources.s]"), "{text}");
+    assert!(
+        text.contains("[adblock.sources.g]"),
+        "global uses g: {text}"
+    );
+    assert_eq!(client.ctx.get_dns_adblock_urls().len(), 1);
+    let names: Vec<String> = client
+        .ctx
+        .get_dns_adblock_policy()
+        .groups
+        .iter()
+        .map(|g| g.name.clone())
+        .collect();
+    assert_eq!(names, ["teens"]);
+}
