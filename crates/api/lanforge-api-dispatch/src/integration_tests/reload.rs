@@ -788,13 +788,14 @@ async fn adblock_groups_are_managed_through_the_api() {
         .await);
     assert!(groups().await.groups[0].lists.is_empty());
 
-    // Delete: gone from `[adblock]`, its rules file stays.
+    // Delete: gone from `[adblock]`, and its rules file with it.
     ok(client
         .handle_dns_adblock_group_delete("bradesco".into())
         .await);
     assert!(groups().await.groups.is_empty());
     assert!(client.ctx.get_dns_adblock_policy().groups.is_empty());
-    assert!(dir.path().join("adblock/bradesco.rules").exists());
+    assert!(!dir.path().join("adblock/bradesco.rules").exists());
+    assert!(!fs::read_to_string(&path).unwrap().contains("bradesco"));
     let res = client
         .handle_dns_adblock_group_delete("bradesco".into())
         .await;
@@ -844,4 +845,40 @@ async fn adblock_group_changes_add_up_on_a_read_only_config() {
         "[adblock]\nenabled = true\n",
         "read-only: file untouched"
     );
+}
+
+/// Deleting a group removes its rules file only when nothing else names it: a file the global
+/// layer or another group also uses stays, a file named by the deleted group alone goes.
+#[cfg(feature = "adblock")]
+#[tokio::test]
+async fn deleting_an_adblock_group_keeps_a_rules_file_still_in_use() {
+    use lanforge_api::api::Response;
+
+    let file = "[adblock]\nenabled = true\nrules = \"adblock/shared.rules\"\n\n\
+                [adblock.groups.a]\nrules = \"adblock/shared.rules\"\n\n\
+                [adblock.groups.b]\nrules = \"adblock/b.rules\"\n\n\
+                [adblock.groups.c]\nrules = \"adblock/b.rules\"\n";
+    let (client, dir, _path) = with_file(file);
+    fs::create_dir_all(dir.path().join("adblock")).unwrap();
+    fs::write(dir.path().join("adblock/shared.rules"), "||a.example^\n").unwrap();
+    fs::write(dir.path().join("adblock/b.rules"), "||b.example^\n").unwrap();
+    reload(&client).await;
+    let ok = |res: Response| assert!(matches!(res, Response::Success(_)), "{res:?}");
+
+    ok(client.handle_dns_adblock_group_delete("a".into()).await);
+    assert!(
+        dir.path().join("adblock/shared.rules").exists(),
+        "global uses it"
+    );
+    ok(client.handle_dns_adblock_group_delete("b".into()).await);
+    assert!(
+        dir.path().join("adblock/b.rules").exists(),
+        "group c uses it"
+    );
+    ok(client.handle_dns_adblock_group_delete("c".into()).await);
+    assert!(
+        !dir.path().join("adblock/b.rules").exists(),
+        "nothing uses it now"
+    );
+    assert!(dir.path().join("adblock/shared.rules").exists());
 }

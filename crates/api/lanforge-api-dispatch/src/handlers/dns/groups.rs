@@ -2,7 +2,10 @@
 //! delete, and a device's memberships. Every write goes through `change_adblock` (file, then
 //! live), so a group change is a config change like any other.
 
+use std::fs;
+use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr};
+use std::path::Path;
 use std::str::FromStr;
 
 use lanforge_api::api::{
@@ -16,6 +19,7 @@ use lanforge_types::network::dns::adblock::rules_file::RulesFile;
 
 use crate::ClientContext;
 use crate::handlers::dns::rewrite::dns_reply;
+use crate::handlers::system::config_write::Persisted;
 
 /// Client selectors as the API receives them; the first one that does not parse is the error.
 fn parse_clients(texts: &[String]) -> Result<Vec<ClientSelector>, String> {
@@ -171,7 +175,9 @@ impl ClientContext {
         )
     }
 
-    /// Removes `[adblock.groups.<name>]`. Its rules file stays on disk.
+    /// Removes `[adblock.groups.<name>]` and, once the file no longer names it, its rules file
+    /// (unless the global layer or another group names the same file). A read-only config
+    /// leaves the rules file alone.
     pub async fn handle_dns_adblock_group_delete(&self, name: String) -> Response {
         if !self
             .live_adblock_settings()
@@ -183,10 +189,35 @@ impl ClientContext {
                 error: format!("adblock group \"{name}\""),
             };
         }
-        dns_reply(
-            self.change_adblock(|a| a.groups.retain(|g| g.name != name)),
-            format!("Adblock group \"{name}\" removed"),
-        )
+        let mut rules = None;
+        let persisted = self.change_adblock(|a| {
+            let Some(at) = a.groups.iter().position(|g| g.name == name) else {
+                return;
+            };
+            let group = a.groups.remove(at);
+            rules = group.rules.filter(|r| {
+                a.rules.as_deref() != Some(r.as_str())
+                    && !a
+                        .groups
+                        .iter()
+                        .any(|g| g.rules.as_deref() == Some(r.as_str()))
+            });
+        });
+        let mut what = format!("Adblock group \"{name}\" removed");
+        if let (Ok(Persisted::File), Some(rules), Some(config)) =
+            (&persisted, rules, self.ctx.config_path())
+        {
+            let path = config.parent().unwrap_or(Path::new(".")).join(&rules);
+            match fs::remove_file(&path) {
+                Ok(()) => what.push_str(&format!(" with its rules file {rules}")),
+                Err(e) if e.kind() == ErrorKind::NotFound => {}
+                Err(e) => what.push_str(&format!(
+                    "; its rules file {} could not be removed: {e}",
+                    path.display()
+                )),
+            }
+        }
+        dns_reply(persisted, what)
     }
 
     /// Replaces `[adblock] bypass`.

@@ -72,7 +72,7 @@
 		if (!deleting) return;
 		try {
 			await dnsAdblockGroupDelete(deleting.name);
-			toast.success(`Group "${deleting.name}" removed (its rules file stays on disk)`);
+			toast.success(`Group "${deleting.name}" removed`);
 			await load();
 		} catch (err: any) {
 			toast.error(err?.message ?? "Failed to remove the group");
@@ -230,7 +230,7 @@
 			<AlertDialog.Title class="text-base font-bold">Delete group?</AlertDialog.Title>
 			<AlertDialog.Description class="text-xs">
 				<strong>{deleting?.name}</strong> is removed from the configuration and its clients get
-				only the global layer. Its rules file stays on disk.
+				only the global layer. Its rules file is deleted too.
 			</AlertDialog.Description>
 		</AlertDialog.Header>
 		<AlertDialog.Footer>
