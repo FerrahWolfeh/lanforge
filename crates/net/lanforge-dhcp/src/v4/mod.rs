@@ -37,6 +37,7 @@ use dhcproto::v4::{DhcpOption, Message, MessageType, Opcode, OptionCode};
 use dhcproto::{Decodable, Decoder};
 use lanforge_core::bus::{
     AdminChange, DeviceEvent, DhcpV4MessageType, LanforgeEvent, NetworkChange, NetworkEvent,
+    PppoeEvent,
 };
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
@@ -48,7 +49,7 @@ use lanforge_types::device::IPv4State;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{Dhcpv4Options, Dhcpv4Pool};
-use lanforge_types::system::{DormantReason, RunResult, ServiceId};
+use lanforge_types::system::{DormantReason, PppoeSessionState, RunResult, ServiceId};
 use lanforge_types::update::{DeviceUpdate, DhcpV4PoolUpdate, LeaseTarget};
 use server::{DhcpServer, HandleResult};
 use smallvec::SmallVec;
@@ -56,6 +57,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant, SystemTime};
+use tokio::sync::broadcast::error::RecvError;
 use tokio::time::interval;
 use tracing::{debug, info, warn};
 
@@ -249,14 +251,69 @@ impl Dhcpv4Service {
         // Audit network topology against physical interface and auto-heal if needed
         sanity::audit_and_auto_heal_dhcpv4(&mut current_cfg);
         // No router or DNS configured: announce this server (its live LAN address, healed
-        // above), never a guessed one.
+        // above), never a guessed one. Without a DNS server here, the ISP's resolvers.
         if current_cfg.router.is_unspecified() {
             current_cfg.router = current_cfg.server_id;
         }
         if current_cfg.dns.is_empty() {
-            current_cfg.dns = vec![current_cfg.server_id];
+            current_cfg.dns = if current_cfg.local_dns {
+                vec![current_cfg.server_id]
+            } else {
+                self.wan_dns()
+            };
         }
         Some(current_cfg)
+    }
+
+    /// The transport this service serves on: the injected one, or a socket bound once.
+    fn transport_for(&mut self, cfg: &Dhcpv4Config) -> Result<Dhcpv4Transport, CoreError> {
+        if let Some(t) = &self.transport {
+            return Ok(t.clone());
+        }
+        let t = Dhcpv4Transport::new(&cfg.iface, cfg.port)?;
+        self.transport = Some(t.clone());
+        Ok(t)
+    }
+
+    /// Whether `event` can change the ISP's resolvers in the `PPPoE` status.
+    const fn moves_wan_dns(event: &LanforgeEvent) -> bool {
+        matches!(
+            event,
+            LanforgeEvent::Pppoe(
+                PppoeEvent::SessionUp(_)
+                    | PppoeEvent::SessionDown { .. }
+                    | PppoeEvent::DnsServersChanged { .. }
+            )
+        )
+    }
+
+    /// Re-applies the config in place so new replies carry the ISP's current resolvers.
+    fn resync_wan_dns(&self, server: &mut DhcpServer, current_cfg: &mut Dhcpv4Config) {
+        if let Some(new_cfg) = self.prepare_config(self.ctx.get_dhcp_v4_pools()) {
+            if new_cfg.dns != current_cfg.dns {
+                info!("DNS servers follow the WAN: {:?}", new_cfg.dns);
+            }
+            *current_cfg = new_cfg;
+            server.cfg = current_cfg.clone();
+        }
+    }
+
+    /// The IPv4 resolvers the ISP announced on the live `PPPoE` session (IPCP), read from its
+    /// status so a lagged bus or a restart with the session up loses nothing. Empty when down.
+    fn wan_dns(&self) -> Vec<Ipv4Addr> {
+        self.ctx
+            .pppoe_status()
+            .filter(|s| s.state == PppoeSessionState::Connected)
+            .map(|s| {
+                s.dns_servers
+                    .iter()
+                    .filter_map(|ip| match ip {
+                        IpAddr::V4(v4) => Some(*v4),
+                        IpAddr::V6(_) => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn publish_pool_update(&self, server: &DhcpServer, current_cfg: &Dhcpv4Config) {
@@ -302,13 +359,7 @@ impl Dhcpv4Service {
         };
 
         let mut server = DhcpServer::new(current_cfg.clone(), self.ctx.clone());
-        let transport = if let Some(ref t) = self.transport {
-            t.clone()
-        } else {
-            let t = Dhcpv4Transport::new(&current_cfg.iface, current_cfg.port)?;
-            self.transport = Some(t.clone());
-            t
-        };
+        let transport = self.transport_for(&current_cfg)?;
         self.ctx
             .set_service_transports(ServiceId::Dhcp4, vec![transport.metrics_handle()]);
 
@@ -327,6 +378,8 @@ impl Dhcpv4Service {
         let mut pools_sub = self.ctx.config_subscription::<Vec<Dhcpv4Pool>>();
         let mut options_sub = self.ctx.config_subscription::<Dhcpv4Options>();
         let mut cleanup_timer = interval(Duration::from_mins(1));
+        // Without a DNS server here, clients get the ISP's resolvers: follow the session.
+        let mut pppoe_rx = (!current_cfg.local_dns).then(|| self.ctx.bus().subscribe_pppoe());
 
         loop {
             tokio::select! {
@@ -396,6 +449,13 @@ impl Dhcpv4Service {
                 _ = cleanup_timer.tick() => {
                     self.reconcile_and_report(&mut server, &transport, &current_cfg);
                 }
+                event = async {
+                    pppoe_rx.as_mut().expect("arm guarded by is_some").recv().await
+                }, if pppoe_rx.is_some() => match event {
+                    Err(RecvError::Closed) => return Ok(RunResult::Shutdown),
+                    Ok(e) if !Self::moves_wan_dns(&e.event) => {}
+                    _ => self.resync_wan_dns(&mut server, &mut current_cfg),
+                },
             }
         }
     }

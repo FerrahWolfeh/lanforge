@@ -35,8 +35,12 @@ pub struct Dhcpv4Config {
     /// address (`server_id`), resolved when the service applies its config.
     pub router: Ipv4Addr,
     /// DNS servers announced to clients (Option 6). Empty: this server's own address
-    /// (`server_id`), resolved when the service applies its config.
+    /// (`server_id`) when it runs a DNS server (`local_dns`), otherwise the ISP's IPv4 resolvers
+    /// from the live `PPPoE` session; resolved when the service applies its config.
     pub dns: Vec<Ipv4Addr>,
+    /// Whether this host answers DNS (the daemon is built with its DNS server).
+    #[serde(skip)]
+    pub local_dns: bool,
     /// Subnet mask announced to clients (Option 1, default: 255.255.255.0).
     pub subnet_mask: Ipv4Addr,
     /// Domain name (Option 15, optional).
@@ -67,6 +71,7 @@ impl Default for Dhcpv4Config {
             lease_time: 86400,
             router: Ipv4Addr::UNSPECIFIED,
             dns: Vec::new(),
+            local_dns: true,
             subnet_mask: Ipv4Addr::new(255, 255, 255, 0),
             domain_name: None,
             search_domains: Vec::new(),
