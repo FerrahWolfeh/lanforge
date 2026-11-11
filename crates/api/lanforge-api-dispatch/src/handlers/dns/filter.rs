@@ -99,7 +99,7 @@ impl ClientContext {
         match allowlist {
             Some(allowlist) => Response::DnsAllowlist(DnsAllowlistResponse { allowlist }),
             None => Response::NotFound {
-                error: format!("adblock group \"{}\"", group.unwrap_or_default()),
+                error: format!("adblock group \"{}\" not found", group.unwrap_or_default()),
             },
         }
     }

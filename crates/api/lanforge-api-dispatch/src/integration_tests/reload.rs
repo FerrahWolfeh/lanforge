@@ -1015,10 +1015,12 @@ async fn adblock_groups_change_one_member_at_a_time() {
             .handle_dns_adblock_group_change("kids".into(), change(&[], &["g"], &[], &[]))
             .await,
     );
-    not_found(
-        client
-            .handle_dns_adblock_group_change("nope".into(), change(&[], &[], &["10.0.0.1"], &[]))
-            .await,
+    let res = client
+        .handle_dns_adblock_group_change("nope".into(), change(&[], &[], &["10.0.0.1"], &[]))
+        .await;
+    assert!(
+        matches!(&res, Response::NotFound { error } if error == "adblock group \"nope\" not found"),
+        "the CLI prints this text as is: {res:?}"
     );
     let res = client
         .handle_dns_adblock_group_change("kids".into(), change(&[], &[], &["dev:"], &[]))

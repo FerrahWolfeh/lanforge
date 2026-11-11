@@ -221,7 +221,7 @@ impl ClientContext {
                 .any(|g| &g.name == group)
         {
             return Response::NotFound {
-                error: format!("adblock group \"{group}\""),
+                error: format!("adblock group \"{group}\" not found"),
             };
         }
         let what = format!("Adblock {kind} URL added: {url}");
@@ -385,7 +385,7 @@ impl ClientContext {
         match rules {
             Some(rules) => Response::DnsAdblockRules(DnsAdblockRulesResponse { rules }),
             None => Response::NotFound {
-                error: format!("adblock group \"{}\"", group.unwrap_or_default()),
+                error: format!("adblock group \"{}\" not found", group.unwrap_or_default()),
             },
         }
     }

@@ -566,7 +566,9 @@ impl ClientContext {
                 .iter()
                 .find(|g| g.name == name)
                 .map(|g| g.rules.clone())
-                .ok_or_else(|| ChangeError::NotFound(format!("adblock group \"{name}\"")))?,
+                .ok_or_else(|| {
+                    ChangeError::NotFound(format!("adblock group \"{name}\" not found"))
+                })?,
         };
         let Some(text) = change(&live)? else {
             return Ok(Persisted::File);
@@ -585,7 +587,7 @@ impl ClientContext {
                             .iter_mut()
                             .find(|g| g.name == name)
                             .ok_or_else(|| {
-                                ChangeError::NotFound(format!("adblock group \"{name}\""))
+                                ChangeError::NotFound(format!("adblock group \"{name}\" not found"))
                             })?;
                         let default = g.default_rules();
                         (&mut g.rules, default)

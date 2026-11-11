@@ -162,7 +162,7 @@ impl ClientContext {
             .any(|g| g.name == name)
         {
             return Response::NotFound {
-                error: format!("adblock group \"{name}\""),
+                error: format!("adblock group \"{name}\" not found"),
             };
         }
         dns_reply(
@@ -187,7 +187,7 @@ impl ClientContext {
             .any(|g| g.name == name)
         {
             return Response::NotFound {
-                error: format!("adblock group \"{name}\""),
+                error: format!("adblock group \"{name}\" not found"),
             };
         }
         let mut rules = None;
@@ -274,7 +274,7 @@ impl ClientContext {
         let live = self.live_adblock_settings();
         let Some(group) = live.groups.iter().find(|g| g.name == name) else {
             return Response::NotFound {
-                error: format!("adblock group \"{name}\""),
+                error: format!("adblock group \"{name}\" not found"),
             };
         };
         let list_name = |text: &String| {
@@ -357,7 +357,7 @@ impl ClientContext {
     ) -> Response {
         let Some(device) = self.ctx.get_device(&mac) else {
             return Response::NotFound {
-                error: format!("device {mac}"),
+                error: format!("device {mac} not found"),
             };
         };
         let selector = if device.hostname.name.is_empty() {
@@ -376,7 +376,7 @@ impl ClientContext {
         let group = |name: &String| known.groups.iter().find(|g| &g.name == name);
         if let Some(unknown) = join.iter().chain(leave).find(|n| group(n).is_none()) {
             return Response::NotFound {
-                error: format!("adblock group \"{unknown}\""),
+                error: format!("adblock group \"{unknown}\" not found"),
             };
         }
         if let Some(not_in) = leave
