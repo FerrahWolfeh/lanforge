@@ -2,6 +2,8 @@
 	import { page } from "$app/state";
 	import { sidebarState } from "$lib/stores/sidebar.svelte";
 	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
+	import { auth } from "$lib/stores/auth.svelte";
+	import type { Permission } from "$lib/api/types";
 	import NavUser from "./NavUser.svelte";
 	import type { Component } from "svelte";
 
@@ -27,6 +29,8 @@
 		href: string;
 		icon: Component<Record<string, unknown>>;
 		cap?: string | string[];
+		/** Hidden from sessions the server would refuse the page's reads to. */
+		perm?: Permission;
 	}
 
 	interface NavGroup {
@@ -76,7 +80,7 @@
 			items: [
 				{ title: "System Status", href: "/system", icon: ServerIcon },
 				{ title: "Database", href: "/system/database", icon: DatabaseIcon },
-				{ title: "Users & Access", href: "/system/users", icon: UsersIcon },
+				{ title: "Users & Access", href: "/system/users", icon: UsersIcon, perm: "admin" },
 			],
 		},
 	];
@@ -86,6 +90,7 @@
 			.map((group) => ({
 				...group,
 				items: group.items.filter((item) => {
+					if (item.perm && !auth.can(item.perm)) return false;
 					if (!item.cap) return true;
 					if (Array.isArray(item.cap)) {
 						return item.cap.some((c) => capabilitiesState.isEnabled(c));

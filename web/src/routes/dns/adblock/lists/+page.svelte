@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import { onMount } from "svelte";
 	import * as Card from "$lib/components/ui/card";
 	import * as Table from "$lib/components/ui/table";
@@ -31,6 +32,9 @@
 	} from "$lib/api/types";
 	import DnsAdblockAddSourceDialog from "./components/DnsAdblockAddSourceDialog.svelte";
 	import DnsAdblockPresetsPopover from "./components/DnsAdblockPresetsPopover.svelte";
+
+	// Sources are config (config_write); refreshing the lists is a DNS operation (dns_write).
+	const canEditSources = $derived(auth.can("config_write"));
 
 	interface MergedSource {
 		id?: number | null;
@@ -254,8 +258,11 @@
 						/>
 					</div>
 
+					{#if canEditSources}
 					<DnsAdblockPresetsPopover sources={rawUrls} onAdd={handleAddPreset} />
+					{/if}
 
+					{#if auth.can("dns_write")}
 					<Button
 						variant="outline"
 						size="sm"
@@ -266,7 +273,9 @@
 						<RefreshCwIcon class="size-3.5 {updatingAll ? 'animate-spin' : ''}" />
 						<span class="hidden sm:inline">Update All</span>
 					</Button>
+					{/if}
 
+					{#if canEditSources}
 					<Button
 						size="sm"
 						onclick={() => (dialogOpen = true)}
@@ -275,6 +284,7 @@
 						<PlusIcon class="size-3.5" />
 						Add Source
 					</Button>
+					{/if}
 				</div>
 			</div>
 		</Card.Header>
@@ -452,6 +462,7 @@
 											<ExternalLinkIcon class="size-3.5" />
 										</a>
 
+										{#if canEditSources}
 										<Button
 											variant="ghost"
 											size="sm"
@@ -461,6 +472,7 @@
 										>
 											<Trash2Icon class="size-3.5" />
 										</Button>
+										{/if}
 									</div>
 								</Table.Cell>
 							</Table.Row>

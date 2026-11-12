@@ -36,6 +36,17 @@ export type EventKind =
 
 export type UserRole = 'admin' | 'operator' | 'viewer';
 
+/** Mirrors `lanforge_http::authz::Permission::as_str`. */
+export type Permission =
+	| 'authenticated'
+	| 'read'
+	| 'dns_query'
+	| 'device_write'
+	| 'dns_write'
+	| 'upstream_write'
+	| 'config_write'
+	| 'admin';
+
 export type ServiceState = 'active' | 'starting' | 'offline' | 'error' | string;
 
 // ---------------------------------------------------------------------------
@@ -75,6 +86,8 @@ export interface UserInfo {
 	created_at: number;
 	updated_at: number;
 	last_login: number | null;
+	/** Only from `/auth/me`: what the server grants this session. */
+	permissions?: Permission[];
 }
 
 export interface AuthToken {

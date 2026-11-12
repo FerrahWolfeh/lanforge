@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import { onMount } from "svelte";
 	import * as Card from "$lib/components/ui/card";
 	import * as AlertDialog from "$lib/components/ui/alert-dialog";
@@ -27,6 +28,8 @@
 	} from "$lib/api/types";
 	import AdblockGroupDialog from "../components/AdblockGroupDialog.svelte";
 	import AdblockBypassDialog from "../components/AdblockBypassDialog.svelte";
+
+	const canEdit = $derived(auth.can("dns_write"));
 
 	let loading = $state(true);
 	let data = $state<DnsAdblockGroupsResponse>({ groups: [], bypass: [] });
@@ -105,6 +108,7 @@
 				decide first (an allow beats any global block), then its lists, then the global layer.
 			</p>
 		</div>
+		{#if canEdit}
 		<div class="flex items-center gap-2">
 			<Button variant="outline" size="sm" class="h-8 gap-1.5 text-xs" onclick={() => (bypassOpen = true)}>
 				<ShieldOffIcon class="size-3.5" />
@@ -116,6 +120,7 @@
 				New group
 			</Button>
 		</div>
+		{/if}
 	</div>
 
 	{#if data.bypass.length > 0}
@@ -141,9 +146,11 @@
 			<Card.Content class="h-40 flex flex-col items-center justify-center gap-2 text-center text-xs text-muted-foreground">
 				<UsersIcon class="size-6 opacity-50" />
 				<p>No groups yet. Every client gets the global layer.</p>
+				{#if canEdit}
 				<Button variant="outline" size="sm" class="h-7 text-xs gap-1" onclick={openCreate}>
 					<PlusIcon class="size-3" /> New group
 				</Button>
+				{/if}
 			</Card.Content>
 		</Card.Root>
 	{:else}
@@ -200,6 +207,7 @@
 						>
 							<SlidersIcon class="size-3.5" /> Rules
 						</Button>
+						{#if canEdit}
 						<Button variant="ghost" size="sm" class="h-7 gap-1 text-xs" onclick={() => openEdit(group)}>
 							<PencilIcon class="size-3.5" /> Edit
 						</Button>
@@ -214,6 +222,7 @@
 						>
 							<Trash2Icon class="size-3.5" /> Delete
 						</Button>
+						{/if}
 					</Card.Footer>
 				</Card.Root>
 			{/each}

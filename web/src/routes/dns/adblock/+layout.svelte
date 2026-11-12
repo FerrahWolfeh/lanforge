@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import ShieldIcon from "@lucide/svelte/icons/shield";
 	import ShieldAlertIcon from "@lucide/svelte/icons/shield-alert";
 	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
@@ -31,6 +32,9 @@
 		dnsAdblockReload,
 	} from "$lib/api/client";
 	import type { DnsAdblockStatusResponse } from "$lib/api/types";
+
+	// Pause, toggle and list updates need dns_write; the settings are config (config_write).
+	const canDnsWrite = $derived(auth.can("dns_write"));
 
 	let { children } = $props();
 
@@ -183,6 +187,7 @@
 
 		{#snippet actions()}
 			{#if status}
+				{#if canDnsWrite}
 				<!-- Pause Dropdown Menu -->
 				<DropdownMenu.Root>
 					<DropdownMenu.Trigger>
@@ -252,8 +257,10 @@
 					/>
 					Update Lists
 				</Button>
+				{/if}
 
 				<!-- Settings Dialog Trigger -->
+				{#if auth.can("config_write")}
 				<Button
 					variant="outline"
 					size="sm"
@@ -264,6 +271,7 @@
 					<SettingsIcon class="size-3.5" />
 					Settings
 				</Button>
+				{/if}
 
 				<!-- Master Toggle Switch -->
 				<div
@@ -272,6 +280,7 @@
 					<Switch
 						checked={status.enabled}
 						onCheckedChange={toggleEnabled}
+						disabled={!canDnsWrite}
 						aria-label="Toggle Adblock Filtering"
 					/>
 				</div>

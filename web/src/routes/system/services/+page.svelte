@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import * as Card from "$lib/components/ui/card";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
@@ -40,6 +41,9 @@
 	import Loader2Icon from "@lucide/svelte/icons/loader-2";
 	import CpuIcon from "@lucide/svelte/icons/cpu";
 	import ShieldIcon from "@lucide/svelte/icons/shield";
+
+	// Reload and service control are admin-only on the server.
+	const isAdmin = $derived(auth.can("admin"));
 
 	let banners = $state<ServiceBanner[]>([]);
 	let loading = $state(true);
@@ -207,6 +211,7 @@
 				<RefreshCwIcon class={["size-3.5", isRefreshing ? "animate-spin" : ""].join(" ")} />
 				Refresh
 			</Button>
+			{#if isAdmin}
 			<Button
 				variant="secondary"
 				size="sm"
@@ -217,6 +222,7 @@
 				<RotateCwIcon class={["size-3.5", reloadingConfig ? "animate-spin" : ""].join(" ")} />
 				Reload Config
 			</Button>
+			{/if}
 		{/snippet}
 	</PageHeader>
 
@@ -515,7 +521,7 @@
 
 						<!-- Service Lifecycle Actions -->
 						<div class="flex items-center gap-1.5">
-							{#if meta.canControl}
+							{#if meta.canControl && isAdmin}
 								{#if inactive}
 									<!-- Start Action -->
 									<Button

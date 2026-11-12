@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import { Button } from "$lib/components/ui/button";
 	import { Badge } from "$lib/components/ui/badge";
@@ -464,6 +465,7 @@
 							<span>Test Query</span>
 						</Button>
 
+						{#if auth.can("dns_write")}
 						<Button
 							variant="outline"
 							size="sm"
@@ -495,11 +497,12 @@
 							<ArrowRightLeftIcon class="h-3.5 w-3.5 text-amber-500" />
 							<span>Rewrite</span>
 						</Button>
+						{/if}
 					</div>
 				</div>
 
-				<!-- Log Noise Suppression (Device-targeted) -->
-				{#if entry.src_mac}
+				<!-- Log Noise Suppression (Device-targeted, a device setting: device_write) -->
+				{#if entry.src_mac && auth.can("device_write")}
 					<div class="rounded-lg border p-3 bg-muted/20 space-y-2">
 						<span class="text-[11px] font-medium text-muted-foreground uppercase tracking-wider block">
 							Log Noise Suppression ({entry.src_hostname || entry.src_mac})

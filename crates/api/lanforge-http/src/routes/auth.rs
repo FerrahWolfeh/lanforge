@@ -18,6 +18,7 @@ use crate::auth::{
     AuthMethod, AuthenticatedUser, ELEVATION_TTL_SECS, auth_required, authenticate_token,
     extract_token,
 };
+use crate::authz::{self, Permission};
 use crate::error::{HttpError, Result as HttpResult};
 use crate::routes::create_client_ctx;
 use crate::server::AppState;
@@ -413,12 +414,20 @@ async fn handle_status(State(state): State<AppState>, req: Request) -> impl Into
     })
 }
 
+/// The caller, with the permissions its role (session) or scopes (API token) grant, so the
+/// web UI can hide what the server would refuse.
 async fn handle_me(Extension(user): Extension<AuthenticatedUser>) -> impl IntoResponse {
+    let permissions: Vec<&str> = Permission::ALL
+        .into_iter()
+        .filter(|&p| authz::grants(&user, p))
+        .map(Permission::as_str)
+        .collect();
     Json(serde_json::json!({
         "data": {
             "username": user.name,
             "role": user.role,
             "scopes": user.scopes,
+            "permissions": permissions,
         }
     }))
 }

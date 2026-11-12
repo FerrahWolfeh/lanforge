@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import * as Card from "$lib/components/ui/card";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
@@ -309,6 +310,7 @@
 				/>
 				Refresh
 			</Button>
+			{#if auth.can("admin")}
 			<Button size="sm" onclick={triggerScan} disabled={scanning} class="h-8 text-xs gap-1.5">
 				{#if scanning}
 					<span
@@ -320,6 +322,7 @@
 				{/if}
 				Scan Network
 			</Button>
+			{/if}
 		{/snippet}
 	</PageHeader>
 

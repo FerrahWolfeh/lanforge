@@ -32,6 +32,7 @@
 	import SlidersHorizontalIcon from "@lucide/svelte/icons/sliders-horizontal";
 	import BugIcon from "@lucide/svelte/icons/bug";
 	import { commandState } from "$lib/stores/command.svelte";
+	import type { Permission } from "$lib/api/types";
 
 	interface CommandItem {
 		id: string;
@@ -42,6 +43,7 @@
 		icon: Component<Record<string, unknown>>;
 		action: () => void;
 		cap?: string | string[];
+		perm?: Permission;
 	}
 
 	let search = $state("");
@@ -299,6 +301,7 @@
 			keywords: ["users", "accounts", "login", "passwords", "permissions", "admin"],
 			category: "Pages & Navigation",
 			icon: UsersIcon,
+			perm: "admin",
 			action: () => goto("/system/users")
 		},
 		{
@@ -308,12 +311,14 @@
 			keywords: ["api", "keys", "tokens", "bearer", "scripts", "secrets"],
 			category: "Pages & Navigation",
 			icon: KeyRoundIcon,
+			perm: "admin",
 			action: () => goto("/system/keys")
 		}
 	];
 
 	const availableItems = $derived(
 		items.filter((item) => {
+			if (item.perm && !auth.can(item.perm)) return false;
 			if (!item.cap) return true;
 			if (Array.isArray(item.cap)) {
 				return item.cap.some((c) => capabilitiesState.isEnabled(c));

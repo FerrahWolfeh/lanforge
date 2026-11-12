@@ -27,7 +27,8 @@
 		listenAddr: string;
 		rootDir: string;
 		serviceActionLoading: string | null;
-		onServiceControl: (action: "Start" | "Stop" | "Restart") => void;
+		/** Absent when the session may not control services (admin-only). */
+		onServiceControl?: (action: "Start" | "Stop" | "Restart") => void;
 	} = $props();
 </script>
 
@@ -47,6 +48,7 @@
 		{loading}
 	>
 		{#snippet actions()}
+			{#if onServiceControl}
 			<div class="flex items-center gap-1.5 pt-1">
 				{#if isServiceActive}
 					<Button
@@ -85,6 +87,7 @@
 					</Button>
 				{/if}
 			</div>
+			{/if}
 		{/snippet}
 
 		{#snippet footer()}

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import FloatingSaveBar from "$lib/components/FloatingSaveBar.svelte";
 	import {
 		trafficStatus,
@@ -24,6 +25,8 @@
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 
 	import TrafficSqmTab from "../components/TrafficSqmTab.svelte";
+
+	const canEdit = $derived(auth.can("config_write"));
 
 	let status = $state<TrafficStatusResponse | null>(null);
 	let telemetry = $state<TrafficTelemetryResponse | null>(null);
@@ -117,7 +120,8 @@
 				trafficStatus().catch(() => null),
 				trafficConfig().catch(() => null),
 				fetchSetup ? getSetupStatus().catch(() => null) : Promise.resolve(null),
-				pppoeConfig().catch(() => null),
+				// The PPPoE config holds the password (config_write); it only names the WAN here.
+				canEdit ? pppoeConfig().catch(() => null) : Promise.resolve(null),
 				trafficTelemetry().catch(() => null),
 			]);
 			status = s;
@@ -210,6 +214,7 @@
 			Loading SQM configuration...
 		</div>
 	{:else if serverConfig}
+		<fieldset disabled={!canEdit} class="contents">
 		<TrafficSqmTab
 			bind:enabled={sqmEnabled}
 			bind:downloadMbps={sqmDownloadMbps}
@@ -224,6 +229,7 @@
 			detectedWan={shapingWan}
 			{telemetry}
 		/>
+		</fieldset>
 	{/if}
 
 	<!-- Floating Save / Discard Bar -->

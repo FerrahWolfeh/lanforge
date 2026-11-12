@@ -26,6 +26,7 @@
 		onAdd = () => {},
 		onEdit = () => {},
 		onDelete = () => {},
+		canEdit = true,
 	}: {
 		hosts?: HostConfigEntry[];
 		loading?: boolean;
@@ -35,6 +36,8 @@
 		onAdd?: () => void;
 		onEdit?: (host: HostConfigEntry) => void;
 		onDelete?: (mac: string) => void;
+		/** False hides import, add, edit and delete (the session lacks device_write). */
+		canEdit?: boolean;
 	} = $props();
 
 	let searchQuery = $state("");
@@ -107,6 +110,7 @@
 			<span class="hidden sm:inline">Export</span>
 		</Button>
 
+		{#if canEdit}
 		<label class="cursor-pointer">
 			<input
 				type="file"
@@ -132,9 +136,11 @@
 			<PlusIcon class="size-3.5" />
 			<span>Add Host</span>
 		</Button>
+		{/if}
 	{/snippet}
 
 	{#snippet emptyAction()}
+		{#if canEdit}
 		<Button
 			size="sm"
 			onclick={onAdd}
@@ -143,6 +149,7 @@
 			<PlusIcon class="size-3.5" />
 			<span>Add Host</span>
 		</Button>
+		{/if}
 	{/snippet}
 
 	{#snippet header()}
@@ -225,11 +232,13 @@
 						<MoreHorizontalIcon class="size-4" />
 					</DropdownMenu.Trigger>
 					<DropdownMenu.Content align="end" class="w-48 text-xs">
+						{#if canEdit}
 						<DropdownMenu.Item onclick={() => onEdit(host)} class="gap-2">
 							<PencilIcon class="size-3.5 text-amber-400" />
 							Edit Host Assignment
 						</DropdownMenu.Item>
 						<DropdownMenu.Separator />
+						{/if}
 						<DropdownMenu.Item onclick={() => copyText(host.mac, "MAC")} class="gap-2">
 							<CopyIcon class="size-3.5 text-muted-foreground" />
 							Copy MAC Address
@@ -240,11 +249,13 @@
 								Copy Fixed IPv4
 							</DropdownMenu.Item>
 						{/if}
+						{#if canEdit}
 						<DropdownMenu.Separator />
 						<DropdownMenu.Item onclick={() => onDelete(host.mac)} class="gap-2 text-rose-500">
 							<Trash2Icon class="size-3.5" />
 							Delete Static Host
 						</DropdownMenu.Item>
+						{/if}
 					</DropdownMenu.Content>
 				</DropdownMenu.Root>
 			</Table.Cell>

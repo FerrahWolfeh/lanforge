@@ -29,6 +29,35 @@ pub enum Permission {
     Admin,
 }
 
+impl Permission {
+    /// Every permission, in declaration order.
+    pub const ALL: [Self; 8] = [
+        Self::Authenticated,
+        Self::Read,
+        Self::DnsQuery,
+        Self::DeviceWrite,
+        Self::DnsWrite,
+        Self::UpstreamWrite,
+        Self::ConfigWrite,
+        Self::Admin,
+    ];
+
+    /// The name the web UI gates its actions on (`/auth/me` `permissions`).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Authenticated => "authenticated",
+            Self::Read => "read",
+            Self::DnsQuery => "dns_query",
+            Self::DeviceWrite => "device_write",
+            Self::DnsWrite => "dns_write",
+            Self::UpstreamWrite => "upstream_write",
+            Self::ConfigWrite => "config_write",
+            Self::Admin => "admin",
+        }
+    }
+}
+
 /// A route's requirement: the permission, and whether a password session must re-authenticate
 /// (an elevation token) — actions that take an account over or create lasting access.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import * as Card from "$lib/components/ui/card";
 	import { Button } from "$lib/components/ui/button";
 	import { Badge } from "$lib/components/ui/badge";
@@ -125,6 +126,7 @@
 									{item.count.toLocaleString()} hits
 								</Badge>
 
+								{#if auth.can("dns_write")}
 								<Button
 									variant="ghost"
 									size="sm"
@@ -135,6 +137,7 @@
 									<ShieldCheckIcon class="size-3.5" />
 									Allow
 								</Button>
+								{/if}
 							</div>
 						</div>
 					{/each}

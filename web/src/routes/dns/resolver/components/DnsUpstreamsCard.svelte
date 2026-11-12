@@ -30,6 +30,7 @@
 		onRemoveUpstream = () => {},
 		onOpenDigModal = () => {},
 		onReloadAll = async () => {},
+		canEdit = true,
 	}: {
 		loading?: boolean;
 		upstreams?: DnsUpstreamEntry[];
@@ -37,6 +38,8 @@
 		onRemoveUpstream?: (item: DnsUpstreamEntry) => void;
 		onOpenDigModal?: () => void;
 		onReloadAll?: () => Promise<void>;
+		/** False hides presets, add and remove (the session lacks upstream_write). */
+		canEdit?: boolean;
 	} = $props();
 
 	let applyingPreset = $state(false);
@@ -145,6 +148,7 @@
 
 			<div class="flex flex-wrap items-center gap-1.5 sm:gap-2">
 				<!-- Presets Dropdown -->
+				{#if canEdit}
 				<DropdownMenu.Root>
 					<DropdownMenu.Trigger>
 						{#snippet child({ props })}
@@ -175,6 +179,7 @@
 						</DropdownMenu.Group>
 					</DropdownMenu.Content>
 				</DropdownMenu.Root>
+				{/if}
 
 				<!-- Interactive Dig Modal Trigger Button -->
 				<Button
@@ -188,10 +193,12 @@
 				</Button>
 
 				<!-- Add Upstream Button -->
+				{#if canEdit}
 				<Button size="sm" onclick={onAddUpstream} class="text-xs h-8 gap-1.5">
 					<PlusIcon data-icon="inline-start" />
 					Add
 				</Button>
+				{/if}
 			</div>
 		</div>
 	</Card.Header>
@@ -210,6 +217,7 @@
 				<p class="text-xs text-muted-foreground mt-1 max-w-xs">
 					Queries for external domains will return REFUSED until upstream servers are added.
 				</p>
+				{#if canEdit}
 				<div class="flex flex-wrap items-center justify-center gap-2 mt-4">
 					<Button size="sm" variant="outline" onclick={() => applyPreset(PRESETS[0])}>
 						<SparklesIcon class="size-3.5 text-amber-400 mr-1" />
@@ -219,6 +227,7 @@
 						Add Custom Upstream
 					</Button>
 				</div>
+				{/if}
 			</div>
 		{:else}
 			<div class="max-h-[380px] overflow-x-auto">
@@ -288,6 +297,7 @@
 												<CopyIcon class="h-3.5 w-3.5 text-muted-foreground" />
 												Copy Address
 											</DropdownMenu.Item>
+											{#if canEdit}
 											<DropdownMenu.Separator />
 											<DropdownMenu.Item
 												onclick={() => onRemoveUpstream(item)}
@@ -296,6 +306,7 @@
 												<Trash2Icon class="h-3.5 w-3.5" />
 												Remove Upstream
 											</DropdownMenu.Item>
+											{/if}
 										</DropdownMenu.Content>
 									</DropdownMenu.Root>
 								</Table.Cell>

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import * as Card from "$lib/components/ui/card";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
@@ -38,6 +39,9 @@
 	import PageHeader from "$lib/components/PageHeader.svelte";
 	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
 	import type { ServerCapabilities } from "$lib/api/types";
+
+	// Scan, reload and service control are admin-only on the server.
+	const isAdmin = $derived(auth.can("admin"));
 
 	const systemTabs: NavTabItem[] = [
 		{ label: "System Status", href: "/system", icon: ServerIcon },
@@ -173,6 +177,7 @@
 			/>
 			Refresh
 		</Button>
+		{#if isAdmin}
 		<Button
 			variant="outline"
 			size="sm"
@@ -218,6 +223,7 @@
 				</AlertDialog.Footer>
 			</AlertDialog.Content>
 		</AlertDialog.Root>
+		{/if}
 	{/snippet}
 </PageHeader>
 
@@ -501,7 +507,7 @@
 										<ExternalLinkIcon class="size-2.5 text-muted-foreground" />
 									</Button>
 
-									{#if meta.canControl}
+									{#if meta.canControl && isAdmin}
 										{#if isInactive}
 											<Button
 												variant="default"

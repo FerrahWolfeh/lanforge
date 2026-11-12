@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import { onMount } from "svelte";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
@@ -31,6 +32,9 @@
 	import PoolV6Table from "./components/PoolV6Table.svelte";
 	import PoolV4Dialog from "./components/PoolV4Dialog.svelte";
 	import PoolV6Dialog from "./components/PoolV6Dialog.svelte";
+
+	// Pools are config (config_write); reconcile is a lease operation (device_write).
+	const canEdit = $derived(auth.can("config_write"));
 
 	let loading = $state(true);
 	let saving = $state(false);
@@ -368,6 +372,7 @@
 				Refresh
 			</Button>
 
+			{#if auth.can("device_write")}
 			<Button
 				variant="outline"
 				size="sm"
@@ -382,6 +387,7 @@
 				/>
 				{reconciling ? "Auditing..." : "Reconcile Leases"}
 			</Button>
+			{/if}
 
 			<Button
 				variant="outline"
@@ -393,7 +399,7 @@
 				Global Options
 			</Button>
 
-			{#if isDirty}
+			{#if isDirty && canEdit}
 				<Button
 					variant="ghost"
 					size="sm"
@@ -432,6 +438,7 @@
 		{aggregateUtilization}
 	/>
 
+	<fieldset disabled={!canEdit} class="contents">
 	<!-- SECTION 1: IPv4 Address Scopes -->
 	<PoolV4Table
 		{v4Pools}
@@ -455,6 +462,7 @@
 		onEdit={openEditV6}
 		onDelete={deleteV6}
 	/>
+	</fieldset>
 </div>
 
 <!-- Modal: Add / Edit IPv4 Scope -->

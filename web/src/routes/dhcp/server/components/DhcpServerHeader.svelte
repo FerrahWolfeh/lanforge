@@ -12,10 +12,11 @@
 		loading = false,
 		saving = false,
 		reconciling = false,
-		onReconcile = () => {},
+		// Reconcile and save are hidden when left out (the session may not do them).
+		onReconcile,
 		onRefresh = () => {},
 		onDiscard = () => {},
-		onSave = () => {},
+		onSave,
 	}: {
 		isDirty?: boolean;
 		loading?: boolean;
@@ -52,6 +53,7 @@
 	</div>
 
 	<div class="flex flex-wrap items-center gap-2">
+		{#if onReconcile}
 		<Button
 			variant="outline"
 			size="sm"
@@ -65,6 +67,7 @@
 			/>
 			{reconciling ? "Auditing..." : "Reconcile Leases"}
 		</Button>
+		{/if}
 
 		<Button
 			variant="outline"
@@ -77,6 +80,7 @@
 			Refresh
 		</Button>
 
+		{#if onSave}
 		{#if isDirty}
 			<Button
 				variant="ghost"
@@ -99,5 +103,6 @@
 			<SaveIcon class={`size-3.5 mr-1.5 ${saving ? "animate-spin" : ""}`} />
 			{saving ? "Saving..." : "Save Server Options"}
 		</Button>
+		{/if}
 	</div>
 </div>

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import { onMount } from "svelte";
 	import * as Card from "$lib/components/ui/card";
 	import * as Table from "$lib/components/ui/table";
@@ -29,6 +30,8 @@
 	import { goto } from "$app/navigation";
 	import type { AdblockRuleEntry } from "$lib/api/types";
 	import DnsAdblockImportRulesDialog from "./components/DnsAdblockImportRulesDialog.svelte";
+
+	const canEdit = $derived(auth.can("dns_write"));
 
 	let activeTab = $state<"allow" | "block">("allow");
 	let loading = $state(true);
@@ -211,6 +214,7 @@
 					/>
 				</div>
 
+				{#if canEdit}
 				<Button
 					variant="outline"
 					size="sm"
@@ -220,10 +224,12 @@
 					<FileTextIcon class="size-3.5" />
 					<span>Bulk Import</span>
 				</Button>
+				{/if}
 			</div>
 		</div>
 
 		<!-- Add Domain Inline Form -->
+		{#if canEdit}
 		<Card.Root class="p-3">
 			<form onsubmit={handleAddDomain} class="flex items-center gap-2">
 				<Input
@@ -240,6 +246,7 @@
 				</Button>
 			</form>
 		</Card.Root>
+		{/if}
 
 		<!-- Allowlist Tab Content -->
 		<Tabs.Content value="allow" class="m-0">
@@ -307,6 +314,7 @@
 											<button
 												type="button"
 												onclick={() => handleToggleStatus(entry)}
+												disabled={!canEdit}
 												class="transition-transform active:scale-95"
 												title="Click to toggle rule status"
 											>
@@ -323,6 +331,7 @@
 										</Table.Cell>
 
 										<Table.Cell class="text-right">
+											{#if canEdit}
 											<Button
 												variant="ghost"
 												size="sm"
@@ -332,6 +341,7 @@
 											>
 												<Trash2Icon class="size-3.5" />
 											</Button>
+											{/if}
 										</Table.Cell>
 									</Table.Row>
 								{/each}
@@ -400,6 +410,7 @@
 											<button
 												type="button"
 												onclick={() => handleToggleStatus(entry)}
+												disabled={!canEdit}
 												class="transition-transform active:scale-95"
 												title="Click to toggle rule status"
 											>
@@ -416,6 +427,7 @@
 										</Table.Cell>
 
 										<Table.Cell class="text-right">
+											{#if canEdit}
 											<Button
 												variant="ghost"
 												size="sm"
@@ -425,6 +437,7 @@
 											>
 												<Trash2Icon class="size-3.5" />
 											</Button>
+											{/if}
 										</Table.Cell>
 									</Table.Row>
 								{/each}

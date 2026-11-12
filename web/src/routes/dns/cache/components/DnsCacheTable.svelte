@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import * as Table from "$lib/components/ui/table";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import { Button } from "$lib/components/ui/button";
@@ -17,6 +18,9 @@
 	import type { DnsCacheEntry, DnsRecordType } from "$lib/api/types";
 	import DnsCacheRecordDialog from "./DnsCacheRecordDialog.svelte";
 	import DataTableCard from "$lib/components/DataTableCard.svelte";
+
+	// Block, allow and rewrites need dns_write.
+	const canDnsWrite = $derived(auth.can("dns_write"));
 
 	let {
 		loading = false,
@@ -348,6 +352,7 @@
 											/>
 											Copy Resolved Target
 										</DropdownMenu.Item>
+										{#if canDnsWrite}
 										<DropdownMenu.Separator />
 										<DropdownMenu.Item
 											onclick={() =>
@@ -384,6 +389,7 @@
 											/>
 											Create Rewrite
 										</DropdownMenu.Item>
+										{/if}
 									</DropdownMenu.Content>
 								</DropdownMenu.Root>
 							</Table.Cell>

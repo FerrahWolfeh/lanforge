@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import * as Tabs from "$lib/components/ui/tabs";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
@@ -34,6 +35,8 @@
 	import RaStatsCards from "./components/RaStatsCards.svelte";
 	import RaStatusTab from "./components/RaStatusTab.svelte";
 	import RaConfigTab from "./components/RaConfigTab.svelte";
+
+	const canEdit = $derived(auth.can("config_write"));
 
 	// Page state
 	let status = $state<RaStatusResponse | null>(null);
@@ -273,6 +276,7 @@
 				<span>Refresh</span>
 			</Button>
 
+			{#if canEdit}
 			<Button
 				size="sm"
 				onclick={handleTriggerBurst}
@@ -282,6 +286,7 @@
 				<ZapIcon class="size-3.5 {triggering ? 'animate-pulse' : ''}" />
 				<span>Trigger Burst</span>
 			</Button>
+			{/if}
 		{/snippet}
 	</PageHeader>
 
@@ -341,6 +346,7 @@
 
 			<!-- TAB 2: Runtime Configuration -->
 			<Tabs.Content value="config">
+				<fieldset disabled={!canEdit} class="contents">
 				<RaConfigTab
 					bind:formEnabled
 					bind:formIface
@@ -365,6 +371,7 @@
 					onSave={handleSaveConfig}
 					onDiscard={handleDiscard}
 				/>
+				</fieldset>
 			</Tabs.Content>
 		</Tabs.Root>
 	{/if}

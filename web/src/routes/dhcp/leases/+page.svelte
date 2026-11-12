@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import { Button } from "$lib/components/ui/button";
 	import { toast } from "svelte-sonner";
 	import { onMount, onDestroy } from "svelte";
@@ -179,6 +180,7 @@
 		onRelease={openRelease}
 		onPromote={openPromote}
 		onWol={handleWol}
+		canEdit={auth.can("device_write")}
 	/>
 </div>
 

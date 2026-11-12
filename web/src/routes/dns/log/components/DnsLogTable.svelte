@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import * as Table from "$lib/components/ui/table";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import { Button } from "$lib/components/ui/button";
@@ -18,6 +19,9 @@
 	import type { DnsQueryLogEntry, DnsRecordType, FilterMatch } from "$lib/api/types";
 	import DnsLogDetailDialog from "./DnsLogDetailDialog.svelte";
 	import DataTableCard from "$lib/components/DataTableCard.svelte";
+
+	// Block, allow and rewrites need dns_write.
+	const canDnsWrite = $derived(auth.can("dns_write"));
 
 	let {
 		loading = false,
@@ -522,6 +526,7 @@
 											/>
 											Copy Client IP
 										</DropdownMenu.Item>
+										{#if canDnsWrite}
 										<DropdownMenu.Separator />
 										<DropdownMenu.Item
 											onclick={() =>
@@ -558,6 +563,7 @@
 											/>
 											Create Rewrite
 										</DropdownMenu.Item>
+										{/if}
 									</DropdownMenu.Content>
 								</DropdownMenu.Root>
 							</Table.Cell>

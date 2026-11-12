@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import * as Tabs from "$lib/components/ui/tabs";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
@@ -36,6 +37,9 @@
 	import FloatingSaveBar from "$lib/components/FloatingSaveBar.svelte";
 	import PageHeader from "$lib/components/PageHeader.svelte";
 	import StatusBadge from "$lib/components/StatusBadge.svelte";
+
+	// The config holds the PPPoE password: reading it, saving and dialing need config_write.
+	const canEdit = $derived(auth.can("config_write"));
 
 	// Page state
 	let status = $state<PppoeStatusResponse | null>(null);
@@ -157,7 +161,7 @@
 			const fetchSetup = !silent || availableInterfaces.length === 0;
 			const [s, c, setupRes] = await Promise.all([
 				pppoeStatus().catch(() => null),
-				pppoeConfig().catch(() => null),
+				canEdit ? pppoeConfig().catch(() => null) : Promise.resolve(null),
 				fetchSetup ? getSetupStatus().catch(() => null) : Promise.resolve(null),
 			]);
 			status = s;
@@ -359,6 +363,7 @@
 				<span>Refresh</span>
 			</Button>
 
+			{#if canEdit}
 			<Button
 				variant={status?.state === "connected" ? "outline" : "default"}
 				size="sm"
@@ -393,6 +398,7 @@
 					<span>Disconnect</span>
 				{/if}
 			</Button>
+			{/if}
 		{/snippet}
 	</PageHeader>
 
@@ -405,6 +411,11 @@
 		{formServiceName}
 	/>
 
+	{#if !canEdit}
+		<p class="text-xs text-muted-foreground">
+			The PPPoE configuration holds the account password: viewing or changing it needs configuration access.
+		</p>
+	{:else}
 	<!-- Configuration Tabs -->
 	<Tabs.Root bind:value={activeTab} class="w-full">
 		<Tabs.List class="flex w-full overflow-x-auto justify-start sm:inline-flex sm:w-auto p-1 mb-4 no-scrollbar">
@@ -456,4 +467,5 @@
 		onDiscard={handleDiscard}
 		onSave={handleSave}
 	/>
+	{/if}
 </div>
