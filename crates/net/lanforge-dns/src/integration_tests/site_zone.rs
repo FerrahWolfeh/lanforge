@@ -14,7 +14,7 @@ use crate::config::DnsConfig;
 use crate::server::service::DnsService;
 use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::network::dns::{DnsRecordType, DnsResponseCode};
+use lanforge_types::network::dns::{DnsRData, DnsRecordType, DnsResponseCode};
 use lanforge_types::system::ServiceId;
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -64,7 +64,7 @@ async fn site_names_never_leave_the_router() {
         ("x.archie.lan", A, NXDomain, 0, true),
         ("x.archie.lan", TXT, NXDomain, 0, true),
         ("lan", A, NoError, 0, true),
-        ("lan", SOA, NoError, 0, true),
+        ("lan", SOA, NoError, 1, true),
         ("archie", AAAA, NoError, 0, true),
         ("archie", NS, NoError, 0, true),
         ("printer", HTTPS, NXDomain, 0, true),
@@ -151,6 +151,102 @@ async fn local_replies_do_not_claim_validated_data() {
         assert!(!resp.header.z, "{name} {qtype:?}: Z set");
         assert_eq!(resp.header.cd, cd, "{name} {qtype:?}: CD not copied");
     }
+
+    cmd_tx.send(ServiceCommand::Stop).await.expect("alive");
+    timeout(Duration::from_secs(2), serve)
+        .await
+        .expect("serve returns on Stop")
+        .expect("join")
+        .expect("serve ok");
+}
+
+/// A local NXDOMAIN/NODATA carries the site domain's SOA in authority, with the record TTL and
+/// MINIMUM both the local TTL: without it a resolver may not cache the negative answer
+/// (RFC 2308 §3, §5). The apex answers a query for its SOA. A dotless name is in no zone the
+/// router owns, so its NXDOMAIN carries none. Holds with EDNS, whose OPT follows authority.
+#[tokio::test]
+async fn local_negative_answers_carry_the_site_soa() {
+    use DnsRecordType::{A, AAAA, SOA, TXT};
+
+    let ctx = init_test_context();
+    register_test_device(
+        &ctx,
+        "archie",
+        MacAddr([0x02, 0, 0, 0, 0, 0x57]),
+        Ipv4Addr::new(192, 168, 1, 2),
+    );
+    let cfg = DnsConfig {
+        enabled: true,
+        ttl: 42,
+        ..mock_config() // search domain `lan`
+    };
+    let (handle, mut service) = DnsService::inert(cfg, ctx.clone());
+    let (cmd_tx, cmd_rx) = mpsc::channel(4);
+    let h = ServiceHandle::with_command_channel(ServiceId::Dns, ctx.clone(), cmd_rx);
+    let ctx_serve = ctx.clone();
+    let serve = tokio::spawn(async move { service.serve(&ctx_serve, &h).await });
+    wait_for_service_online(&ctx, ServiceId::Dns).await;
+    let client: SocketAddr = "192.168.1.50:40000".parse().unwrap();
+
+    // (name, type, SOA in answer, SOA in authority)
+    let cases = [
+        ("naoexiste.lan", A, 0, 1),
+        ("x.archie.lan", TXT, 0, 1),
+        ("archie.lan", TXT, 0, 1),
+        ("ARCHIE.LAN", AAAA, 0, 1),
+        ("lan", A, 0, 1),
+        ("lan", SOA, 1, 0),
+        ("printer", A, 0, 0),
+        ("archie", TXT, 0, 0),
+    ];
+    let mut report = String::new();
+    for (i, (name, qtype, answers, authorities)) in cases.into_iter().enumerate() {
+        for edns in [false, true] {
+            let id = 100 + 2 * u16::try_from(i).unwrap() + u16::from(edns);
+            let mut query = DnsPacketBuilder::query(name, qtype)
+                .with_id(id)
+                .build_bytes();
+            if edns {
+                query[11] = 1; // ARCOUNT = 1: an OPT with a 4096-byte payload
+                query.extend_from_slice(&[0, 0, 41, 0x10, 0x00, 0, 0, 0, 0, 0, 0]);
+            }
+            handle.inject(query, client).await;
+            let (reply, _) = handle.recv_reply().await.expect("reply");
+            let label = format!("{name} {qtype:?} edns={edns}");
+            let Some(resp) = parse_response(&reply) else {
+                report.push_str(&format!("{label}: undecodable reply\n"));
+                continue;
+            };
+            if (resp.answers.len(), resp.authorities.len()) != (answers, authorities) {
+                report.push_str(&format!(
+                    "{label}: {} answers / {} authorities, want {answers} / {authorities}\n",
+                    resp.answers.len(),
+                    resp.authorities.len()
+                ));
+                continue;
+            }
+            if usize::from(edns) != resp.additionals.len() {
+                report.push_str(&format!("{label}: OPT lost\n"));
+            }
+            for soa in resp.answers.iter().chain(&resp.authorities) {
+                let DnsRData::SOA(data) = &soa.rdata else {
+                    report.push_str(&format!("{label}: not a SOA: {:?}\n", soa.rdata));
+                    continue;
+                };
+                let got = (
+                    soa.name.trim_end_matches('.'),
+                    soa.ttl,
+                    data.mname.trim_end_matches('.'),
+                    data.rname.trim_end_matches('.'),
+                    data.minimum,
+                );
+                if got != ("lan", 42, "lan", "hostmaster.lan", 42) {
+                    report.push_str(&format!("{label}: SOA {got:?}\n"));
+                }
+            }
+        }
+    }
+    assert!(report.is_empty(), "\n{report}");
 
     cmd_tx.send(ServiceCommand::Stop).await.expect("alive");
     timeout(Duration::from_secs(2), serve)

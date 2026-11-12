@@ -14,7 +14,8 @@ use crate::error::DnsError;
 use crate::utils::{extract_local_hostname, fast_lowercase, parse_arpa, parse_arpa_wire};
 use lanforge_core::context::LanforgeContext;
 use lanforge_dns_wire::{
-    PtrResponseArgs, WireHeader, WireLabelIter, WireOptScanner, WireQuestion, WireResponseWriter,
+    PtrResponseArgs, SoaResponseArgs, WireHeader, WireLabelIter, WireOptScanner, WireQuestion,
+    WireResponseWriter,
 };
 use lanforge_types::network::dns::{DnsClass, DnsRData, DnsRecord, DnsRecordType};
 
@@ -51,12 +52,13 @@ impl LocalZone {
 /// Where a query name sits relative to the site's domains.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SitePlace<'a> {
-    /// A site domain itself (`lan`).
-    Apex,
+    /// A site domain itself (`lan`). Each variant under a site domain carries the index of
+    /// that domain in [`LocalZone::domains`].
+    Apex(usize),
     /// One label under a site domain (`archie.lan`): a LAN host name.
-    Host(&'a [u8]),
+    Host(&'a [u8], usize),
     /// Deeper under a site domain (`x.archie.lan`): the LAN serves no such names.
-    Deeper,
+    Deeper(usize),
     /// Not under any site domain.
     Outside,
 }
@@ -66,7 +68,7 @@ impl LocalZone {
     #[must_use]
     pub fn place<'a>(&self, labels: WireLabelIter<'a>) -> SitePlace<'a> {
         let name: SmallVec<[&[u8]; 8]> = labels.collect();
-        for domain in &self.labels {
+        for (zone, domain) in self.labels.iter().enumerate() {
             let Some(below) = name.len().checked_sub(domain.len()) else {
                 continue;
             };
@@ -76,9 +78,9 @@ impl LocalZone {
                 .all(|(a, b)| a.eq_ignore_ascii_case(b));
             if under {
                 return match below {
-                    0 => SitePlace::Apex,
-                    1 => SitePlace::Host(name[0]),
-                    _ => SitePlace::Deeper,
+                    0 => SitePlace::Apex(zone),
+                    1 => SitePlace::Host(name[0], zone),
+                    _ => SitePlace::Deeper(zone),
                 };
             }
         }
@@ -340,9 +342,10 @@ impl LocalResolver {
     /// Names under the site's domains never leave the router (dnsmasq's `local=/lan/`): a host
     /// the LAN knows answers its addresses, or NODATA for any other type; a host it does not
     /// know, or a deeper name, is NXDOMAIN; the domain itself is NODATA (an NXDOMAIN there
-    /// would deny every name under it, RFC 8020). A dotless name is looked up as a LAN host and
-    /// never forwarded either (dnsmasq's `domain-needed`) — an `IoT` device looping on `:0` is
-    /// answered here — except the root and TLD delegation lookups (NS/SOA/DS/DNSKEY of a name
+    /// would deny every name under it, RFC 8020). Those negative answers carry the site domain's
+    /// SOA so resolvers may cache them (RFC 2308 §3), and the domain answers a query for its SOA.
+    /// A dotless name is looked up as a LAN host and never forwarded either (dnsmasq's
+    /// `domain-needed`) — an `IoT` device looping on `:0` is answered here — except the root and TLD delegation lookups (NS/SOA/DS/DNSKEY of a name
     /// that is not a LAN host, e.g. `. NS`, `com. DS`). Reverse names (PTR) of LAN addresses
     /// are answered when known, else forwarded.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
@@ -355,23 +358,47 @@ impl LocalResolver {
         resp: &mut Vec<u8>,
     ) -> bool {
         let qtype = DnsRecordType::from(question.qtype());
-        let reply = |rcode: u8, resp: &mut Vec<u8>| {
-            WireResponseWriter::write_error_response(
-                data,
-                question,
-                rcode,
-                WireOptScanner::scan(data, header, question),
-                has_upstreams,
-                resp,
-            );
+        let zone = self.zone();
+        let place = zone.place(question.labels());
+        // The site domain the name is under; a dotless name is not in any zone the router owns.
+        let apex = match place {
+            SitePlace::Apex(i) | SitePlace::Host(_, i) | SitePlace::Deeper(i) => {
+                Some(zone.domains[i].as_str())
+            }
+            SitePlace::Outside => None,
+        };
+        let reply = |rcode: u8, answer: bool, resp: &mut Vec<u8>| {
+            let edns = WireOptScanner::scan(data, header, question);
+            match apex {
+                Some(zone) => WireResponseWriter::write_soa_response(
+                    SoaResponseArgs {
+                        query_data: data,
+                        question,
+                        rcode,
+                        zone,
+                        ttl: self.cfg.ttl,
+                        answer,
+                        edns,
+                        ra: has_upstreams,
+                    },
+                    resp,
+                ),
+                None => WireResponseWriter::write_error_response(
+                    data,
+                    question,
+                    rcode,
+                    edns,
+                    has_upstreams,
+                    resp,
+                ),
+            }
             true
         };
 
-        let place = self.zone().place(question.labels());
         let host = match place {
-            SitePlace::Apex => return reply(0, resp),
-            SitePlace::Deeper => return reply(3, resp),
-            SitePlace::Host(label) => label,
+            SitePlace::Apex(_) => return reply(0, qtype == DnsRecordType::SOA, resp),
+            SitePlace::Deeper(_) => return reply(3, false, resp),
+            SitePlace::Host(label, _) => label,
             SitePlace::Outside => {
                 let mut labels = question.labels();
                 match (labels.next(), labels.next()) {
@@ -403,7 +430,7 @@ impl LocalResolver {
                 );
                 return true;
             }
-            return reply(if device_exists { 0 } else { 3 }, resp);
+            return reply(if device_exists { 0 } else { 3 }, false, resp);
         }
 
         let (ips, device_exists) = self.resolve_ip_status(&host, DnsRecordType::A);
@@ -418,7 +445,7 @@ impl LocalResolver {
         if place == SitePlace::Outside && delegation && !known {
             return false;
         }
-        reply(if known { 0 } else { 3 }, resp)
+        reply(if known { 0 } else { 3 }, false, resp)
     }
 
     /// The PTR answer for a reverse name of a LAN address, when the router knows it.

@@ -624,6 +624,24 @@ pub struct PtrResponseArgs<'a> {
     pub ra: bool,
 }
 
+/// Arguments for writing a local reply that carries the zone's SOA.
+#[derive(Clone, Copy)]
+pub struct SoaResponseArgs<'a> {
+    pub query_data: &'a [u8],
+    pub question: &'a WireQuestion<'a>,
+    /// `0` (NODATA, or the apex SOA itself) or `3` (NXDOMAIN).
+    pub rcode: u8,
+    /// The zone apex, dot-separated (`lan`).
+    pub zone: &'a str,
+    /// The record's TTL and its MINIMUM field: how long a resolver keeps the negative answer
+    /// (RFC 2308 §5).
+    pub ttl: u32,
+    /// In the answer section (a query for the apex SOA); otherwise in authority.
+    pub answer: bool,
+    pub edns: Option<WireOptScanner>,
+    pub ra: bool,
+}
+
 impl WireResponseWriter {
     /// Appends dot-separated domain labels to a buffer in DNS wire format without terminating with 0.
     #[inline]
@@ -895,6 +913,60 @@ impl WireResponseWriter {
 
         // 4. EDNS
         if let Some(opt) = edns {
+            Self::write_opt(resp, opt);
+        }
+    }
+
+    /// Writes an authoritative reply with the zone's SOA: the answer to a query for it, or
+    /// the authority record of a local NXDOMAIN/NODATA, without which a resolver may not cache
+    /// the negative answer (RFC 2308 §3). The router serves no zone transfers: the serial and
+    /// timers only have to be valid.
+    pub fn write_soa_response(args: SoaResponseArgs, resp: &mut Vec<u8>) {
+        const HOSTMASTER: &[u8] = b"\x0ahostmaster";
+        resp.clear();
+        let capacity = 12 + args.question.data.len() + 2 * args.zone.len() + 48 + 11;
+        if resp.capacity() < capacity {
+            resp.reserve(capacity);
+        }
+
+        // 1. Header
+        let mut h = [0u8; 12];
+        h.copy_from_slice(&args.query_data[0..12]);
+        h[2] |= 0x84; // QR = 1, AA = 1
+        h[3] = Self::answer_flags(h[3], args.ra, args.rcode);
+        h[6..12].fill(0);
+        if args.answer {
+            h[7] = 1; // ANCOUNT = 1
+        } else {
+            h[9] = 1; // NSCOUNT = 1
+        }
+        h[11] = u8::from(args.edns.is_some());
+        resp.extend_from_slice(&h);
+
+        // 2. Question
+        resp.extend_from_slice(&args.question.data[12..]);
+
+        // 3. SOA: owner, then MNAME (the owner again) and RNAME `hostmaster.<zone>`, both
+        // compressed against the owner.
+        let owner = u16::try_from(resp.len()).unwrap_or(u16::MAX) | 0xC000;
+        Self::write_domain_labels(resp, args.zone);
+        resp.push(0);
+        let ttl = args.ttl.to_be_bytes();
+        resp.extend_from_slice(&[0x00, 6, 0x00, 0x01]); // Type SOA (6), Class IN (1)
+        resp.extend_from_slice(&ttl);
+        let rdlen = 2 + HOSTMASTER.len() + 2 + 5 * 4;
+        resp.extend_from_slice(&u16::try_from(rdlen).unwrap_or(u16::MAX).to_be_bytes());
+        resp.extend_from_slice(&owner.to_be_bytes());
+        resp.extend_from_slice(HOSTMASTER);
+        resp.extend_from_slice(&owner.to_be_bytes());
+        for field in [1u32, 3600, 600, 86_400] {
+            // SERIAL, REFRESH, RETRY, EXPIRE
+            resp.extend_from_slice(&field.to_be_bytes());
+        }
+        resp.extend_from_slice(&ttl); // MINIMUM
+
+        // 4. EDNS
+        if let Some(opt) = args.edns {
             Self::write_opt(resp, opt);
         }
     }
