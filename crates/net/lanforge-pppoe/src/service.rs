@@ -4,10 +4,9 @@ use crate::config::{PppoeConfig, PppoeCredentials};
 use crate::discovery::{DiscoveryResult, PppoeDiscovery, send_padt};
 use crate::error::PppoeError;
 use crate::handoff::SessionRecord;
-use crate::host::{KernelHost, PppoeHost, resolve_parent_iface};
+use crate::host::{KeptLink, KernelHost, PppoeHost, resolve_parent_iface};
 use crate::ipcp::{IpcpNegotiated, negotiate_ipcp};
 use crate::keepalive::{PadtWatch, confirm_alive, run_keepalive};
-use crate::kernel::KernelSession;
 use crate::lcp::{LcpNegotiated, negotiate_lcp};
 use crate::session::PppoeSession;
 use crate::wan_dns::follow_wan_rdnss;
@@ -848,8 +847,8 @@ impl<H: PppoeHost> PppoeService<H> {
     #[allow(clippy::too_many_lines)]
     async fn run_session_flow(&mut self) -> Result<Option<SystemInterrupt>, PppoeError> {
         self.last_uptime = None;
-        if let Some((record, kernel)) = self.host.kept_session()
-            && let Some(res) = self.take_over(record, kernel).await
+        if let Some((record, link)) = self.host.kept_session()
+            && let Some(res) = self.take_over(record, link).await
         {
             return res;
         }
@@ -961,7 +960,7 @@ impl<H: PppoeHost> PppoeService<H> {
     async fn take_over(
         &mut self,
         record: SessionRecord,
-        kernel: Option<KernelSession>,
+        link: KeptLink,
     ) -> Option<Result<Option<SystemInterrupt>, PppoeError>> {
         let disc = record.discovery();
         let lcp = record.lcp();
@@ -991,8 +990,9 @@ impl<H: PppoeHost> PppoeService<H> {
             if !record.dialled_with(&self.cfg) {
                 return Err("it was dialled with other settings".to_owned());
             }
-            let session = PppoeSession::adopt(transport.clone(), kernel.as_ref())
-                .map_err(|e| e.to_string())?;
+            let session = PppoeSession::adopt(transport.clone(), &link)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "its link did not survive the restart".to_owned())?;
             if !confirm_alive(&session, lcp.local_magic, lcp.peer_magic).await {
                 return Err("the access concentrator does not answer on it".to_owned());
             }
@@ -1031,7 +1031,7 @@ impl<H: PppoeHost> PppoeService<H> {
                 instant_of(record.connected_at_unix_ms),
             )
             .await;
-        drop(kernel);
+        drop(link);
         Some(self.end_session(res, &disc).await)
     }
 

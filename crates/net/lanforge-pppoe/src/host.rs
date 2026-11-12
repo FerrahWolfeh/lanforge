@@ -17,6 +17,17 @@ use std::path::Path;
 use std::str;
 use tracing::{debug, info, warn};
 
+/// What still carries a kept session ([`PppoeHost::kept_session`]).
+pub enum KeptLink {
+    /// The kernel link, through copies of its descriptors.
+    Kernel(KernelSession),
+    /// The transport itself (test stand-ins, whose session channel is the link).
+    Transport,
+    /// Nothing: the descriptors did not come back or the interface is gone. The session can only
+    /// be ended (PADT).
+    Lost,
+}
+
 /// The host operations of a `PPPoE` session: interface lookup, link state, and the kernel side
 /// of bringing the PPP link up.
 pub trait PppoeHost: Send + Sync + 'static {
@@ -48,7 +59,7 @@ pub trait PppoeHost: Send + Sync + 'static {
     }
 
     /// The session kept by a previous process (or service task), to take over.
-    fn kept_session(&self) -> Option<(SessionRecord, Option<KernelSession>)> {
+    fn kept_session(&self) -> Option<(SessionRecord, KeptLink)> {
         None
     }
 
@@ -119,15 +130,13 @@ impl PppoeHost for KernelHost {
         kernel.is_some_and(|k| store::keep(k, record))
     }
 
-    fn kept_session(&self) -> Option<(SessionRecord, Option<KernelSession>)> {
+    fn kept_session(&self) -> Option<(SessionRecord, KeptLink)> {
         let (record, kernel) = store::kept()?;
         // The link must still be the one the record describes.
-        if sys::if_name_to_index(&record.interface).is_none() {
-            warn!(interface = %record.interface, "Kept PPPoE interface is gone");
-            store::release();
-            return None;
-        }
-        Some((record, Some(kernel)))
+        let link = kernel
+            .filter(|_| sys::if_name_to_index(&record.interface).is_some())
+            .map_or(KeptLink::Lost, KeptLink::Kernel);
+        Some((record, link))
     }
 
     fn release_session(&self) {

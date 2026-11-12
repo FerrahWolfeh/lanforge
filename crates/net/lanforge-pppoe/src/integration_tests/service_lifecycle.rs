@@ -8,6 +8,7 @@ use super::mock_bras::{MockBrasConfig, spawn_mock_bras};
 use crate::backoff::REJECT_FLOOR;
 use crate::discovery::DiscoveryResult;
 use crate::handoff::SessionRecord;
+use crate::host::KeptLink;
 use crate::ipcp::IpcpNegotiated;
 use crate::kernel::KernelSession;
 use crate::lcp::LcpNegotiated;
@@ -1454,6 +1455,8 @@ async fn a_concentrator_reusing_one_session_id_still_connects_and_reconnects() {
 struct KeepingHost {
     kept: Arc<Mutex<Option<SessionRecord>>>,
     releases: Arc<Mutex<usize>>,
+    /// The record comes back without its link (descriptors refused by the store).
+    link_lost: bool,
 }
 
 impl KeepingHost {
@@ -1493,8 +1496,13 @@ impl PppoeHost for KeepingHost {
         true
     }
 
-    fn kept_session(&self) -> Option<(SessionRecord, Option<KernelSession>)> {
-        self.kept().map(|r| (r, None))
+    fn kept_session(&self) -> Option<(SessionRecord, KeptLink)> {
+        let link = if self.link_lost {
+            KeptLink::Lost
+        } else {
+            KeptLink::Transport
+        };
+        self.kept().map(|r| (r, link))
     }
 
     fn release_session(&self) {
@@ -1679,6 +1687,35 @@ async fn a_kept_session_dialled_with_other_credentials_is_redialled() {
         assert_eq!(seen.padts, ONE_PADT, "the old session is terminated");
         assert_eq!(seen.chap_names, vec!["client1".to_string()]);
     }
+    shut_down(&ctx, &bus, handle, false).await;
+}
+
+/// Box, SELinux enforcing: systemd refused the `/dev/ppp` and `AF_PPPOX` descriptors and kept only
+/// the record, so the link died with the old process. The old session must be ended with a PADT
+/// (it stayed half-open on the concentrator, and the restarted daemon looped on timeouts), and a
+/// new one dialled.
+#[tokio::test(start_paused = true)]
+async fn a_kept_record_without_its_link_ends_the_old_session() {
+    let cfg = handoff_cfg();
+    let bras = MockBrasConfig::default();
+    let seen = Arc::clone(&bras.seen);
+    let (handle_inert, transport) = PppoeTransport::inert();
+    let _bras = spawn_mock_bras(handle_inert, bras);
+    let host = KeepingHost {
+        link_lost: true,
+        ..KeepingHost::default()
+    };
+    *host.kept.lock().unwrap() = Some(kept_record(&cfg, 0x0077));
+
+    let (ctx, bus, mut sub, handle) = start_instance(&cfg, &transport, &host);
+    let up = session_up_within(&mut sub, Duration::from_secs(30)).await;
+    assert_eq!(up.session_id, 0x0042, "a newly dialled session");
+    {
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.padts, ONE_PADT, "the lost session is terminated");
+        assert_eq!(seen.padis, 1);
+    }
+    assert_eq!(*host.releases.lock().unwrap(), 1);
     shut_down(&ctx, &bus, handle, false).await;
 }
 
