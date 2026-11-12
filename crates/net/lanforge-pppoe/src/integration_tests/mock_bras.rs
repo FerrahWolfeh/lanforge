@@ -7,6 +7,7 @@ use lanforge_types::identifiers::MacAddr;
 use smallvec::{SmallVec, smallvec};
 use std::future;
 use std::net::Ipv4Addr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::task::JoinHandle;
@@ -23,6 +24,8 @@ pub struct MockBrasConfig {
     pub auth_ok: bool,
     pub fail_discovery: bool,
     pub send_echo_replies: bool,
+    /// While set, Echo-Requests go unanswered (an ISP link that stalls and recovers).
+    pub echo_muted: Arc<AtomicBool>,
     /// Send an LCP Terminate-Request this long after the session comes up (flapping concentrator).
     pub terminate_after: Option<Duration>,
     /// Send a PADT (discovery stage) this long after the session comes up (ISP-side hangup).
@@ -61,6 +64,7 @@ impl Default for MockBrasConfig {
             auth_ok: true,
             fail_discovery: false,
             send_echo_replies: true,
+            echo_muted: Arc::default(),
             terminate_after: None,
             padt_after: None,
             pado_delay: None,
@@ -236,7 +240,7 @@ pub fn spawn_mock_bras(handle: PppoeInertHandle, cfg: MockBrasConfig) -> JoinHan
                                     handle.inject_session(bras_req).await;
                                 }
                                 9 => { // Echo-Req
-                                    if cfg.send_echo_replies {
+                                    if cfg.send_echo_replies && !cfg.echo_muted.load(Ordering::Relaxed) {
                                         let rep = vec![
                                             0xc0, 0x21, // PPP_LCP
                                             0x0a,       // Echo-Reply
