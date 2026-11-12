@@ -1,0 +1,6 @@
+# Size budget of the stripped release binaries (`cargo build --release`, WebUI embedded), in bytes.
+# scripts/check-size.sh fails when a binary grows more than SIZE_TOLERANCE_PCT (5) % over its line.
+# A deliberate growth raises the line in the same commit; a large shrink lowers it.
+# <binary> <bytes>   (measured at v0.49.0)
+lanforged 16780480
+lanforge 7434824
