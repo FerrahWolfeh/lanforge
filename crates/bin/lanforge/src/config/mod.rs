@@ -388,7 +388,11 @@ impl Config {
     #[cfg(feature = "ra")]
     #[must_use]
     pub fn to_ra_config(&self) -> RaConfig {
-        RaConfig::from(self.effective_ra())
+        RaConfig {
+            // Without the DNS server built in, clients get the ISP's resolvers, not this host.
+            local_dns: cfg!(feature = "dns"),
+            ..RaConfig::from(self.effective_ra())
+        }
     }
 
     /// Builds a `Dhcpv4Config` from the merged configuration.

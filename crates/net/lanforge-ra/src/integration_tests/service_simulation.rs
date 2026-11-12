@@ -716,3 +716,109 @@ async fn test_ra_never_advertises_a_made_up_mac() {
     );
     drop(bus);
 }
+
+/// The RDNSS servers in an RA's options (after the 16-byte RA header).
+fn rdnss_servers(ra: &[u8]) -> Vec<Ipv6Addr> {
+    let mut out = Vec::new();
+    let mut idx = 16;
+    while idx + 8 <= ra.len() {
+        let (kind, len) = (ra[idx], usize::from(ra[idx + 1]) * 8);
+        if kind == 25 {
+            for chunk in ra[idx + 8..idx + len].chunks(16) {
+                out.push(Ipv6Addr::from(<[u8; 16]>::try_from(chunk).unwrap()));
+            }
+        }
+        idx += len.max(8);
+    }
+    out
+}
+
+/// With no `[ra.rdnss]`, the RDNSS follows the same rule as `DHCPv6` option 23: this router
+/// while its DNS serves; with `[dns] enabled = false`, the ISP's IPv6 resolvers from the live
+/// `PPPoE` session (never its IPv4 ones); while an enabled DNS is not serving, none.
+#[tokio::test]
+async fn test_ra_rdnss_falls_back_to_the_isp_only_when_local_dns_is_off() {
+    use lanforge_types::config::DnsListenConfig;
+    use lanforge_types::system::{PppoeSessionState, PppoeStatusResponse};
+    use std::net::{IpAddr, Ipv4Addr};
+
+    let (ctx, _bus) = create_test_context();
+    ctx.update_ra_server_config(RaServerConfig {
+        enabled: true,
+        iface: Some("lan0".into()),
+        prefixes: vec![RAPrefix {
+            source: PrefixSource::Static,
+            address: Some("2001:db8:cafe::".to_string()),
+            prefix_len: 64,
+            on_link: true,
+            autonomous: true,
+            router_addr: false,
+            valid_lifetime: PrefixLifetime::Secs(86400),
+            preferred_lifetime: PrefixLifetime::Secs(14400),
+        }],
+        ..RaServerConfig::default()
+    });
+    let ula: Ipv6Addr = "fd97:f00d:cafe:3731::1".parse().unwrap();
+    let _ = ctx.apply(DeviceUpdate::InterfaceIpsChanged {
+        ifindex: LAN,
+        state: Box::new(InterfaceState {
+            v4: None,
+            link_local: Some("fe80::1".parse().unwrap()),
+            gua: None,
+            ula: Some(ula),
+            gua_preferred: 0,
+            gua_valid: 0,
+            mac: Some(MacAddr([0x02, 0, 0, 0, 0, 0x01])),
+        }),
+    });
+    let isp: Ipv6Addr = "2804:14d:1:0:181:213:132:2".parse().unwrap();
+    ctx.set_pppoe_status(Some(PppoeStatusResponse {
+        enabled: true,
+        state: PppoeSessionState::Connected,
+        dns_servers: vec![IpAddr::V4(Ipv4Addr::new(200, 175, 5, 139)), IpAddr::V6(isp)],
+        ..Default::default()
+    }));
+    let dns_off = DnsListenConfig {
+        enabled: false,
+        ..DnsListenConfig::default()
+    };
+
+    // The startup RA of a fresh service.
+    let first_ra = || async {
+        let (handle, transport) = lanforge_transport::Icmp6Transport::inert();
+        let mut service = RaService::with_transport(RaConfig::default(), ctx.clone(), transport);
+        let ctx_serve = ctx.clone();
+        let serve = tokio::spawn(async move {
+            let h = ServiceHandle::new(ServiceId::Ra, ctx_serve.clone());
+            service.serve(&ctx_serve, &h).await
+        });
+        let Ok(Some(ra)) = timeout(Duration::from_millis(500), handle.recv_payload()).await else {
+            panic!("no startup RA: {:?} {:?}", ctx.get_service_state(ServiceId::Ra), serve.await);
+        };
+        serve.abort();
+        let _ = serve.await;
+        rdnss_servers(&ra)
+    };
+
+    ctx.update_dns_listen(dns_off.clone());
+    assert_eq!(first_ra().await, [isp], "DNS off: the ISP's IPv6 ones");
+
+    ctx.update_dns_listen(DnsListenConfig::default());
+    ctx.set_service_state(ServiceId::Dns, ServiceState::Online);
+    assert_eq!(first_ra().await, [ula], "DNS serving: this router");
+
+    ctx.set_service_state(ServiceId::Dns, ServiceState::Starting);
+    assert_eq!(
+        first_ra().await,
+        Vec::<Ipv6Addr>::new(),
+        "DNS restarting: none"
+    );
+
+    ctx.update_dns_listen(dns_off);
+    ctx.set_pppoe_status(None);
+    assert_eq!(
+        first_ra().await,
+        Vec::<Ipv6Addr>::new(),
+        "DNS off, WAN down: none"
+    );
+}

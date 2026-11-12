@@ -39,6 +39,10 @@ pub const LIFETIME_INFINITY: u32 = u32::MAX;
 /// Maps directly to RA packet fields and options per RFC 4861 and RFC 8106.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent switches: the RFC 4861 M/O flags, prefix deprecation, DNS built in"
+)]
 pub struct RaConfig {
     /// Network interface name (e.g., `"eth0"`).
     pub iface: String,
@@ -81,6 +85,9 @@ pub struct RaConfig {
     pub dnssl: Vec<DnsslConfig>,
     /// Whether to explicitly deprecate obsolete IPv6 prefixes on renumbering (RFC 4862 §5.5.3e).
     pub deprecate_on_renumber: bool,
+    /// Whether the daemon is built with its DNS server (`[dns] enabled` is read live).
+    #[serde(skip, default = "default_true")]
+    pub local_dns: bool,
 }
 
 const fn default_true() -> bool {
@@ -153,6 +160,7 @@ impl RaServiceConfig {
             rdnss: self.rdnss.clone(),
             dnssl: self.dnssl.clone(),
             deprecate_on_renumber: self.deprecate_on_renumber,
+            local_dns: true,
         }
     }
 }
@@ -175,6 +183,7 @@ impl Default for RaConfig {
             rdnss: Vec::new(),
             dnssl: Vec::new(),
             deprecate_on_renumber: true,
+            local_dns: true,
         }
     }
 }
@@ -197,6 +206,7 @@ impl From<RaServerConfig> for RaConfig {
             rdnss: cfg.rdnss,
             dnssl: cfg.dnssl,
             deprecate_on_renumber: cfg.deprecate_on_renumber,
+            local_dns: true,
         }
     }
 }

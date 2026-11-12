@@ -56,10 +56,10 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_types::device::Device;
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::network::Ipv6Prefix;
-use lanforge_types::system::{PppoeSessionState, ServiceId};
+use lanforge_types::system::ServiceId;
 use lanforge_types::utils::mac_from_eui64_link_local;
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::Ipv6Addr;
 use std::str::FromStr;
 use std::string::ToString;
 use std::sync::Arc;
@@ -1122,16 +1122,7 @@ impl Dhcpv6Server {
         }
         self.ctx
             .pppoe_status()
-            .filter(|s| s.state == PppoeSessionState::Connected)
-            .map(|s| {
-                s.dns_servers
-                    .iter()
-                    .filter_map(|ip| match ip {
-                        IpAddr::V6(v6) => Some(*v6),
-                        IpAddr::V4(_) => None,
-                    })
-                    .collect()
-            })
+            .map(|s| s.ipv6_dns_servers().collect())
             .unwrap_or_default()
     }
 
@@ -1249,12 +1240,15 @@ mod tests {
     use lanforge_types::{
         device::{Device, Ipv6AddrOrSuffix, Origin},
         network::{Ipv6Suffix, dhcp::Dhcpv6Pool},
-        system::{PppoeStatusResponse, ServiceState},
+        system::{PppoeSessionState, PppoeStatusResponse, ServiceState},
         update::{CliHostUpdate, DeviceUpdate, FieldUpdate, InterfaceState, V6LeaseUpdate},
     };
     use std::iter;
     use std::{collections::HashMap, time::Duration};
-    use std::{net::Ipv6Addr, time::SystemTime};
+    use std::{
+        net::{IpAddr, Ipv6Addr},
+        time::SystemTime,
+    };
 
     fn dummy_server() -> Dhcpv6Server {
         let ctx = init_test_context();
