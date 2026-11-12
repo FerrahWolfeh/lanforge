@@ -70,6 +70,9 @@ TARGET=user@gateway ./deploy/deploy-remote.sh --daemon
 
 # Deploy only the CLI binary
 TARGET=user@gateway ./deploy/deploy-remote.sh --cli
+
+# Apply the SELinux policy (ports, file contexts, PPPoE fd store module); no restart
+TARGET=user@gateway ./deploy/deploy-remote.sh --selinux
 ```
 
 ---

@@ -8,6 +8,7 @@ set -euo pipefail
 #   TARGET=user@gateway ./deploy/deploy-remote.sh --cli      # Build and deploy lanforge CLI only
 #   TARGET=user@gateway ./deploy/deploy-remote.sh --ui       # Rebuild WebUI bundle before compiling daemon
 #   TARGET=user@gateway ./deploy/deploy-remote.sh --setup    # Run full initial installer on gateway
+#   TARGET=user@gateway ./deploy/deploy-remote.sh --selinux  # Apply the SELinux policy only (no restart)
 
 TARGET="${TARGET:-${GATEWAY_HOST:-}}"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -140,6 +141,29 @@ deploy_setup() {
     echo "==> [Initial Setup] Remote setup completed!"
 }
 
+deploy_selinux() {
+    echo ""
+    echo "==> [SELinux] Packaging deploy/selinux..."
+    local tmp_tar="/tmp/lanforge-selinux-bundle-$$.tar.gz"
+    tar -czf "$tmp_tar" -C "$PROJECT_ROOT/deploy" selinux
+
+    echo "==> [SELinux] Uploading to $TARGET:/tmp/..."
+    scp "$tmp_tar" "$TARGET:/tmp/lanforge-selinux-bundle.tar.gz"
+    rm -f "$tmp_tar"
+
+    # Idempotent and leaves the daemon running: ports, file contexts and policy modules only.
+    echo "==> [SELinux] Running install-selinux.sh on gateway..."
+    ssh -t "$TARGET" "
+        cd /tmp && \
+        rm -rf lanforge-selinux && mkdir lanforge-selinux && \
+        tar -xzf lanforge-selinux-bundle.tar.gz -C lanforge-selinux && \
+        sudo bash lanforge-selinux/selinux/install-selinux.sh && \
+        sudo semodule -l | grep lanforge; \
+        rm -rf lanforge-selinux-bundle.tar.gz lanforge-selinux
+    "
+    echo "==> [SELinux] Policy applied (no restart)."
+}
+
 ACTION="${1:---all}"
 
 case "$ACTION" in
@@ -159,12 +183,15 @@ case "$ACTION" in
     --setup)
         deploy_setup
         ;;
+    --selinux|-s)
+        deploy_selinux
+        ;;
     --all|-a)
         deploy_all
         ;;
     *)
         echo "Unknown option: $ACTION"
-        echo "Usage: $0 [--all | --daemon | --cli | --ui | --setup]"
+        echo "Usage: $0 [--all | --daemon | --cli | --ui | --setup | --selinux]"
         exit 1
         ;;
 esac
