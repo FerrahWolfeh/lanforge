@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/FerrahWolfeh/lanforge/actions/workflows/ci.yml/badge.svg)](https://github.com/FerrahWolfeh/lanforge/actions/workflows/ci.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.85%2B%20(2024)-orange.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-stable%20(2024)-orange.svg)](https://www.rust-lang.org)
 
 > **Unified Network Orchestration, Routing, and LAN Gateway for Linux.**
 
@@ -31,14 +31,14 @@ Maintaining a **unified, reactive identity table** for every device on your netw
   - Integrated SQM (Smart Queue Management) with CAKE and fq_codel queue disciplines for bufferbloat elimination.
   - Granular hardware offloading controls (GRO, GSO, TSO) and per-interface bandwidth telemetry.
 
-- **Network Discovery & Device Tracking (`lanforge-discovery`, `lanforge-wol`)**
-  - **Passive & Active Discovery**: Real-time tracking via Netlink (ARP/NDP), mDNS sniffing, active probes, and LLDP topology extraction.
+- **Network Discovery & Device Tracking (`lanforge-discovery`)**
+  - **Passive & Active Discovery**: Real-time tracking via Netlink (ARP/NDP), mDNS hostname probing, and active probes.
   - **Vendor Resolution**: Integrated MAC OUI lookup for effortless device identification.
-  - **Wake-on-LAN (WoL)**: Magic packet injection directly from CLI, WebUI, or API.
+  - **Wake-on-LAN (WoL)**: Magic packets sent from the CLI, WebUI, or API (implemented in `lanforge-transport`).
 
 - **High-Performance DNS Stack (`lanforge-dns`, `lanforge-dns-wire`)**
   - **Authoritative & Recursive Resolver**: Low-latency local resolution combined with encrypted upstream forwarding.
-  - **Modern Transports**: Native support for **DNS-over-TLS (DoT)**, **DNS-over-QUIC (DoQ)**, and **DNS-over-HTTPS (DoH)**.
+  - **Modern Transports**: Native support for **DNS-over-TLS (DoT)** and **DNS-over-HTTPS (DoH)**, plus **DNS-over-QUIC (DoQ)** behind the optional `dns-doq` Cargo feature (not in the default build).
   - **Micro-Adblocker**: Zero-allocation hot-path domain filtering with custom blocklists, allowlists, and real-time query logging.
 
 - **Network Booting (`lanforge-tftp`)**
@@ -46,7 +46,7 @@ Maintaining a **unified, reactive identity table** for every device on your netw
 
 - **Modern WebUI & Rich APIs**
   - **Embedded SvelteKit WebUI**: Full-featured, responsive management dashboard built with SvelteKit, shadcn-svelte, and Tailwind CSS.
-  - **Rich APIs**: JSON-RPC over Unix Domain Sockets (UDS) and REST / Server-Sent Events (SSE) over HTTP.
+  - **Rich APIs**: Binary RPC (postcard) over a Unix Domain Socket (UDS) and REST / Server-Sent Events (SSE) over HTTP.
   - **Admin CLI & Lab Testbed**: Complete `lanforge` CLI tool and `lanforge-lab` rootless simulation testbed.
 
 - **Resilient Embedded Persistence (`lanforge-db`)**
@@ -57,7 +57,7 @@ Maintaining a **unified, reactive identity table** for every device on your netw
 
 ## Architecture
 
-Lanforge is organized as a modular 26-crate workspace structured across four architectural tiers (L0 to L3). It follows a reactive, event-driven CQRS architecture centered around `LanforgeContext` and a topic-isolated broadcast `EventBus`:
+Lanforge is organized as a modular 25-crate workspace structured across four architectural tiers (L0 to L3). It follows a reactive, event-driven CQRS architecture centered around `LanforgeContext` and a topic-isolated broadcast `EventBus`:
 
 ```mermaid
 graph TD
@@ -107,13 +107,14 @@ See [**ARCHITECTURE.md**](docs/ARCHITECTURE.md) and [**NETWORKING_ARCH.md**](doc
 ## Quick Start
 
 ### 1. Build
-Requires Rust 1.85+ (Edition 2024), Node.js / pnpm (for WebUI), and standard Linux build tools.
+Requires a recent stable Rust toolchain (Edition 2024), Node.js with pnpm (for the WebUI), and standard Linux build tools.
 
 ```bash
-# Build the WebUI static assets
-cd web && pnpm install && pnpm build && cd ..
+# Install the WebUI dependencies (once per clone)
+pnpm --prefix web install
 
-# Build the release binaries (lanforged daemon and lanforge CLI)
+# Build the release binaries (lanforged daemon and lanforge CLI).
+# The lanforge-webui build script runs the WebUI build and embeds the assets.
 cargo build --release
 ```
 
@@ -151,7 +152,7 @@ range = "192.168.1.100-192.168.1.250"
 
 [dns]
 enabled = true
-listen = "0.0.0.0:53"
+listen = "[::]:53"  # binds separate IPv4 and IPv6 sockets
 
 [dns.upstreams.default]
 addresses = ["udp://1.1.1.1:53", "udp://9.9.9.9:53"]
