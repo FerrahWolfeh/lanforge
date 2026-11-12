@@ -11,7 +11,7 @@ NotifyAccess=main
 ExecStart=/usr/local/bin/lanforged --config /etc/lanforge/lanforge.toml
 EnvironmentFile=-/etc/lanforge/lanforge.env
 
-# Reinicialização e Watchdog
+# Restart & Watchdog
 Restart=on-failure
 RestartSec=5s
 TimeoutStartSec=30s
@@ -21,19 +21,19 @@ WatchdogSec=30s
 # (pppoe-pppox, pppoe-unit, pppoe-chan, pppoe-record). A stop closes them (after a PADT).
 FileDescriptorStoreMax=4
 
-# Modelo de Permissões e Identidade
-# Executado como root para operações de kernel (netlink, raw sockets, nftables, eBPF, /dev/ppp)
-# com grupo primário 'lanforge' para conceder acesso local ao socket de controle (/run/lanforge/control.sock)
+# Permissions & Identity Model
+# Runs as root for kernel operations (netlink, raw sockets, nftables, /dev/ppp), with primary
+# group 'lanforge' granting local access to the control socket (/run/lanforge/control.sock).
 User=root
 Group=lanforge
 
 # Linux Capabilities Hardening
-# Mantém somente as capacidades essenciais de rede e eBPF, removendo permanentemente todas as outras.
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_BPF
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_BPF
+# Keep only the networking capabilities and drop every other privilege.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
 
-# Gerenciamento de Diretórios pelo Systemd (FHS)
-# Garante a criação de /run/lanforge e /var/lib/lanforge com permissões 0750 (root:lanforge)
+# Systemd Directory Management (FHS)
+# Creates /run/lanforge and /var/lib/lanforge with 0750 permissions (root:lanforge).
 RuntimeDirectory=lanforge
 RuntimeDirectoryMode=0750
 # /run/lanforge (runtime database: logs, DNS query history, device observations) is kept
@@ -45,12 +45,13 @@ ConfigurationDirectory=lanforge
 ConfigurationDirectoryMode=0755
 
 # Security Hardening & VFS Sandboxing
+# Mount system paths read-only except Lanforge's state, runtime, and configuration paths.
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 ProtectControlGroups=yes
 ProtectKernelModules=yes
-# ProtectKernelTunables deve ser 'no' para permitir que o serviço configure sysctls de interface (/proc/sys/net/...)
+# ProtectKernelTunables must be 'no' so the service can set interface sysctls (/proc/sys/net/...)
 ProtectKernelTunables=no
 ReadWritePaths=/etc/lanforge /var/lib/lanforge /run/lanforge
 
