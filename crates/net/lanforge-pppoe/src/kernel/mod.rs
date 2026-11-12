@@ -1,5 +1,6 @@
 pub mod ppp_dev;
 pub mod routes;
+pub mod store;
 pub mod sysctl;
 
 use crate::error::PppoeError;

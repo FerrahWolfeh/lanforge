@@ -1,0 +1,6 @@
+; Lets systemd (init_t) hold the PPPoE session's descriptors in lanforge's fd store across a
+; restart: the /dev/ppp unit and channel, and the AF_PPPOX socket of the daemon
+; (unconfined_service_t). Without it the kernel drops them when systemd receives them
+; (avc: denied { read write } ... tclass=chr_file) and a restart reconnects the session.
+(allow init_t ppp_device_t (chr_file (read write getattr)))
+(allow init_t unconfined_service_t (pppox_socket (read write getattr)))

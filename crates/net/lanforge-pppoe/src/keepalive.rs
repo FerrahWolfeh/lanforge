@@ -12,7 +12,7 @@ use lanforge_types::identifiers::MacAddr;
 use std::net::Ipv4Addr;
 use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
-use tokio::time::{Instant, Interval, interval_at};
+use tokio::time::{Instant, Interval, interval_at, timeout_at};
 use tracing::{debug, info, warn};
 
 pub const PPP_IP: u16 = 0x0021;
@@ -192,6 +192,49 @@ pub(crate) async fn run_keepalive(
             },
         }
     }
+}
+
+/// Echo-Requests sent to confirm a session taken over from a previous process, one per second.
+const TAKEOVER_ECHOES: u8 = 3;
+
+/// Whether the concentrator still answers on a session taken over from a previous process: an
+/// Echo-Reply within [`TAKEOVER_ECHOES`] seconds. Frames queued while no process served the
+/// session (the concentrator's own Echo-Requests) are answered on the way.
+pub(crate) async fn confirm_alive(
+    session: &PppoeSession,
+    local_magic: u32,
+    peer_magic: u32,
+) -> bool {
+    let mut buf = [0u8; 1500];
+    for id in 1..=TAKEOVER_ECHOES {
+        if let Err(e) = send_echo_request(session, id, local_magic).await {
+            warn!(error = %e, "Cannot send LCP Echo-Request on the kept session");
+            return false;
+        }
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let n = match timeout_at(deadline, session.recv_ppp_frame(&mut buf)).await {
+                Err(_) => break,
+                Ok(Err(e)) => {
+                    warn!(error = %e, "PPPoE channel read error on the kept session");
+                    return false;
+                }
+                Ok(Ok(n)) => n,
+            };
+            // Set to 0 by an Echo-Reply.
+            let mut unanswered = 1;
+            let action =
+                handle_incoming_frame(session, &buf[..n], local_magic, peer_magic, &mut unanswered)
+                    .await;
+            if action == KeepaliveAction::PeerTerminated {
+                return false;
+            }
+            if unanswered == 0 {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 async fn send_echo_request(session: &PppoeSession, id: u8, magic: u32) -> Result<(), PppoeError> {

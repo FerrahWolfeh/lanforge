@@ -41,6 +41,8 @@ pub struct MockBrasConfig {
 pub struct Seen {
     /// The Name field of every CHAP Response (the `PPPoE` username), in order.
     pub chap_names: Vec<String>,
+    /// PADIs sent by the client (discoveries started).
+    pub padis: usize,
     /// PADTs sent by the client.
     pub padts: usize,
     /// Sessions handed out half-open (LCP opened, never challenged).
@@ -107,6 +109,7 @@ pub fn spawn_mock_bras(handle: PppoeInertHandle, cfg: MockBrasConfig) -> JoinHan
                     let Some(bytes) = disc_opt else { break; };
                     if let Some(frame) = PppoeDiscoveryFrame::parse(&bytes) {
                         if frame.code == CODE_PADI {
+                            cfg.seen.lock().unwrap().padis += 1;
                             if cfg.fail_discovery {
                                 continue;
                             }

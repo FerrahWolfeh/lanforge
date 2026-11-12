@@ -1,4 +1,5 @@
 use crate::error::PppoeError;
+use crate::host::KeptLink;
 use lanforge_transport::PppoeTransport;
 use lanforge_types::identifiers::MacAddr;
 use std::os::fd::{OwnedFd, RawFd};
@@ -18,6 +19,18 @@ impl PppoeSession {
             .connect_session(ifname, ac_mac.0, session_id)
             .map_err(|e| PppoeError::NegotiationFailed(e.to_string()))?;
         Ok(Self { transport })
+    }
+
+    /// The session of a link a previous process brought up. `None` when the link is lost.
+    pub fn adopt(transport: PppoeTransport, link: &KeptLink) -> Result<Option<Self>, PppoeError> {
+        match link {
+            KeptLink::Kernel(k) => transport
+                .adopt_session(k.session_fd.try_clone()?, k.ppp_chan_fd.try_clone()?)
+                .map_err(|e| PppoeError::NegotiationFailed(e.to_string()))?,
+            KeptLink::Transport => {}
+            KeptLink::Lost => return Ok(None),
+        }
+        Ok(Some(Self { transport }))
     }
 
     pub async fn send_ppp_frame(&self, frame: &[u8]) -> Result<(), PppoeError> {

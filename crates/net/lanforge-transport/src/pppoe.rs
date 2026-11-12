@@ -252,6 +252,21 @@ impl PppoeTransport {
         Ok(())
     }
 
+    /// Takes over a session already handed to the kernel by a previous process: `pppox_fd` is its
+    /// connected `AF_PPPOX` socket (kept open so the kernel keeps the channel), `chan_fd` the
+    /// `/dev/ppp` channel its control frames now travel on. In inert mode, this is a no-op.
+    pub fn adopt_session(&self, pppox_fd: OwnedFd, chan_fd: OwnedFd) -> io::Result<()> {
+        if self.is_inert() {
+            return Ok(());
+        }
+        let async_fd = sys::register_fd(chan_fd)?;
+        *self.inner.session.write() = Some(PppoeSessionBackend::Kernel {
+            io_fd: Arc::new(async_fd),
+            _pppox_fd: Some(Arc::new(pppox_fd)),
+        });
+        Ok(())
+    }
+
     /// Closes and drops the active kernel session descriptors (`AF_PPPOX` and `/dev/ppp` channel).
     /// In inert mode, this is a no-op so simulated session channels remain reusable across reconnects.
     pub fn close_session(&self) {

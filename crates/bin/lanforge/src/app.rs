@@ -14,6 +14,7 @@ use crate::bootstrap::BootstrapResult;
 use crate::event_loop::run_event_loop;
 use crate::registry::ServiceRegistry;
 use crate::synthetic::{InterfacesService, WanService};
+use crate::systemd_job;
 #[cfg(feature = "traffic")]
 use lanforge_db::LogStore;
 use lanforge_db::worker::DbWorker;
@@ -84,6 +85,9 @@ impl Daemon {
         )
         .await?;
 
+        // Before the services see the shutdown: a restart leaves the PPPoE session up.
+        self.ctx
+            .set_restarting(systemd_job::restart_pending().await);
         supervisor
             .shutdown(&self.ctx, Duration::from_secs(10))
             .await;

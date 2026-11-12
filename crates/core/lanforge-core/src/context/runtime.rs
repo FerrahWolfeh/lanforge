@@ -78,6 +78,8 @@ pub struct ServiceRuntime {
     wan_tx: watch::Sender<WanSnapshot>,
     interfaces_tx: watch::Sender<InterfaceSnapshot>,
     recovery_mode: AtomicBool,
+    /// The daemon is exiting to be started again at once (a service-manager restart).
+    restarting: AtomicBool,
     services: RwLock<BTreeMap<ServiceId, ServiceSlot>>,
     shared_by_type: RwLock<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
 
@@ -130,6 +132,7 @@ impl ServiceRuntime {
             wan_tx,
             interfaces_tx,
             recovery_mode: AtomicBool::new(false),
+            restarting: AtomicBool::new(false),
             services: RwLock::new(BTreeMap::new()),
             shared_by_type: RwLock::new(HashMap::new()),
             pppoe_status: ArcSwapOption::empty(),
@@ -171,8 +174,18 @@ impl ServiceRuntime {
         self.running_tx.send_replace(false);
     }
 
+    pub fn set_restarting(&self, restarting: bool) {
+        self.restarting.store(restarting, Ordering::Release);
+    }
+
+    #[must_use]
+    pub fn is_restarting(&self) -> bool {
+        self.restarting.load(Ordering::Acquire)
+    }
+
     pub fn reset_lifecycle(&self) {
         self.running_tx.send_replace(true);
+        self.restarting.store(false, Ordering::Release);
         self.wan_tx.send_replace(WanSnapshot::default());
         self.interfaces_tx
             .send_replace(InterfaceSnapshot::default());

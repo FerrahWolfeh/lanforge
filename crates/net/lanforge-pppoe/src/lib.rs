@@ -11,6 +11,7 @@ pub mod backoff;
 pub mod config;
 pub mod discovery;
 pub mod error;
+pub mod handoff;
 pub mod host;
 pub mod ipcp;
 pub mod keepalive;

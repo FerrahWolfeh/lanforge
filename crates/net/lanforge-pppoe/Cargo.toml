@@ -25,6 +25,10 @@ tracing = { workspace = true }
 libc = { workspace = true }
 rtnetlink = { workspace = true }
 rand = { workspace = true }
+parking_lot = { workspace = true }
+serde = { workspace = true }
+postcard = { workspace = true }
+sd-notify = { workspace = true, features = ["fdstore"] }
 
 # Third party protocol / low level
 nix = { version = "0.31.3", features = ["socket", "ioctl", "net", "fs"] }

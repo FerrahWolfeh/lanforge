@@ -27,6 +27,7 @@ pub mod event_loop;
 pub mod registry;
 pub mod supervisor;
 pub mod synthetic;
+pub mod systemd_job;
 
 #[cfg(test)]
 #[allow(

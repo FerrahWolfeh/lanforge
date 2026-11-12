@@ -11,6 +11,7 @@ nix::ioctl_write_ptr!(pppiocattchan, 't', 56, libc::c_int);
 nix::ioctl_write_ptr!(pppiocconnect, 't', 58, libc::c_int);
 nix::ioctl_write_ptr!(pppiocsmru, 't', 82, libc::c_int);
 nix::ioctl_write_ptr!(pppiocsflags, 't', 89, libc::c_int);
+nix::ioctl_read!(pppiocgunit, 't', 86, libc::c_int);
 
 pub struct KernelSession {
     pub session_fd: OwnedFd,
@@ -85,4 +86,12 @@ pub fn handoff_to_kernel(session_fd: OwnedFd, mru: u16) -> Result<KernelSession,
         interface_name,
         unit_id,
     })
+}
+
+/// The PPP unit number behind an open `/dev/ppp` unit descriptor (`PPPIOCGUNIT`).
+pub fn unit_of(ppp_unit_fd: &OwnedFd) -> Result<i32, PppoeError> {
+    let mut unit_id: libc::c_int = -1;
+    // SAFETY: PPPIOCGUNIT writes one `c_int` (`unit_id`, owned here) on an open /dev/ppp fd.
+    unsafe { pppiocgunit(ppp_unit_fd.as_raw_fd(), &raw mut unit_id) }?;
+    Ok(unit_id)
 }

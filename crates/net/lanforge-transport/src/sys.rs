@@ -4,12 +4,15 @@
 //! sound. Sockets come back as [`OwnedFd`], so error paths close them on drop instead of by hand.
 
 use std::array;
+use std::env;
 use std::ffi::{CStr, c_int};
 use std::io;
 use std::mem::{self, MaybeUninit};
 use std::net::{Ipv6Addr, SocketAddrV6};
-use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
+use std::process;
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use socket2::{SockAddr, Socket};
 use tokio::io::unix::AsyncFd;
@@ -251,6 +254,45 @@ pub fn if_hwaddr(name: &str) -> Option<[u8; 6]> {
     // SAFETY: SIOCGIFHWADDR succeeded, so `ifru_hwaddr` is the active union field.
     let hw = unsafe { ifr.ifr_ifru.ifru_hwaddr.sa_data };
     Some(array::from_fn(|i| hw[i] as u8))
+}
+
+/// First descriptor the service manager passes (`SD_LISTEN_FDS_START`).
+const LISTEN_FDS_START: RawFd = 3;
+
+/// The descriptors the service manager passed at start (`sd_listen_fds_with_names(3)`): socket
+/// activation or the unit's fd store, each with its `FDNAME`. Marked close-on-exec. Only the first
+/// call returns them (each descriptor has one owner); later calls, or a process not started with
+/// `LISTEN_PID` = its own PID, get an empty list.
+#[must_use]
+pub fn take_inherited_fds() -> Vec<(String, OwnedFd)> {
+    static TAKEN: AtomicBool = AtomicBool::new(false);
+    let ours = env::var("LISTEN_PID")
+        .ok()
+        .and_then(|pid| pid.parse::<u32>().ok())
+        == Some(process::id());
+    if !ours || TAKEN.swap(true, Ordering::AcqRel) {
+        return Vec::new();
+    }
+    let count = env::var("LISTEN_FDS")
+        .ok()
+        .and_then(|n| n.parse::<RawFd>().ok())
+        .unwrap_or(0)
+        .clamp(0, 1024);
+    let names = env::var("LISTEN_FDNAMES").unwrap_or_default();
+    let mut names = names.split(':');
+    (LISTEN_FDS_START..LISTEN_FDS_START + count)
+        .filter_map(|fd| {
+            let name = names.next().unwrap_or("unknown").to_owned();
+            // SAFETY: fcntl(2) on an integer descriptor; F_SETFD only changes its flags. One that
+            // is not open fails with EBADF and is skipped.
+            if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } != 0 {
+                return None;
+            }
+            // SAFETY: the service manager passed `fd` open to this process (LISTEN_PID matches,
+            // fcntl just succeeded on it), and `TAKEN` makes this the only place that owns it.
+            Some((name, unsafe { OwnedFd::from_raw_fd(fd) }))
+        })
+        .collect()
 }
 
 /// Whether the process runs with effective UID 0.

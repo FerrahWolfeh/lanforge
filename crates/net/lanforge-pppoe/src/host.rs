@@ -3,8 +3,9 @@
 //! simulation branches.
 
 use crate::error::PppoeError;
+use crate::handoff::SessionRecord;
 use crate::ipcp::IpcpNegotiated;
-use crate::kernel::{KernelSession, configure_interface, handoff_to_kernel};
+use crate::kernel::{KernelSession, configure_interface, handoff_to_kernel, store};
 use crate::lcp::LcpNegotiated;
 use crate::session::PppoeSession;
 use lanforge_transport::{Icmp6Transport, sys};
@@ -15,6 +16,17 @@ use std::io::Read;
 use std::path::Path;
 use std::str;
 use tracing::{debug, info, warn};
+
+/// What still carries a kept session ([`PppoeHost::kept_session`]).
+pub enum KeptLink {
+    /// The kernel link, through copies of its descriptors.
+    Kernel(KernelSession),
+    /// The transport itself (test stand-ins, whose session channel is the link).
+    Transport,
+    /// Nothing: the descriptors did not come back or the interface is gone. The session can only
+    /// be ended (PADT).
+    Lost,
+}
 
 /// The host operations of a `PPPoE` session: interface lookup, link state, and the kernel side
 /// of bringing the PPP link up.
@@ -39,6 +51,21 @@ pub trait PppoeHost: Send + Sync + 'static {
 
     /// A passive listener for the Router Advertisements the ISP sends on `interface`.
     fn ra_listener(&self, interface: &str) -> Option<Icmp6Transport>;
+
+    /// Hands the session just brought up to a keeper that outlives this process, so the daemon
+    /// can restart without ending it. `false`: nothing keeps it, it ends with the process.
+    fn keep_session(&self, _kernel: Option<&KernelSession>, _record: &SessionRecord) -> bool {
+        false
+    }
+
+    /// The session kept by a previous process (or service task), to take over.
+    fn kept_session(&self) -> Option<(SessionRecord, KeptLink)> {
+        None
+    }
+
+    /// Forgets the kept session: the keeper closes its copies and the link goes down once this
+    /// process lets go of its own.
+    fn release_session(&self) {}
 }
 
 /// The real host: sysfs, `/dev/ppp`, ioctls and rtnetlink.
@@ -97,6 +124,23 @@ impl PppoeHost for KernelHost {
                 warn!(interface, error = %e, "Cannot listen for the ISP's RAs; IPv6 resolvers not followed");
             })
             .ok()
+    }
+
+    fn keep_session(&self, kernel: Option<&KernelSession>, record: &SessionRecord) -> bool {
+        kernel.is_some_and(|k| store::keep(k, record))
+    }
+
+    fn kept_session(&self) -> Option<(SessionRecord, KeptLink)> {
+        let (record, kernel) = store::kept()?;
+        // The link must still be the one the record describes.
+        let link = kernel
+            .filter(|_| sys::if_name_to_index(&record.interface).is_some())
+            .map_or(KeptLink::Lost, KeptLink::Kernel);
+        Some((record, link))
+    }
+
+    fn release_session(&self) {
+        store::release();
     }
 }
 

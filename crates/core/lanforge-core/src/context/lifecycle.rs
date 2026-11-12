@@ -340,6 +340,19 @@ impl LanforgeContext {
         self.inner.runtime.terminate();
     }
 
+    /// Records that the coming shutdown is a restart: the service manager starts the daemon again
+    /// right away. Set before [`Self::terminate`]; services may then leave live kernel state
+    /// (the `PPPoE` session) to the next instance instead of tearing it down.
+    pub fn set_restarting(&self, restarting: bool) {
+        self.inner.runtime.set_restarting(restarting);
+    }
+
+    /// Whether the daemon is shutting down to be started again ([`Self::set_restarting`]).
+    #[must_use]
+    pub fn is_restarting(&self) -> bool {
+        self.inner.runtime.is_restarting()
+    }
+
     /// Resets the lifecycle flags (`running` and the service/synthetic node slots) to initial state.
     pub fn reset_lifecycle(&self) {
         self.inner.runtime.reset_lifecycle();

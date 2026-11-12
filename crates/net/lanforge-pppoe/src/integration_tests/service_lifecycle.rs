@@ -7,6 +7,8 @@ use std::time::Duration;
 use super::mock_bras::{MockBrasConfig, spawn_mock_bras};
 use crate::backoff::REJECT_FLOOR;
 use crate::discovery::DiscoveryResult;
+use crate::handoff::SessionRecord;
+use crate::host::KeptLink;
 use crate::ipcp::IpcpNegotiated;
 use crate::kernel::KernelSession;
 use crate::lcp::LcpNegotiated;
@@ -1445,4 +1447,305 @@ async fn a_concentrator_reusing_one_session_id_still_connects_and_reconnects() {
 
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = timeout(Duration::from_secs(2), handle).await;
+}
+
+/// [`TestHost`] with a keeper that outlives a service instance, like systemd's fd store outlives
+/// the daemon process: what one instance keeps, the next one finds.
+#[derive(Clone, Default)]
+struct KeepingHost {
+    kept: Arc<Mutex<Option<SessionRecord>>>,
+    releases: Arc<Mutex<usize>>,
+    /// The record comes back without its link (descriptors refused by the store).
+    link_lost: bool,
+}
+
+impl KeepingHost {
+    fn kept(&self) -> Option<SessionRecord> {
+        self.kept.lock().unwrap().clone()
+    }
+}
+
+impl PppoeHost for KeepingHost {
+    fn interface(&self, name: &str) -> Option<(u32, MacAddr)> {
+        TestHost.interface(name)
+    }
+
+    fn carrier(&self, name: &str) -> Option<bool> {
+        TestHost.carrier(name)
+    }
+
+    fn ppp_available(&self) -> bool {
+        true
+    }
+
+    async fn bring_up(
+        &self,
+        session: &PppoeSession,
+        lcp: &LcpNegotiated,
+        ipcp: &IpcpNegotiated,
+    ) -> Result<(String, Option<KernelSession>), PppoeError> {
+        TestHost.bring_up(session, lcp, ipcp).await
+    }
+
+    fn ra_listener(&self, _interface: &str) -> Option<Icmp6Transport> {
+        None
+    }
+
+    fn keep_session(&self, _kernel: Option<&KernelSession>, record: &SessionRecord) -> bool {
+        *self.kept.lock().unwrap() = Some(record.clone());
+        true
+    }
+
+    fn kept_session(&self) -> Option<(SessionRecord, KeptLink)> {
+        let link = if self.link_lost {
+            KeptLink::Lost
+        } else {
+            KeptLink::Transport
+        };
+        self.kept().map(|r| (r, link))
+    }
+
+    fn release_session(&self) {
+        *self.kept.lock().unwrap() = None;
+        *self.releases.lock().unwrap() += 1;
+    }
+}
+
+/// Frames one teardown sends (`send_padt` repeats the PADT three times).
+const ONE_PADT: usize = 3;
+
+fn handoff_cfg() -> PppoeConfig {
+    PppoeConfig {
+        enabled: true,
+        wan_iface: "eth1".into(),
+        username: "client1".into(),
+        reconnect_delay_secs: 10,
+        ..Default::default()
+    }
+}
+
+/// One daemon process: a context and a PPPoE service on `transport` (shared between "processes",
+/// like the wire to the concentrator) and `host` (shared, like the fd store).
+fn start_instance(
+    cfg: &PppoeConfig,
+    transport: &PppoeTransport,
+    host: &KeepingHost,
+) -> (
+    LanforgeContext,
+    Arc<EventBus>,
+    broadcast::Receiver<TimedEvent>,
+    JoinHandle<PppoeService<KeepingHost>>,
+) {
+    let (ctx, bus) = create_test_context();
+    let sub = bus.subscribe_pppoe();
+    ctx.update_pppoe_config(cfg.clone());
+    let mut service =
+        PppoeService::with_host(cfg.clone(), ctx.clone(), transport.clone(), host.clone());
+    let ctx_clone = ctx.clone();
+    let handle = tokio::spawn(async move {
+        let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
+        let _ = service.serve(&ctx_clone, &h).await;
+        service
+    });
+    (ctx, bus, sub, handle)
+}
+
+/// The daemon's shutdown as the supervisor runs it: terminate, broadcast, then `cleanup()`.
+async fn shut_down(
+    ctx: &LanforgeContext,
+    bus: &EventBus,
+    handle: JoinHandle<PppoeService<KeepingHost>>,
+    restarting: bool,
+) {
+    ctx.set_restarting(restarting);
+    ctx.terminate();
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let mut service = timeout(Duration::from_secs(5), handle)
+        .await
+        .expect("serve ends")
+        .expect("serve task");
+    let _ = service.cleanup(ctx).await;
+}
+
+fn session_downs(sub: &mut broadcast::Receiver<TimedEvent>) -> usize {
+    let mut n = 0;
+    while let Ok(evt) = sub.try_recv() {
+        if matches!(
+            evt.event,
+            LanforgeEvent::Pppoe(PppoeEvent::SessionDown { .. })
+        ) {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// A daemon restart (systemd `restart` job) leaves the session up: no PADT, no `SessionDown`, and
+/// the next process takes it over without a discovery, announcing the same session. A stop then
+/// ends it as before: PADT, and the keeper lets go.
+#[tokio::test(start_paused = true)]
+async fn a_restart_hands_the_session_to_the_next_instance() {
+    let cfg = handoff_cfg();
+    let bras = MockBrasConfig::default();
+    let seen = Arc::clone(&bras.seen);
+    let (handle_inert, transport) = PppoeTransport::inert();
+    let _bras = spawn_mock_bras(handle_inert, bras);
+    let host = KeepingHost::default();
+
+    let (ctx, bus, mut sub, handle) = start_instance(&cfg, &transport, &host);
+    let first = wait_for_session_up(&mut sub).await;
+    let record = host.kept().expect("the live session is kept");
+    assert_eq!(record.session_id, first.session_id);
+    shut_down(&ctx, &bus, handle, true).await;
+
+    assert_eq!(seen.lock().unwrap().padts, 0, "no PADT on a restart");
+    assert_eq!(session_downs(&mut sub), 0, "the session did not go down");
+    assert_eq!(host.kept(), Some(record), "still kept for the next process");
+
+    let started = Instant::now();
+    let (ctx, bus, mut sub, handle) = start_instance(&cfg, &transport, &host);
+    let second = session_up_within(&mut sub, Duration::from_secs(5)).await;
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(second.session_id, first.session_id);
+    assert_eq!(second.interface, first.interface);
+    assert_eq!(second.ipv4, first.ipv4);
+    assert_eq!(second.dns, first.dns);
+    assert_eq!(
+        seen.lock().unwrap().padis,
+        1,
+        "no discovery for the kept session"
+    );
+    assert_eq!(
+        ctx.get_service_state(ServiceId::Pppoe),
+        ServiceState::Online
+    );
+
+    shut_down(&ctx, &bus, handle, false).await;
+    assert_eq!(
+        seen.lock().unwrap().padts,
+        ONE_PADT,
+        "a stop sends the PADT"
+    );
+    assert_eq!(session_downs(&mut sub), 1);
+    assert_eq!(host.kept(), None, "a stop lets the keeper go");
+}
+
+/// A kept session the concentrator no longer answers on (it dropped it while no process served
+/// it) is terminated and a new one dialled, instead of being announced and timing out minutes
+/// later on the keepalive.
+#[tokio::test(start_paused = true)]
+async fn a_kept_session_without_echo_replies_is_redialled() {
+    let cfg = handoff_cfg();
+    let bras = MockBrasConfig {
+        send_echo_replies: false,
+        ..Default::default()
+    };
+    let seen = Arc::clone(&bras.seen);
+    let (handle_inert, transport) = PppoeTransport::inert();
+    let _bras = spawn_mock_bras(handle_inert, bras);
+    let host = KeepingHost::default();
+    *host.kept.lock().unwrap() = Some(kept_record(&cfg, 0x0077));
+
+    let (ctx, bus, mut sub, handle) = start_instance(&cfg, &transport, &host);
+    let up = session_up_within(&mut sub, Duration::from_secs(30)).await;
+    assert_eq!(up.session_id, 0x0042, "a newly dialled session");
+    {
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.padts, ONE_PADT, "the silent session is terminated");
+        assert_eq!(seen.padis, 1);
+    }
+    assert_eq!(*host.releases.lock().unwrap(), 1);
+    assert_eq!(host.kept().map(|r| r.session_id), Some(0x0042));
+    shut_down(&ctx, &bus, handle, false).await;
+}
+
+/// A session dialled with other credentials than the configuration now holds is not taken over:
+/// live, that change reconnects, so it does across a restart too.
+#[tokio::test(start_paused = true)]
+async fn a_kept_session_dialled_with_other_credentials_is_redialled() {
+    let cfg = handoff_cfg();
+    let bras = MockBrasConfig::default();
+    let seen = Arc::clone(&bras.seen);
+    let (handle_inert, transport) = PppoeTransport::inert();
+    let _bras = spawn_mock_bras(handle_inert, bras);
+    let host = KeepingHost::default();
+    let old = PppoeConfig {
+        username: "old-user".into(),
+        ..cfg.clone()
+    };
+    *host.kept.lock().unwrap() = Some(kept_record(&old, 0x0077));
+
+    let (ctx, bus, mut sub, handle) = start_instance(&cfg, &transport, &host);
+    let up = session_up_within(&mut sub, Duration::from_secs(30)).await;
+    assert_eq!(up.session_id, 0x0042);
+    {
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.padts, ONE_PADT, "the old session is terminated");
+        assert_eq!(seen.chap_names, vec!["client1".to_string()]);
+    }
+    shut_down(&ctx, &bus, handle, false).await;
+}
+
+/// Box, SELinux enforcing: systemd refused the `/dev/ppp` and `AF_PPPOX` descriptors and kept only
+/// the record, so the link died with the old process. The old session must be ended with a PADT
+/// (it stayed half-open on the concentrator, and the restarted daemon looped on timeouts), and a
+/// new one dialled.
+#[tokio::test(start_paused = true)]
+async fn a_kept_record_without_its_link_ends_the_old_session() {
+    let cfg = handoff_cfg();
+    let bras = MockBrasConfig::default();
+    let seen = Arc::clone(&bras.seen);
+    let (handle_inert, transport) = PppoeTransport::inert();
+    let _bras = spawn_mock_bras(handle_inert, bras);
+    let host = KeepingHost {
+        link_lost: true,
+        ..KeepingHost::default()
+    };
+    *host.kept.lock().unwrap() = Some(kept_record(&cfg, 0x0077));
+
+    let (ctx, bus, mut sub, handle) = start_instance(&cfg, &transport, &host);
+    let up = session_up_within(&mut sub, Duration::from_secs(30)).await;
+    assert_eq!(up.session_id, 0x0042, "a newly dialled session");
+    {
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.padts, ONE_PADT, "the lost session is terminated");
+        assert_eq!(seen.padis, 1);
+    }
+    assert_eq!(*host.releases.lock().unwrap(), 1);
+    shut_down(&ctx, &bus, handle, false).await;
+}
+
+/// The record a previous process kept for session `session_id`, dialled with `cfg`.
+fn kept_record(cfg: &PppoeConfig, session_id: u16) -> SessionRecord {
+    let bras = MockBrasConfig::default();
+    SessionRecord::new(
+        cfg,
+        TestHost.interface(&cfg.wan_iface).unwrap().1,
+        &DiscoveryResult {
+            ac_mac: bras.ac_mac,
+            ac_name: Some(bras.ac_name),
+            session_id,
+        },
+        &LcpNegotiated {
+            mru: 1492,
+            local_magic: 0x1111_2222,
+            peer_magic: 0x8765_4321,
+            auth_method: AuthMethod::ChapMd5,
+            early_frames: Vec::new(),
+        },
+        &IpcpNegotiated {
+            local_ip: Some(bras.local_ip),
+            peer_ip: Some(bras.peer_ip),
+            dns: bras.dns.iter().map(|&d| d.into()).collect(),
+            local_v6_ll: None,
+            peer_v6_ll: None,
+        },
+        "ppp0",
+        0,
+        0,
+    )
 }
