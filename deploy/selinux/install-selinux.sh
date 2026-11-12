@@ -50,7 +50,16 @@ else
     echo "Warning: 'semanage' not found. Install with: dnf install policycoreutils-python-utils"
 fi
 
-# 3. Apply contexts to existing files
+# 3. Let systemd keep the PPPoE session's descriptors across a daemon restart (fd store)
+echo "--> Installing the PPPoE fd store policy module..."
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if semodule -i "$SCRIPT_DIR/lanforge_fdstore.cil"; then
+    echo "    Module lanforge_fdstore installed."
+else
+    echo "    Warning: lanforge_fdstore not installed; a restart will reconnect PPPoE." >&2
+fi
+
+# 4. Apply contexts to existing files
 echo "--> Restoring file contexts (restorecon)..."
 restorecon -v /usr/local/bin/lanforged /usr/local/bin/lanforge /usr/local/bin/lanforge-lab 2>/dev/null || true
 restorecon -Rv /etc/lanforge /var/lib/lanforge 2>/dev/null || true

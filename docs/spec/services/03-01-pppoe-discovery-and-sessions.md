@@ -44,7 +44,8 @@ The PPPoE module (`crates/net/lanforge-pppoe/`) manages PPPoE discovery, link ne
 - The kernel keeps `pppN` up while the session's descriptors (the `AF_PPPOX` socket, the `/dev/ppp` channel and
   unit) are open. When a session comes up, copies of them and a `SessionRecord` (memfd: concentrator MAC, session
   ID, LCP magic numbers, IPCP/IPv6CP results, the dialling identity) go to systemd's fd store
-  (`FileDescriptorStoreMax=4` in the unit; needs systemd ≥ 254 for `$FDSTORE`).
+  (`FileDescriptorStoreMax=4` in the unit; needs systemd ≥ 254 for `$FDSTORE`). Under SELinux, systemd (`init_t`)
+  may not receive `/dev/ppp` or `AF_PPPOX` descriptors: `deploy/selinux/lanforge_fdstore.cil` allows it.
 - At shutdown the daemon asks systemd which job runs for its unit (`systemctl list-jobs`). A `restart` job leaves
   the session up: no PADT, no `SessionDown`. A `stop` (or anything unexpected) sends the PADT and drops the store
   entries, as before.
