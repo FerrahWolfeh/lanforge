@@ -1,6 +1,6 @@
 //! Read-only operations on the device state.
 //!
-//! This module implements all query methods on [`LanforgeContext`](super::LanforgeContext).
+//! This module implements all query methods on [`LanforgeContext`].
 //! These operations acquire a read lock on the state and can be executed
 //! concurrently by multiple threads.
 //!
