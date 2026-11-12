@@ -4,7 +4,7 @@ use crate::error::PppoeError;
 use crate::lcp::{LCP_CONF_REQ, LCP_ECHO_REP, LCP_ECHO_REQ, LCP_TERM_ACK, LCP_TERM_REQ, PPP_LCP};
 use crate::service::SystemInterrupt;
 use crate::session::PppoeSession;
-use lanforge_core::bus::{LanforgeEvent, SystemEvent};
+use lanforge_core::bus::{LanforgeEvent, PppoeEvent, SystemEvent};
 use lanforge_core::context::{ConfigSubscription, LanforgeContext};
 use lanforge_transport::{ArpProber, PppoeTransport};
 use lanforge_types::config::ChangeImpact;
@@ -111,16 +111,22 @@ pub(crate) async fn run_keepalive(
                     }
 
                     failed_echoes += 1;
-                    if failed_echoes > 1 {
+                    // The request just sent is outstanding, not missed yet.
+                    let missed = failed_echoes - 1;
+                    if missed > 0 {
                         warn!(
-                            missed = failed_echoes,
+                            missed,
                             max = max_failures,
                             "Missing LCP Echo-Reply from ISP Access Concentrator"
                         );
+                        let _ = ctx.bus().publish(LanforgeEvent::Pppoe(PppoeEvent::KeepaliveWarning {
+                            consecutive_failures: missed,
+                            max_failures,
+                        }));
                     }
                     if max_failures > 0 && failed_echoes > max_failures {
                         warn!(
-                            missed = failed_echoes,
+                            missed,
                             max = max_failures,
                             "LCP keepalive failure threshold exceeded, disconnecting PPPoE session"
                         );
@@ -147,6 +153,7 @@ pub(crate) async fn run_keepalive(
             read_res = session.recv_ppp_frame(&mut read_buf) => {
                 match read_res {
                     Ok(n) if n > 0 => {
+                        let missed_before = failed_echoes.saturating_sub(1);
                         let action = handle_incoming_frame(
                             session,
                             &read_buf[..n],
@@ -158,6 +165,10 @@ pub(crate) async fn run_keepalive(
                             return Err(PppoeError::LcpFailed(
                                 "Peer terminated session (LCP Terminate-Request)".into(),
                             ));
+                        }
+                        // Pairs every KeepaliveWarning run with its end.
+                        if missed_before > 0 && failed_echoes == 0 {
+                            let _ = ctx.bus().publish(LanforgeEvent::Pppoe(PppoeEvent::KeepaliveRestored));
                         }
                     }
                     Ok(_) => {}
@@ -316,7 +327,7 @@ async fn handle_lcp_frame(
             if *failed_echoes > 1 {
                 info!(
                     id,
-                    missed = *failed_echoes,
+                    missed = *failed_echoes - 1,
                     "LCP keepalive recovered, received Echo-Reply from ISP Access Concentrator"
                 );
             }

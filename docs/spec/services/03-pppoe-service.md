@@ -40,7 +40,8 @@ The OS, not lanforge, runs DHCPv6-PD on `ppp0` (e.g. systemd-networkd); lanforge
   (PADT) and the task. Other commands (dependency notifications) never touch the session.
 - **Events (`LanforgeEvent::Pppoe`):** `SessionUp` (interface, AC, session ID, MRU, IPv4/peer, IPCP DNS),
   `SessionDown { reason }` (exactly once per `SessionUp`), `Reconnecting { attempt, next_retry_secs }`,
-  `AuthFailed`, `DnsServersChanged` (the ISP's IPv6 resolvers from RAs). Consumers: firewall (WAN interface),
+  `AuthFailed`, `KeepaliveWarning { consecutive_failures, max_failures }` (each missed LCP Echo-Reply) and
+  `KeepaliveRestored` (replies back before the threshold), `DnsServersChanged` (the ISP's IPv6 resolvers from RAs). Consumers: firewall (WAN interface),
   DNS (ISP upstreams), traffic shaping, DHCPv4 (DNS fallback), WebUI/CLI.
 - **Status:** `ctx.set_pppoe_status` (`PppoeStatusResponse`): state, addresses, AC, uptime, reconnect attempts,
   last error, terminal reachability.

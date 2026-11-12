@@ -8,9 +8,9 @@ control frames) and the discovery socket (PADT), next to the RA listener that fo
 (`wan_dns.rs`).
 
 ```
- every lcp_echo_interval_secs ─► Echo-Request (our magic) ─► missed += 1
- Echo-Reply                   ─► missed = 0
- missed > lcp_echo_max_failures ─► terminal probe ─► KeepAliveTimeout | TerminalUnreachable
+ every lcp_echo_interval_secs ─► Echo-Request (our magic); unanswered previous one ─► missed += 1, KeepaliveWarning
+ Echo-Reply                   ─► missed = 0 (KeepaliveRestored after a miss)
+ missed = lcp_echo_max_failures ─► terminal probe ─► KeepAliveTimeout | TerminalUnreachable
  LCP Terminate-Request        ─► Terminate-Ack ─► LcpFailed
  PADT from the AC             ─► PadtReceived (no PADT back)
  config change / shutdown     ─► Hot: retime in place | Reconnect/Rebind: ConfigUpdated | disabled | Shutdown
@@ -24,10 +24,13 @@ control frames) and the discovery socket (PADT), next to the RA listener that fo
 - Echo-Requests carry our LCP Magic-Number, every `lcp_echo_interval_secs` (default 20 s; `0` sends none). The
   first goes out one period after the session comes up.
 - Any Echo-Reply resets the miss count. The AC's own Echo-Requests are answered with our magic number.
+- Each missed reply publishes `PppoeEvent::KeepaliveWarning { consecutive_failures, max_failures }` (missed
+  replies, the request just sent not counted); a reply after a miss publishes `KeepaliveRestored`. The session
+  ends when the misses reach `max_failures`.
 - Unknown PPP protocols get a Protocol-Reject; IP frames seen on the control channel are ignored.
 
 ### B. Failure Detection
-- When the misses exceed `lcp_echo_max_failures` (default 5; `0` never gives up), the session ends. With the
+- When the missed replies reach `lcp_echo_max_failures` (default 5; `0` never gives up), the session ends. With the
   terminal probe enabled, an ARP probe to the ONT/modem classifies the failure: terminal answers →
   `KeepAliveTimeout` (upstream), no answer → `TerminalUnreachable` (local hardware or cable).
 - An LCP Terminate-Request is acknowledged and ends the session.

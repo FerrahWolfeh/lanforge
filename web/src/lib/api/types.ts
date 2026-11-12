@@ -461,6 +461,12 @@ export function formatEventPayload(
 	if (kind === 'AuthFailed') {
 		return `PPPoE authentication failed: ${data?.reason || 'bad credentials'}`;
 	}
+	if (kind === 'KeepaliveWarning') {
+		return `PPPoE: ${data?.consecutive_failures ?? '?'}/${data?.max_failures ?? '?'} LCP echo replies missed from the ISP`;
+	}
+	if (kind === 'KeepaliveRestored') {
+		return 'PPPoE: LCP echo replies from the ISP restored';
+	}
 
 	// 8. System Lifecycle & Services
 	if (kind === 'ConfigChanged') {
@@ -499,10 +505,7 @@ export function formatEventPayload(
 		return `SQM queues removed from ${data?.interface || 'interface'}`;
 	}
 
-	// 10. Keepalive & Scans
-	if (kind === 'KeepaliveRestored') {
-		return 'Daemon connection keepalive restored';
-	}
+	// 10. Scans
 	if (kind === 'ScanCompleted') {
 		const dur = data?.duration_ms ? ` (${data.duration_ms}ms)` : '';
 		return `Network ARP/NDP scan completed${dur}`;

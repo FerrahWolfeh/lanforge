@@ -1,6 +1,7 @@
 use super::mock_bras;
 
 use std::net::Ipv4Addr;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -1748,4 +1749,55 @@ fn kept_record(cfg: &PppoeConfig, session_id: u16) -> SessionRecord {
         0,
         0,
     )
+}
+
+/// An ISP link that stops answering LCP echoes and recovers before the threshold: each missed reply
+/// is reported (`KeepaliveWarning`, missed/threshold, as `lanforge watch` prints it), the recovery
+/// closes the run (`KeepaliveRestored`), and the session stays up. Nothing published either before.
+#[tokio::test(start_paused = true)]
+async fn missed_echo_replies_are_reported_and_their_recovery_too() {
+    let (ctx, bus) = create_test_context();
+    let mut sub = bus.subscribe_pppoe();
+    let cfg = PppoeConfig {
+        enabled: true,
+        wan_iface: "eth1".into(),
+        username: "client1".into(),
+        lcp_echo_interval_secs: 1,
+        lcp_echo_max_failures: 5,
+        ..Default::default()
+    };
+    let bras = MockBrasConfig::default();
+    let muted = Arc::clone(&bras.echo_muted);
+    let (_seen, _cmd_tx, handle) = start_with_bras(&ctx, cfg, bras);
+    wait_for_session_up(&mut sub).await;
+
+    muted.store(true, Ordering::Relaxed);
+    for expected in 1..=2u32 {
+        let (missed, max) = wait_for_pppoe_event(&mut sub, |evt| match evt {
+            PppoeEvent::KeepaliveWarning {
+                consecutive_failures,
+                max_failures,
+            } => Some((*consecutive_failures, *max_failures)),
+            PppoeEvent::SessionDown { reason } => panic!("session dropped: {reason}"),
+            _ => None,
+        })
+        .await;
+        assert_eq!((missed, max), (expected, 5));
+    }
+
+    muted.store(false, Ordering::Relaxed);
+    wait_for_pppoe_event(&mut sub, |evt| match evt {
+        PppoeEvent::KeepaliveRestored => Some(()),
+        PppoeEvent::KeepaliveWarning { .. } => None,
+        PppoeEvent::SessionDown { reason } => panic!("session dropped: {reason}"),
+        _ => None,
+    })
+    .await;
+    assert_eq!(
+        ctx.pppoe_status().map(|s| s.state),
+        Some(PppoeSessionState::Connected)
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(Duration::from_secs(2), handle).await;
 }
