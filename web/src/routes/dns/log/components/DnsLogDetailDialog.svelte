@@ -361,6 +361,12 @@
 							</span>
 						</div>
 					</div>
+					{#if entry.upstream}
+						<div class="flex items-center justify-between gap-2 text-xs min-w-0">
+							<span class="text-muted-foreground shrink-0">Answered by</span>
+							<span class="truncate font-mono text-foreground" title={entry.upstream}>{entry.upstream}</span>
+						</div>
+					{/if}
 				</div>
 
 				<!-- Filter Rule Attribution -->

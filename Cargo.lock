@@ -2345,7 +2345,7 @@ checksum = "bf36173d4167ed999940f804952e6b08197cae5ad5d572eb4db150ce8ad5d58f"
 
 [[package]]
 name = "lanforge"
-version = "0.51.0"
+version = "0.52.0"
 dependencies = [
  "anyhow",
  "bytesize",
@@ -2390,7 +2390,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-api"
-version = "0.51.0"
+version = "0.52.0"
 dependencies = [
  "bitflags 2.13.0",
  "lanforge-crypto",
@@ -2409,7 +2409,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-api-dispatch"
-version = "0.51.0"
+version = "0.52.0"
 dependencies = [
  "chrono",
  "hex",
@@ -2432,7 +2432,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-cli"
-version = "0.51.0"
+version = "0.52.0"
 dependencies = [
  "argon2",
  "bytes",
@@ -2470,7 +2470,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-core"
-version = "0.51.0"
+version = "0.52.0"
 dependencies = [
  "arc-swap",
  "dashmap",
@@ -2488,7 +2488,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-crypto"
-version = "0.51.0"
+version = "0.52.0"
 dependencies = [
  "argon2",
  "password-hash",
@@ -2500,7 +2500,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-db"
-version = "0.51.0"
+version = "0.52.0"
 dependencies = [
  "hotpath",
  "lanforge-core",
@@ -2517,7 +2517,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-db-core"
-version = "0.51.0"
+version = "0.52.0"
 dependencies = [
  "lanforge-types",
  "postcard",
@@ -2529,7 +2529,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-db-redb"
-version = "0.51.0"
+version = "0.52.0"
 dependencies = [
  "lanforge-core",
  "lanforge-db-core",
@@ -2545,7 +2545,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-dhcp"
-version = "0.51.0"
+version = "0.52.0"
 dependencies = [
  "dhcproto",
  "hex",
@@ -2567,7 +2567,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-discovery"
-version = "0.51.0"
+version = "0.52.0"
 dependencies = [
  "futures",
  "hotpath",
@@ -2590,7 +2590,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-dns"
-version = "0.51.0"
+version = "0.52.0"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -2623,13 +2623,14 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-rustls",
+ "tower-service",
  "tracing",
  "webpki-roots",
 ]
 
 [[package]]
 name = "lanforge-dns-wire"
-version = "0.51.0"
+version = "0.52.0"
 dependencies = [
  "hotpath",
  "lanforge-types",
@@ -2638,7 +2639,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-http"
-version = "0.51.0"
+version = "0.52.0"
 dependencies = [
  "async-stream",
  "axum",
@@ -2679,7 +2680,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-lab"
-version = "0.51.0"
+version = "0.52.0"
 dependencies = [
  "clap",
  "color-eyre",
@@ -2702,7 +2703,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-macros"
-version = "0.51.0"
+version = "0.52.0"
 dependencies = [
  "quote",
  "syn 2.0.117",
@@ -2710,7 +2711,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-nft"
-version = "0.51.0"
+version = "0.52.0"
 dependencies = [
  "lanforge-core",
  "lanforge-types",
@@ -2723,7 +2724,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-pppoe"
-version = "0.51.0"
+version = "0.52.0"
 dependencies = [
  "lanforge-core",
  "lanforge-transport",
@@ -2745,7 +2746,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-ra"
-version = "0.51.0"
+version = "0.52.0"
 dependencies = [
  "hotpath",
  "lanforge-core",
@@ -2761,7 +2762,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-tftp"
-version = "0.51.0"
+version = "0.52.0"
 dependencies = [
  "lanforge-core",
  "lanforge-transport",
@@ -2777,7 +2778,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-traffic"
-version = "0.51.0"
+version = "0.52.0"
 dependencies = [
  "lanforge-core",
  "lanforge-types",
@@ -2789,7 +2790,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-transport"
-version = "0.51.0"
+version = "0.52.0"
 dependencies = [
  "lanforge-types",
  "libc",
@@ -2801,7 +2802,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-types"
-version = "0.51.0"
+version = "0.52.0"
 dependencies = [
  "bitflags 2.13.0",
  "lanforge-macros",
@@ -2813,7 +2814,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-uds"
-version = "0.51.0"
+version = "0.52.0"
 dependencies = [
  "hotpath",
  "lanforge-api",
@@ -2831,7 +2832,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-webui"
-version = "0.51.0"
+version = "0.52.0"
 dependencies = [
  "mime_guess",
  "rust-embed",

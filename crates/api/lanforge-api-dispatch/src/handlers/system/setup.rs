@@ -296,12 +296,7 @@ impl ClientContext {
                         None
                     };
                     if let Some(addr) = addr {
-                        upstreams.push(UpstreamTarget {
-                            addr,
-                            protocol: UpstreamProtocol::Udp,
-                            hostname: None,
-                            domain: None,
-                        });
+                        upstreams.push(UpstreamTarget::at(addr, UpstreamProtocol::Udp, None));
                     }
                 }
             }

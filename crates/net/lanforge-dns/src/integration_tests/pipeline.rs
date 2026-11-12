@@ -2,12 +2,12 @@ use super::common::*;
 use crate::resolver::recursive::cache::CacheKey;
 use lanforge_dns_wire::{WireEncoder, WireResponseScanner};
 use lanforge_types::device::TransientOrigin;
-use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
+use lanforge_types::network::dns::upstream::{UpstreamAddr, UpstreamProtocol, UpstreamTarget};
 use lanforge_types::network::dns::{
     DnsClass, DnsMessage, DnsRData, DnsRecord, DnsRecordType, DnsResponseCode, adblock::RewriteRule,
 };
 use lanforge_types::network::{DnsReverseResolver, IpSubnet};
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -180,9 +180,10 @@ async fn pipeline_transient_ip_reverse_dns_cached() {
 
     // 1. Setup a DnsReverseResolver rule for 100.64.0.0/10
     let resolver_target = UpstreamTarget {
-        addr: "127.0.0.1:9999".parse().unwrap(),
+        addr: UpstreamAddr::Ip(SocketAddr::from(([127, 0, 0, 1], 9999))),
         protocol: UpstreamProtocol::Udp,
         hostname: None,
+        path: None,
         domain: None,
     };
     let subnet = IpSubnet::from_str("100.64.0.0/10").unwrap();

@@ -18,6 +18,11 @@ impl ClientContext {
             }
         };
         let resolver = match resolver_str.parse::<UpstreamTarget>() {
+            Ok(r) if r.host_name().is_some() => {
+                return Response::Rejected {
+                    error: "A reverse resolver needs an IP address, not a host name".into(),
+                };
+            }
             Ok(r) => r,
             Err(e) => {
                 return Response::Error {

@@ -411,14 +411,13 @@ Representations of database-backed user accounts and authorization roles.
 
 
 ### DnsUpstreamConfig
-A configured DNS upstream (persisted in `lanforge.toml`, `[dns]`).
+A configured DNS upstream (persisted in `lanforge.toml`, `[dns]`): its group name and the target
+as written in the file.
 
 ```json
 {
   "name": "Google",
-  "addr": "8.8.8.8:853",
-  "protocol": "tls",
-  "domain": "dns.google"
+  "target": "tls://dns.google"
 }
 ```
 

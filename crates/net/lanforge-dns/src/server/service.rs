@@ -14,7 +14,7 @@ use crate::resolver::filter::ClientLayers;
 use crate::resolver::filter::manifest::AdblockManifest;
 use crate::resolver::recursive::cache::CacheKey;
 use crate::resolver::{
-    LocalResolver, RewriteStore,
+    LocalResolver, RewriteStore, bootstrap,
     recursive::{DnsCache, UpstreamManager, UpstreamStrategy},
 };
 #[cfg(feature = "doq")]
@@ -48,7 +48,7 @@ use lanforge_dns_wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
 use lanforge_transport::TransportMetrics;
 #[cfg(feature = "adblock")]
 use lanforge_types::config::AdblockRules;
-use lanforge_types::config::{ConfigDomain, DnsListenConfig, SiteDomains};
+use lanforge_types::config::{ChangeImpact, ConfigDomain, DnsListenConfig, SiteDomains};
 #[cfg(feature = "adblock")]
 use lanforge_types::network::dns::adblock::AdblockPolicy;
 use lanforge_types::network::dns::{
@@ -57,7 +57,7 @@ use lanforge_types::network::dns::{
     DnsQuestion, DnsRecordEntry, DnsRecordType, DnsRequest, DnsResponse, DnsStatsResponse,
     TransportProtocol,
     adblock::{AdblockDbConfig, RewriteRule},
-    upstream::{UpstreamMode, UpstreamProtocol, UpstreamTarget},
+    upstream::{UpstreamAddr, UpstreamMode, UpstreamProtocol, UpstreamTarget},
 };
 #[cfg(feature = "adblock")]
 use lanforge_types::network::dns::{
@@ -155,7 +155,13 @@ impl DnsService {
             .store(self.cfg.cache_size, Ordering::Relaxed);
         self.stats.cache_entries.store(0, Ordering::Relaxed);
         self.stats.cache_evictions.store(0, Ordering::Relaxed);
-        let upstreams = build_upstreams(&effective_upstream_targets(&self.ctx), &cache).await;
+        let (resolved, _) = upstream_addrs(
+            &effective_upstream_targets(&self.ctx),
+            &self.ctx.get_dns_listen().bootstrap,
+            &[],
+        )
+        .await;
+        let upstreams = build_upstreams(&resolved, &cache).await;
 
         if upstreams.is_empty() && self.cfg.enabled && !self.cfg.search_domains.is_empty() {
             warn!("No upstreams configured — only local resolution active");
@@ -442,6 +448,11 @@ impl AsyncService for DnsService {
             })
         };
 
+        // Host-name upstreams are looked up again on this clock (see `NAME_REFRESH`).
+        let mut name_lookup = time::interval(NAME_REFRESH);
+        name_lookup.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
+        name_lookup.reset_after(NAME_RETRY);
+
         // Closes the query log's repeat windows (see `QueryRing::admit`).
         let mut repeat_tick = time::interval(LOG_REPEAT_TICK);
         repeat_tick.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
@@ -455,6 +466,11 @@ impl AsyncService for DnsService {
             tokio::select! {
                 _ = repeat_tick.tick(), if dns_ctx.query_log.is_some() => {
                     dns_ctx.flush_log_repeats(unix_now_secs());
+                }
+                _ = name_lookup.tick() => {
+                    if !resync_upstreams(ctx, &dns_ctx, false).await {
+                        name_lookup.reset_after(NAME_RETRY);
+                    }
                 }
                 Ok(()) = wan_rx.changed() => {
                     let snap = wan_rx.borrow().clone();
@@ -500,21 +516,35 @@ impl AsyncService for DnsService {
                                     | PppoeEvent::SessionDown { .. }
                                     | PppoeEvent::DnsServersChanged { .. }
                             )
-                        ) {
-                            resync_upstreams(ctx, &dns_ctx, false).await;
+                        ) && !resync_upstreams(ctx, &dns_ctx, false).await
+                        {
+                            name_lookup.reset_after(NAME_RETRY);
                         }
                     }
-                    Err(RecvError::Lagged(_)) => resync_upstreams(ctx, &dns_ctx, false).await,
+                    Err(RecvError::Lagged(_)) => {
+                        if !resync_upstreams(ctx, &dns_ctx, false).await {
+                            name_lookup.reset_after(NAME_RETRY);
+                        }
+                    }
                     Err(RecvError::Closed) => break,
                 },
                 // Live config sections: applied in place, sockets untouched (D-9).
                 Some(_) = upstreams_sub.next() => {
                     info!("Reloading upstreams");
-                    resync_upstreams(ctx, &dns_ctx, true).await;
+                    if !resync_upstreams(ctx, &dns_ctx, true).await {
+                        name_lookup.reset_after(NAME_RETRY);
+                    }
                 }
                 // New listen address/port or TLS identity: restart the DNS service alone (the
                 // daemon, PPPoE and every other service keep running).
-                Some(_) = listen_sub.next() => {
+                Some(delta) = listen_sub.next() => {
+                    if delta.impact != ChangeImpact::Rebind {
+                        info!(bootstrap = ?delta.new.bootstrap, "DNS bootstrap resolvers changed");
+                        if !resync_upstreams(ctx, &dns_ctx, false).await {
+                            name_lookup.reset_after(NAME_RETRY);
+                        }
+                        continue;
+                    }
                     info!("DNS listeners changed, restarting the DNS service");
                     h.request_restart();
                     break;
@@ -657,26 +687,68 @@ fn effective_upstream_targets(ctx: &LanforgeContext) -> Vec<UpstreamTarget> {
         .map(|s| {
             s.dns_servers
                 .iter()
-                .map(|ip| UpstreamTarget {
-                    addr: SocketAddr::new(*ip, 53),
-                    protocol: UpstreamProtocol::Udp,
-                    hostname: None,
-                    domain: None,
-                })
+                .map(|ip| UpstreamTarget::at(SocketAddr::new(*ip, 53), UpstreamProtocol::Udp, None))
                 .collect()
         })
         .unwrap_or_default()
 }
 
-async fn build_upstreams(
+/// How often host-name upstreams are looked up again while each has an address, and while
+/// one has none (the bootstrap resolvers are unreachable at boot, before `PPPoE` is up).
+const NAME_REFRESH: Duration = Duration::from_secs(300);
+const NAME_RETRY: Duration = Duration::from_secs(30);
+
+/// Where each of `targets` is reached: its address, or what its host name looks up to through
+/// the `bootstrap` resolvers. A name keeps the address in use (`current`) while it still has it,
+/// so a name whose answers rotate does not rebuild its upstream; a name that does not look up
+/// keeps the address in use, else is left out and the flag comes back false.
+async fn upstream_addrs(
     targets: &[UpstreamTarget],
+    bootstrap: &[SocketAddr],
+    current: &[(UpstreamTarget, SocketAddr)],
+) -> (Vec<(UpstreamTarget, SocketAddr)>, bool) {
+    let mut resolved = Vec::with_capacity(targets.len());
+    let mut complete = true;
+    for target in targets {
+        let name = match target.addr {
+            UpstreamAddr::Ip(addr) => {
+                resolved.push((target.clone(), addr));
+                continue;
+            }
+            UpstreamAddr::Name(_) => target.host_name().unwrap_or_default(),
+        };
+        let in_use = current
+            .iter()
+            .find(|(t, _)| t == target)
+            .map(|&(_, addr)| addr);
+        match bootstrap::lookup(name, bootstrap).await {
+            Ok(ips) => {
+                let addr = in_use
+                    .filter(|a| ips.contains(&a.ip()))
+                    .unwrap_or_else(|| SocketAddr::new(ips[0], target.addr.port()));
+                resolved.push((target.clone(), addr));
+            }
+            Err(e) => {
+                warn!(upstream = %target, error = %e, "DNS upstream host name did not look up");
+                match in_use {
+                    Some(addr) => resolved.push((target.clone(), addr)),
+                    None => complete = false,
+                }
+            }
+        }
+    }
+    (resolved, complete)
+}
+
+async fn build_upstreams(
+    resolved: &[(UpstreamTarget, SocketAddr)],
     cache: &Arc<DnsCache>,
 ) -> Vec<Arc<UpstreamManager>> {
-    let mut upstreams = Vec::with_capacity(targets.len());
-    for target in targets {
-        match UpstreamManager::new(target, Arc::clone(cache)).await {
+    let mut upstreams = Vec::with_capacity(resolved.len());
+    for (target, addr) in resolved {
+        match UpstreamManager::new(target, *addr, Arc::clone(cache)).await {
             Ok(mgr) => upstreams.push(mgr),
-            Err(e) => error!(addr = %target.addr, error = %e, "Failed to initialize upstream"),
+            Err(e) => error!(upstream = %target, error = %e, "Failed to initialize upstream"),
         }
     }
     upstreams
@@ -699,26 +771,32 @@ fn with_live_listeners(cfg: &DnsConfig, live: &DnsListenConfig) -> DnsConfig {
     }
 }
 
-async fn resync_upstreams(ctx: &LanforgeContext, dns_ctx: &DnsContext, force: bool) {
-    let targets = effective_upstream_targets(ctx);
-    let current: Vec<(SocketAddr, UpstreamProtocol)> = dns_ctx
+/// Returns false while a host-name upstream has no address yet.
+async fn resync_upstreams(ctx: &LanforgeContext, dns_ctx: &DnsContext, force: bool) -> bool {
+    let current: Vec<(UpstreamTarget, SocketAddr)> = dns_ctx
         .recursive
-        .snapshots()
-        .iter()
-        .map(|s| (s.target, s.protocol))
+        .all_upstreams()
+        .map(|m| (m.target.clone(), m.addr))
         .collect();
-    let wanted: Vec<(SocketAddr, UpstreamProtocol)> =
-        targets.iter().map(|t| (t.addr, t.protocol)).collect();
-    if !force && current == wanted {
-        return;
+    let (wanted, complete) = upstream_addrs(
+        &effective_upstream_targets(ctx),
+        &ctx.get_dns_listen().bootstrap,
+        &current,
+    )
+    .await;
+    // The resolver keeps them by tier and domain, not in file order: compared as sets.
+    let unchanged = current.len() == wanted.len() && wanted.iter().all(|w| current.contains(w));
+    if !force && unchanged {
+        return complete;
     }
-    info!(upstreams = ?wanted, "DNS upstreams updated");
+    info!(upstreams = ?wanted.iter().map(|(t, a)| format!("{t} ({a})")).collect::<Vec<_>>(), "DNS upstreams updated");
     dns_ctx
         .recursive
-        .replace_upstreams(build_upstreams(&targets, &dns_ctx.cache).await);
+        .replace_upstreams(build_upstreams(&wanted, &dns_ctx.cache).await);
     if !dns_ctx.recursive.is_empty() {
         dns_ctx.cache.invalidate_all();
     }
+    complete
 }
 
 async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsResponse {

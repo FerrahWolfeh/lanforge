@@ -107,15 +107,56 @@ impl From<QueryLogEntryV1> for QueryLogEntry {
             filter: v1.filter,
             coalesce_id: v1.coalesce_id,
             repeats: 1,
+            upstream: None,
         }
     }
 }
 
-/// Decodes a stored query-log row, current or pre-`repeats`.
+/// A `QueryLogEntry` as stored before `upstream` existed (positional, like [`QueryLogEntryV1`]).
+#[derive(serde::Deserialize)]
+struct QueryLogEntryV2 {
+    timestamp: u64,
+    src_ip: IpAddr,
+    domain: Arc<str>,
+    upstream_us: u32,
+    qtype: DnsRecordType,
+    result: QueryResult,
+    cached: bool,
+    src_mac: Option<MacAddr>,
+    answer: Option<String>,
+    protocol: TransportProtocol,
+    filter: Option<Box<FilterMatch>>,
+    coalesce_id: Option<u64>,
+    repeats: u32,
+}
+
+impl From<QueryLogEntryV2> for QueryLogEntry {
+    fn from(v2: QueryLogEntryV2) -> Self {
+        Self {
+            timestamp: v2.timestamp,
+            src_ip: v2.src_ip,
+            domain: v2.domain,
+            upstream_us: v2.upstream_us,
+            qtype: v2.qtype,
+            result: v2.result,
+            cached: v2.cached,
+            src_mac: v2.src_mac,
+            answer: v2.answer,
+            protocol: v2.protocol,
+            filter: v2.filter,
+            coalesce_id: v2.coalesce_id,
+            repeats: v2.repeats,
+            upstream: None,
+        }
+    }
+}
+
+/// Decodes a stored query-log row: current, pre-`upstream` or pre-`repeats`.
 fn decode_query(bytes: &[u8]) -> Result<QueryLogEntry, DbError> {
     decode::<QueryLogEntry>(bytes).or_else(|err| {
-        decode::<QueryLogEntryV1>(bytes)
+        decode::<QueryLogEntryV2>(bytes)
             .map(QueryLogEntry::from)
+            .or_else(|_| decode::<QueryLogEntryV1>(bytes).map(QueryLogEntry::from))
             .map_err(|_| err)
     })
 }

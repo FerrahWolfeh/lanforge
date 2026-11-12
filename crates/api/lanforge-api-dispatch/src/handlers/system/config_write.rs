@@ -305,7 +305,7 @@ impl ClientContext {
     }
 
     /// The DNS settings running now, as `[dns]` holds them: upstreams, mode, rewrites and
-    /// reverse resolvers are the live ones; the listeners, the cache and the upstream group names
+    /// reverse resolvers are the live ones; the listeners, the cache, the bootstrap resolvers and the upstream group names
     /// are not kept in memory as `[dns]` has them and come from the file (an upstream it does not name is named after the
     /// domain it forwards, else `default`).
     pub(crate) fn live_dns_settings(&self) -> DnsSettings {
@@ -339,6 +339,7 @@ impl ClientContext {
             cache_size: file.cache_size,
             cache_min_ttl: file.cache_min_ttl,
             upstream_mode: self.ctx.get_dns_upstream_mode(),
+            bootstrap: file.bootstrap,
             upstreams,
             reverse: self.ctx.all_reverse_resolvers(),
             rewrites: self.ctx.get_dns_rewrites(),

@@ -1,7 +1,7 @@
 use super::common::*;
 use crate::resolver::recursive::{UpstreamManager, UpstreamMode, UpstreamStrategy};
 use lanforge_dns_wire::{WireDecoder, WireEncoder};
-use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
+use lanforge_types::network::dns::upstream::{UpstreamAddr, UpstreamProtocol, UpstreamTarget};
 use lanforge_types::network::dns::{
     DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecord, DnsRecordType, DnsResponseCode,
 };
@@ -73,14 +73,19 @@ async fn test_dns_local_shielding_anti_poisoning() {
 
     // Replace DnsContext's upstream strategy with our configured mock upstream
     let target = UpstreamTarget {
-        addr: upstream_addr,
+        addr: UpstreamAddr::Ip(upstream_addr),
         protocol: UpstreamProtocol::Udp,
         hostname: None,
+        path: None,
         domain: None,
     };
-    let mgr = UpstreamManager::new(&target, Arc::clone(&dns_ctx.cache))
-        .await
-        .unwrap();
+    let mgr = UpstreamManager::new(
+        &target,
+        target.addr.ip().unwrap(),
+        Arc::clone(&dns_ctx.cache),
+    )
+    .await
+    .unwrap();
     let recursive_strategy = UpstreamStrategy::new(UpstreamMode::Sequential, vec![mgr]);
     dns_ctx.recursive = Arc::new(recursive_strategy);
 

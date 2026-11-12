@@ -9,7 +9,7 @@ use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_dns_wire::{WireDecoder, WireEncoder};
 use lanforge_types::device::TransientOrigin;
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
+use lanforge_types::network::dns::upstream::{UpstreamAddr, UpstreamProtocol, UpstreamTarget};
 use lanforge_types::network::dns::{
     DnsClass, DnsMessage, DnsRData, DnsRecord, DnsRecordType, DnsResponseCode,
 };
@@ -306,9 +306,10 @@ async fn dns_simulation_transient_ip_reverse_dns() {
 
     // Configure reverse resolver rule pointing to our mock upstream server
     let resolver_target = UpstreamTarget {
-        addr: upstream_addr,
+        addr: UpstreamAddr::Ip(upstream_addr),
         protocol: UpstreamProtocol::Udp,
         hostname: None,
+        path: None,
         domain: None,
     };
     let subnet = IpSubnet::from_str("127.0.0.1/32").unwrap();

@@ -35,3 +35,4 @@ mod state;
 mod tcp_rebind;
 mod upstream_accounting;
 mod upstream_mode;
+mod upstream_names;

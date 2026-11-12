@@ -231,12 +231,17 @@ async fn resolve_reverse_ptr_background(
     let mgr = match mgr {
         Some(m) => m,
         None => {
-            let new_mgr = match UpstreamManager::new(&resolver, cache).await {
+            // Reverse resolvers are addresses (the file form refuses host names).
+            let Some(addr) = resolver.addr.ip() else {
+                resolving_ips.lock().remove(&ip);
+                return;
+            };
+            let new_mgr = match UpstreamManager::new(&resolver, addr, cache).await {
                 Ok(new_mgr) => new_mgr,
                 Err(e) => {
                     tracing::error!(
                         "❌ DNS: Failed to initialize reverse resolver UpstreamManager for {}: {}",
-                        resolver.addr,
+                        resolver,
                         e
                     );
                     resolving_ips.lock().remove(&ip);
@@ -309,7 +314,7 @@ async fn resolve_reverse_ptr_background(
             tracing::warn!(
                 "Reverse resolution failed for {} via resolver {}: {:?}",
                 ip,
-                resolver.addr,
+                resolver,
                 e
             );
         }

@@ -424,6 +424,7 @@ mod tests {
                         status: UpstreamStatus::Healthy,
                         last_success_secs_ago: Some(1),
                         domain: None,
+                        host_name: None,
                     }]),
                     _ => continue,
                 };

@@ -159,6 +159,7 @@ mod tests {
             filter: None,
             coalesce_id: None,
             repeats: 0,
+            upstream: None,
         }
     }
 

@@ -48,6 +48,7 @@ impl RewriteMiddleware {
                 protocol: req.protocol,
                 filter: None,
                 coalesce_id: None,
+                upstream: None,
             });
 
             return Ok(true);

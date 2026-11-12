@@ -652,7 +652,7 @@ async fn show_status(client: &LanforgeClient, printer: &Printer) -> Result<()> {
             };
             let domain_str = u.domain.as_deref().unwrap_or("Global (*)");
             table.add_row(vec![
-                u.target.to_string(),
+                u.label(),
                 u.protocol.to_string(),
                 domain_str.to_string(),
                 health_str,
@@ -1181,6 +1181,7 @@ async fn follow_dns_logs(
                             filter: None,
                             coalesce_id: q.coalesce_id,
                             repeats: q.repeats,
+                            upstream: q.upstream.clone(),
                         };
                         println!("{}", format_follow_line(&entry, &ip_to_host, printer));
                     }
@@ -1239,6 +1240,7 @@ async fn follow_dns_logs(
                         filter: None,
                         coalesce_id: q.coalesce_id,
                         repeats: q.repeats,
+                        upstream: q.upstream.clone(),
                     };
                     println!("{}", format_follow_line(&entry, &ip_to_host, printer));
                 }
@@ -1445,7 +1447,7 @@ async fn list_upstreams(client: &LanforgeClient, printer: &Printer) -> Result<()
         };
         let domain_str = u.domain.as_deref().unwrap_or("Global (*)");
         table.add_row(vec![
-            u.target.to_string(),
+            u.label(),
             u.protocol.to_string(),
             domain_str.to_string(),
             health_str,
@@ -1517,7 +1519,7 @@ async fn remove_upstream(
             .iter()
             .map(|u| {
                 let d = u.domain.as_deref().unwrap_or("Global");
-                format!("{} ({}) [{}]", u.target, u.protocol, d)
+                format!("{} ({}) [{}]", u.label(), u.protocol, d)
             })
             .collect();
         let selected = Select::new("Select upstream to remove:", items).prompt()?;
@@ -1526,7 +1528,7 @@ async fn remove_upstream(
             .into_iter()
             .find(|u| {
                 let d = u.domain.as_deref().unwrap_or("Global");
-                format!("{} ({}) [{}]", u.target, u.protocol, d) == selected
+                format!("{} ({}) [{}]", u.label(), u.protocol, d) == selected
             })
             .ok_or_else(|| eyre!("Selection error"))?;
         (chosen.target, chosen.protocol, chosen.domain)
@@ -2807,6 +2809,7 @@ mod tests {
             filter: None,
             coalesce_id: None,
             repeats: 1,
+            upstream: None,
         };
         let host_map = HashMap::new();
         let printer = Printer::new(false, true, false);
@@ -2843,6 +2846,7 @@ mod tests {
             filter: None,
             coalesce_id: None,
             repeats: 1,
+            upstream: None,
         };
         let host_map = HashMap::new();
         let printer = Printer::new(false, true, false);

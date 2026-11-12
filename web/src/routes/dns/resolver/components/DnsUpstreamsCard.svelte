@@ -76,6 +76,7 @@
 	];
 
 	function getUpstreamAddr(u: DnsUpstreamEntry): string {
+		if (u.host_name && typeof u.target === "string") return `${u.host_name} (${u.target})`;
 		if (typeof u.addr === "string") return u.addr;
 		if (u.addr && typeof u.addr === "object" && (u.addr as any).addr) {
 			return (u.addr as any).addr;
@@ -297,7 +298,8 @@
 												<CopyIcon class="h-3.5 w-3.5 text-muted-foreground" />
 												Copy Address
 											</DropdownMenu.Item>
-											{#if canEdit}
+											<!-- Upstreams given by host name are edited in the configuration file. -->
+											{#if canEdit && !item.host_name}
 											<DropdownMenu.Separator />
 											<DropdownMenu.Item
 												onclick={() => onRemoveUpstream(item)}

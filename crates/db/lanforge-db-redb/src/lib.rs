@@ -676,12 +676,18 @@ mod tests {
             filter: None,
             coalesce_id: None,
             repeats: 1,
+            upstream: None,
         };
         let mut old_row = encode(&entry).unwrap();
         assert_eq!(
             old_row.pop(),
+            Some(0),
+            "upstream = None is the trailing byte"
+        );
+        assert_eq!(
+            old_row.pop(),
             Some(1),
-            "repeats = 1 is the trailing varint byte"
+            "repeats = 1 is the varint before it"
         );
         let txn = db.db.begin_write().unwrap();
         {
@@ -706,6 +712,65 @@ mod tests {
         assert_eq!(rate.iter().map(|(_, n)| n).sum::<u64>(), 1);
         let detailed = db.get_dns_query_rate_detailed(now - 60, 30).unwrap();
         assert_eq!(detailed.iter().map(|b| b.total).sum::<u64>(), 1);
+    }
+
+    /// Rows written before `upstream` existed (they lack the last field) still read, with their
+    /// `repeats`; rows written now keep the upstream.
+    #[test]
+    fn query_rows_from_before_upstream_still_read() {
+        use lanforge_db_core::LogStore;
+        use lanforge_types::network::dns::{DnsRecordType, TransportProtocol};
+        use lanforge_types::network::{QueryLogEntry, QueryResult};
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let db = RedbDatabase::open_in_memory();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let entry = |domain: &str, upstream: Option<&str>| QueryLogEntry {
+            timestamp: now,
+            src_ip: "192.168.1.60".parse().unwrap(),
+            domain: Arc::from(domain),
+            upstream_us: 900,
+            qtype: DnsRecordType::A,
+            result: QueryResult::Forwarded,
+            cached: false,
+            src_mac: None,
+            answer: None,
+            protocol: TransportProtocol::Udp,
+            filter: None,
+            coalesce_id: None,
+            repeats: 3,
+            upstream: upstream.map(Arc::from),
+        };
+        let mut old_row = encode(&entry("old.example", None)).unwrap();
+        assert_eq!(
+            old_row.pop(),
+            Some(0),
+            "upstream = None is the trailing byte"
+        );
+        let new_row = encode(&entry("new.example", Some("tls://dns.google"))).unwrap();
+        let txn = db.db.begin_write().unwrap();
+        {
+            let mut table = txn.open_table(TABLE_DNS_QUERIES).unwrap();
+            table.insert((now, 0), old_row.as_slice()).unwrap();
+            table.insert((now, 1), new_row.as_slice()).unwrap();
+        }
+        txn.commit().unwrap();
+
+        let (mut rows, total) = db
+            .get_dns_query_history(10, None, None, None, None, None)
+            .unwrap();
+        assert_eq!(total, 2);
+        rows.sort_by(|a, b| b.domain.cmp(&a.domain));
+        assert_eq!(rows[0].domain.as_ref(), "old.example");
+        assert_eq!((rows[0].repeats, rows[0].upstream.as_deref()), (3, None));
+        assert_eq!(rows[1].domain.as_ref(), "new.example");
+        assert_eq!(
+            (rows[1].repeats, rows[1].upstream.as_deref()),
+            (3, Some("tls://dns.google"))
+        );
     }
 
     #[tokio::test]
@@ -751,6 +816,7 @@ mod tests {
             coalesce_id: None,
             // A folded line: it stands for three identical queries.
             repeats: 3,
+            upstream: None,
         };
         let query2 = QueryLogEntry {
             timestamp: bucket_base + 20,
@@ -766,6 +832,7 @@ mod tests {
             filter: None,
             coalesce_id: None,
             repeats: 1,
+            upstream: None,
         };
         db.record_dns_queries_batch(&[Arc::new(query1), Arc::new(query2)])
             .unwrap();

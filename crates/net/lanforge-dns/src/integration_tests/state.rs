@@ -180,6 +180,7 @@ async fn dns_suppresses_logging_for_ignored_client() {
         protocol: TransportProtocol::Udp,
         filter: None,
         coalesce_id: None,
+        upstream: None,
     });
     assert_eq!(query_log.len(), 1);
 
@@ -202,6 +203,7 @@ async fn dns_suppresses_logging_for_ignored_client() {
         protocol: TransportProtocol::Udp,
         filter: None,
         coalesce_id: None,
+        upstream: None,
     });
     assert_eq!(
         query_log.len(),
@@ -222,6 +224,7 @@ async fn dns_suppresses_logging_for_ignored_client() {
         protocol: TransportProtocol::Udp,
         filter: None,
         coalesce_id: None,
+        upstream: None,
     });
     assert_eq!(query_log.len(), 2, "Expected normal device to be logged");
 
@@ -238,6 +241,7 @@ async fn dns_suppresses_logging_for_ignored_client() {
         protocol: TransportProtocol::Udp,
         filter: None,
         coalesce_id: None,
+        upstream: None,
     });
     assert_eq!(query_log.len(), 2, "Expected ignored IP to be suppressed");
 
@@ -264,6 +268,7 @@ async fn dns_suppresses_logging_for_ignored_client() {
         protocol: TransportProtocol::Udp,
         filter: None,
         coalesce_id: None,
+        upstream: None,
     });
     assert_eq!(
         query_log.len(),
@@ -284,6 +289,7 @@ async fn dns_suppresses_logging_for_ignored_client() {
         protocol: TransportProtocol::Udp,
         filter: None,
         coalesce_id: None,
+        upstream: None,
     });
     assert_eq!(
         query_log.len(),
@@ -304,6 +310,7 @@ async fn dns_suppresses_logging_for_ignored_client() {
         protocol: TransportProtocol::Udp,
         filter: None,
         coalesce_id: None,
+        upstream: None,
     });
     assert_eq!(
         query_log.len(),

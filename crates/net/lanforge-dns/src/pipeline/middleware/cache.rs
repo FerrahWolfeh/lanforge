@@ -50,6 +50,7 @@ impl CacheMiddleware {
                 protocol: req.protocol,
                 filter: req.filter_match.clone(),
                 coalesce_id: None,
+                upstream: None,
             });
 
             Ok(true)
