@@ -1,4 +1,4 @@
-# Lanforge Networking Architecture (`lanforge-dhcp`, `lanforge-ra`, `lanforge-discovery`, `lanforge-wol`, `lanforge-nft`, `lanforge-pppoe`, `lanforge-traffic`, `lanforge-tftp`, `lanforge-transport`)
+# Lanforge Networking Architecture (`lanforge-dhcp`, `lanforge-ra`, `lanforge-discovery`, `lanforge-nft`, `lanforge-pppoe`, `lanforge-traffic`, `lanforge-tftp`, `lanforge-transport`)
 
 Low-level networking, address assignment, security, and WAN routing protocols for the Lanforge daemon.
 Implements DHCPv4, DHCPv6, RA, Discovery (ARP/NDP/mDNS), WoL, PPPoE WAN client, Netlink/nftables firewall, SQM traffic shaping, and TFTP network boot — all integrating with `lanforge-core` via `LanforgeContext`, `EventBus`, and `DeviceUpdate` events.
@@ -13,11 +13,10 @@ The networking engine of Lanforge is modularized into specialized crates. It man
 
 | Crate | Purpose |
 | :--- | :--- |
-| `lanforge-transport` | Foundation: Dual-stack Y-architecture transports (`UdpTransport`, `DualTcpListener`, `Icmp6Transport`), lock-free rate limiting, atomic metrics, and rootless simulation handles (`InertHandle`). |
+| `lanforge-transport` | Foundation: Dual-stack Y-architecture transports (`UdpTransport`, `DualTcpListener`, `Icmp6Transport`), lock-free rate limiting, atomic metrics, rootless simulation handles (`InertHandle`), and Wake-on-LAN magic packets. |
 | `lanforge-dhcp` | DHCPv4 (L2 raw socket DORA state machine) and DHCPv6 (`IA_NA`/`IA_PD` SARR state machine) servers. |
 | `lanforge-ra` | ICMPv6 Router Advertisement daemon, RDNSS/DNSSL options, and dynamic WAN prefix absorption. |
-| `lanforge-discovery` | Consolidated network discovery: Netlink neighbor tracking (ARP/NDP), active probing, and mDNS scraping. |
-| `lanforge-wol` | Wake-on-LAN magic packet injection. |
+| `lanforge-discovery` | Consolidated network discovery: Netlink neighbor tracking (ARP/NDP), active probing, and mDNS hostname probing. |
 | `lanforge-nft` | Stateful Netlink/nftables firewall engine with in-place zero-downtime ruleset reloads. |
 | `lanforge-pppoe` | Async PPPoE client with PADI/PADR discovery, LCP/IPCP negotiation, kernel PPP interface binding, and LCP keepalives. |
 | `lanforge-traffic` | SQM bufferbloat mitigation (CAKE / fq_codel), interface offload controls, and per-device traffic accounting. |
@@ -63,10 +62,6 @@ graph TD
         TFTP["tftp/\nTFTP PXE Server"]
     end
 
-    subgraph "lanforge-wol"
-        WOL["wol/\nWake-on-LAN"]
-    end
-
     DHCP --> TRANS
     RA --> TRANS
     TFTP --> TRANS
@@ -74,7 +69,6 @@ graph TD
     PPPOE --> CTX
     NFT --> CTX
     TRAFFIC --> CTX
-    WOL --> CTX
     TRANS --> CTX
 ```
 

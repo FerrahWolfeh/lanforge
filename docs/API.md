@@ -1,6 +1,6 @@
 # Lanforge RPC API Specification
 
-This document specifies the JSON-RPC interface implemented by the `lanforged` daemon. The RPC contract is defined in the `LanforgeRpc` trait (`lanforge-api`) and is exposed locally over Unix Domain Sockets (UDS) and remotely via the HTTP/REST gateway (`lanforge-http`).
+This document specifies the RPC interface implemented by the `lanforged` daemon. The RPC contract is defined in the `LanforgeRpc` trait (`lanforge-api`) and is exposed locally over a Unix Domain Socket (UDS, postcard binary encoding) and remotely via the HTTP/REST gateway (`lanforge-http`, JSON).
 
 ---
 

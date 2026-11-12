@@ -25,7 +25,7 @@ graph TD
 
     SPA --> FetchClient
     SPA --> SSEClient
-    FetchClient -->|REST / JSON-RPC| Axum
+    FetchClient -->|REST / JSON| Axum
     SSEClient -->|GET /api/v1/events| Axum
     Axum --> Embed
     Axum --> Dispatch
