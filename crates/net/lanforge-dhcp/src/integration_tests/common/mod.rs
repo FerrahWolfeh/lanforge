@@ -113,6 +113,7 @@ pub fn create_test_v6_config() -> Dhcpv6Config {
             ..Default::default()
         }],
         dns_servers: vec![ula],
+        local_dns: true,
         search_domains: vec!["lan".to_string()],
         boot_file: None,
         options: HashMap::new(),

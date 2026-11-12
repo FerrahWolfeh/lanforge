@@ -34,8 +34,12 @@ pub struct Dhcpv6Config {
     pub port: u16,
     /// Multiple pools for address assignment (ULA + GUA).
     pub pools: Vec<Dhcpv6Pool>,
-    /// DNS servers to announce to clients (`DHCPv6` Option 23).
+    /// DNS servers to announce to clients (`DHCPv6` Option 23). Empty: this router while its
+    /// DNS serves, or the `PPPoE` session's IPv6 resolvers when the local DNS is off.
     pub dns_servers: Vec<Ipv6Addr>,
+    /// Whether the daemon is built with its DNS server (`[dns] enabled` is read live).
+    #[serde(skip)]
+    pub local_dns: bool,
     /// Search domains to announce to clients (`DHCPv6` Option 24).
     pub search_domains: Vec<String>,
     /// Global boot file name (Option 59).
@@ -50,7 +54,7 @@ impl Dhcpv6Config {
     /// This start-up configuration with the live `[dhcp.v6]` options over it, at every start
     /// and on every live change (a restart must not fall back to the boot values). `self`'s
     /// search domains are the site's (`[system] search_domains`, else `lan`): they apply when
-    /// the options name none. No DNS server = this router, decided per reply.
+    /// the options name none. No DNS server = the nearest resolver, decided per reply.
     #[must_use]
     pub fn with_options(&self, opts: &Dhcpv6Options) -> Self {
         let mut cfg = self.clone();
@@ -80,6 +84,7 @@ impl Default for Dhcpv6Config {
             port: 547,
             pools: Vec::new(),
             dns_servers: Vec::new(),
+            local_dns: true,
             search_domains: Vec::new(),
             boot_file: None,
             options: HashMap::new(),

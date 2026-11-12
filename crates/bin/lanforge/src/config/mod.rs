@@ -420,6 +420,8 @@ impl Config {
         let mut cfg = self.dhcpv6_toml.clone();
 
         cfg.enabled = self.dhcpv6_enabled;
+        // Without the DNS server built in, clients get the ISP's resolvers, not this host.
+        cfg.local_dns = cfg!(feature = "dns");
         if cfg.iface.is_empty() {
             cfg.iface.clone_from(&self.system.iface);
         }
