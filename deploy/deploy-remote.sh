@@ -122,7 +122,7 @@ deploy_setup() {
     echo ""
     echo "==> [Initial Setup] Packaging deploy/ directory..."
     local tmp_tar="/tmp/lanforge-deploy-bundle-$$.tar.gz"
-    tar -czf "$tmp_tar" -C "$PROJECT_ROOT" deploy
+    tar -czf "$tmp_tar" -C "$PROJECT_ROOT" deploy contrib/lanforge.toml contrib/adblock
 
     echo "==> [Initial Setup] Uploading to $TARGET:/tmp/..."
     scp "$tmp_tar" "$TARGET:/tmp/lanforge-deploy-bundle.tar.gz"

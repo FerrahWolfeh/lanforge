@@ -73,11 +73,16 @@ fi
 echo "--> [4/7] Checking /etc/lanforge/ configuration templates..."
 if [ ! -f /etc/lanforge/lanforge.toml ]; then
     echo "    Installing default /etc/lanforge/lanforge.toml..."
-    cp "$DEPLOY_DIR/config/lanforge.toml" /etc/lanforge/lanforge.toml
+    cp "$PROJECT_ROOT/contrib/lanforge.toml" /etc/lanforge/lanforge.toml
     chown root:lanforge /etc/lanforge/lanforge.toml
     chmod 0640 /etc/lanforge/lanforge.toml
 else
     echo "    Existing /etc/lanforge/lanforge.toml preserved."
+fi
+
+# The template's [adblock] rules file
+if [ ! -f /etc/lanforge/adblock/global.rules ]; then
+    install -D -m 0640 -g lanforge "$PROJECT_ROOT/contrib/adblock/global.rules" /etc/lanforge/adblock/global.rules
 fi
 
 if [ ! -f /etc/lanforge/lanforge.env ]; then
