@@ -17,6 +17,9 @@ RestartSec=5s
 TimeoutStartSec=30s
 TimeoutStopSec=20s
 WatchdogSec=30s
+# A restart keeps the PPPoE session up: its descriptors and record wait in systemd's fd store
+# (pppoe-pppox, pppoe-unit, pppoe-chan, pppoe-record). A stop closes them (after a PADT).
+FileDescriptorStoreMax=4
 
 # Modelo de Permissões e Identidade
 # Executado como root para operações de kernel (netlink, raw sockets, nftables, eBPF, /dev/ppp)

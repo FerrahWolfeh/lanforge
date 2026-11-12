@@ -1,4 +1,5 @@
 use crate::error::PppoeError;
+use crate::kernel::KernelSession;
 use lanforge_transport::PppoeTransport;
 use lanforge_types::identifiers::MacAddr;
 use std::os::fd::{OwnedFd, RawFd};
@@ -17,6 +18,20 @@ impl PppoeSession {
         transport
             .connect_session(ifname, ac_mac.0, session_id)
             .map_err(|e| PppoeError::NegotiationFailed(e.to_string()))?;
+        Ok(Self { transport })
+    }
+
+    /// The session of a link a previous process brought up (`kernel`: its kept descriptors;
+    /// `None` on an inert transport, where the session channel is already the link).
+    pub fn adopt(
+        transport: PppoeTransport,
+        kernel: Option<&KernelSession>,
+    ) -> Result<Self, PppoeError> {
+        if let Some(k) = kernel {
+            transport
+                .adopt_session(k.session_fd.try_clone()?, k.ppp_chan_fd.try_clone()?)
+                .map_err(|e| PppoeError::NegotiationFailed(e.to_string()))?;
+        }
         Ok(Self { transport })
     }
 

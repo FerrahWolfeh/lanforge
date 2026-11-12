@@ -3,8 +3,9 @@
 //! simulation branches.
 
 use crate::error::PppoeError;
+use crate::handoff::SessionRecord;
 use crate::ipcp::IpcpNegotiated;
-use crate::kernel::{KernelSession, configure_interface, handoff_to_kernel};
+use crate::kernel::{KernelSession, configure_interface, handoff_to_kernel, store};
 use crate::lcp::LcpNegotiated;
 use crate::session::PppoeSession;
 use lanforge_transport::{Icmp6Transport, sys};
@@ -39,6 +40,21 @@ pub trait PppoeHost: Send + Sync + 'static {
 
     /// A passive listener for the Router Advertisements the ISP sends on `interface`.
     fn ra_listener(&self, interface: &str) -> Option<Icmp6Transport>;
+
+    /// Hands the session just brought up to a keeper that outlives this process, so the daemon
+    /// can restart without ending it. `false`: nothing keeps it, it ends with the process.
+    fn keep_session(&self, _kernel: Option<&KernelSession>, _record: &SessionRecord) -> bool {
+        false
+    }
+
+    /// The session kept by a previous process (or service task), to take over.
+    fn kept_session(&self) -> Option<(SessionRecord, Option<KernelSession>)> {
+        None
+    }
+
+    /// Forgets the kept session: the keeper closes its copies and the link goes down once this
+    /// process lets go of its own.
+    fn release_session(&self) {}
 }
 
 /// The real host: sysfs, `/dev/ppp`, ioctls and rtnetlink.
@@ -97,6 +113,25 @@ impl PppoeHost for KernelHost {
                 warn!(interface, error = %e, "Cannot listen for the ISP's RAs; IPv6 resolvers not followed");
             })
             .ok()
+    }
+
+    fn keep_session(&self, kernel: Option<&KernelSession>, record: &SessionRecord) -> bool {
+        kernel.is_some_and(|k| store::keep(k, record))
+    }
+
+    fn kept_session(&self) -> Option<(SessionRecord, Option<KernelSession>)> {
+        let (record, kernel) = store::kept()?;
+        // The link must still be the one the record describes.
+        if sys::if_name_to_index(&record.interface).is_none() {
+            warn!(interface = %record.interface, "Kept PPPoE interface is gone");
+            store::release();
+            return None;
+        }
+        Some((record, Some(kernel)))
+    }
+
+    fn release_session(&self) {
+        store::release();
     }
 }
 

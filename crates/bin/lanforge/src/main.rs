@@ -13,6 +13,8 @@
 use anyhow::Result;
 use lanforge::app::Daemon;
 use lanforge::bootstrap::Bootstrapper;
+#[cfg(feature = "pppoe")]
+use lanforge_pppoe::kernel::store;
 #[cfg(feature = "ring")]
 use rustls::crypto::ring;
 use sd_notify::{NotifyState, notify};
@@ -63,6 +65,11 @@ async fn async_main(started: Instant) -> Result<()> {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
+
+    // 1.0.1 The PPPoE session a restart left in the fd store (before any child process could
+    // inherit its descriptors).
+    #[cfg(feature = "pppoe")]
+    store::adopt_inherited();
 
     // 1.1 Setup Profiling
     #[cfg(feature = "hotpath")]

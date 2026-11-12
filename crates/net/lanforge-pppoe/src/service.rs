@@ -3,9 +3,11 @@ use crate::backoff::{ReconnectBackoff, SessionEnd};
 use crate::config::{PppoeConfig, PppoeCredentials};
 use crate::discovery::{DiscoveryResult, PppoeDiscovery, send_padt};
 use crate::error::PppoeError;
+use crate::handoff::SessionRecord;
 use crate::host::{KernelHost, PppoeHost, resolve_parent_iface};
 use crate::ipcp::{IpcpNegotiated, negotiate_ipcp};
-use crate::keepalive::{PadtWatch, run_keepalive};
+use crate::keepalive::{PadtWatch, confirm_alive, run_keepalive};
+use crate::kernel::KernelSession;
 use crate::lcp::{LcpNegotiated, negotiate_lcp};
 use crate::session::PppoeSession;
 use crate::wan_dns::follow_wan_rdnss;
@@ -27,7 +29,7 @@ use lanforge_types::system::{
 use std::mem;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::time::{Instant, interval, sleep_until};
 use tracing::{debug, info, warn};
@@ -95,6 +97,9 @@ pub struct PppoeService<H: PppoeHost = KernelHost> {
     stale_session: Option<(MacAddr, u16)>,
     /// When this process last sent a PADT ([`PADT_RELEASE`]).
     last_padt: Option<Instant>,
+    /// The live session is also held by a keeper that outlives the process
+    /// ([`PppoeHost::keep_session`]): a daemon restart leaves it up for the next instance.
+    kept: bool,
 }
 
 impl PppoeService<KernelHost> {
@@ -123,6 +128,7 @@ impl PppoeService<KernelHost> {
             host: KernelHost,
             stale_session: None,
             last_padt: None,
+            kept: false,
         }
     }
 }
@@ -161,6 +167,7 @@ impl<H: PppoeHost> PppoeService<H> {
             host,
             stale_session: None,
             last_padt: None,
+            kept: false,
         }
     }
 
@@ -281,12 +288,23 @@ impl<H: PppoeHost> PppoeService<H> {
     /// `notify_peer` is false when the concentrator already ended the session.
     /// Runtime settings changed during the session (PADT on stop, reconnect pacing) rule its end;
     /// the identity fields are left alone, the session's link is still the one to deconfigure.
+    ///
+    /// A kept session outlives a daemon restart ([`LanforgeContext::is_restarting`]): no PADT, no
+    /// `SessionDown`, the next instance takes it over. Every other end lets the keeper go.
     async fn teardown_session(&mut self, reason: String, notify_peer: bool) {
         let latest = self.config_sub.current();
         self.apply_hot_config(&latest);
         let had_session = mem::take(&mut self.announced);
         let session_meta = self.active_session.take();
         self.connected_at = None;
+        let kept = mem::take(&mut self.kept);
+        if kept && !self.ctx.is_running() && self.ctx.is_restarting() {
+            info!(
+                session_id = session_meta.as_ref().map(|m| m.session_id),
+                "Daemon restarting: leaving the PPPoE session up for the next instance (no PADT)"
+            );
+            return;
+        }
         if let Some(ref meta) = session_meta
             && notify_peer
             && self.cfg.send_padt_on_shutdown
@@ -306,6 +324,9 @@ impl<H: PppoeHost> PppoeService<H> {
             )
             .await;
             self.last_padt = Some(Instant::now());
+        }
+        if kept {
+            self.host.release_session();
         }
 
         self.ctx.set_pppoe_status(None);
@@ -424,11 +445,22 @@ impl<H: PppoeHost> PppoeService<H> {
         lcp_res: &LcpNegotiated,
         ipcp_res: &IpcpNegotiated,
     ) {
+        self.announce_session(interface_name, disc_res, lcp_res, ipcp_res, Instant::now());
+    }
+
+    /// Publishes the session up since `connected_at` (earlier than now for a session taken over).
+    fn announce_session(
+        &mut self,
+        interface_name: &str,
+        disc_res: &DiscoveryResult,
+        lcp_res: &LcpNegotiated,
+        ipcp_res: &IpcpNegotiated,
+        connected_at: Instant,
+    ) {
         let (terminal_reachable, terminal_mac, terminal_rtt_us) = self
             .terminal_status
             .map_or((None, None, None), |(r, m, rtt)| (Some(r), m, rtt));
 
-        let connected_at = Instant::now();
         let pppoe_status = PppoeStatusResponse {
             enabled: true,
             state: PppoeSessionState::Connected,
@@ -441,7 +473,7 @@ impl<H: PppoeHost> PppoeService<H> {
             session_id: Some(disc_res.session_id),
             mru: Some(lcp_res.mru),
             dns_servers: ipcp_res.dns.to_vec(),
-            uptime_secs: Some(0),
+            uptime_secs: Some(connected_at.elapsed().as_secs()),
             reconnect_attempts: self.backoff.failures(),
             last_error: None,
             auth: Some(lcp_res.auth_method),
@@ -796,14 +828,8 @@ impl<H: PppoeHost> PppoeService<H> {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
-    async fn run_session_flow(&mut self) -> Result<Option<SystemInterrupt>, PppoeError> {
-        self.last_uptime = None;
-        self.wait_for_carrier().await?;
-
-        let prober = self.wait_for_terminal().await?;
-
-        let (ifindex, mac) = self.get_interface_details()?;
+    /// The discovery transport bound to `ifindex` (rebinding the existing one keeps its metrics).
+    fn discovery_transport(&mut self, ifindex: u32) -> Result<PppoeTransport, PppoeError> {
         let transport = if let Some(t) = &self.transport {
             t.bind_discovery(ifindex)
                 .map_err(|e| PppoeError::NegotiationFailed(e.to_string()))?;
@@ -816,6 +842,24 @@ impl<H: PppoeHost> PppoeService<H> {
         };
         self.ctx
             .set_service_transports(ServiceId::Pppoe, vec![transport.metrics_handle()]);
+        Ok(transport)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn run_session_flow(&mut self) -> Result<Option<SystemInterrupt>, PppoeError> {
+        self.last_uptime = None;
+        if let Some((record, kernel)) = self.host.kept_session()
+            && let Some(res) = self.take_over(record, kernel).await
+        {
+            return res;
+        }
+
+        self.wait_for_carrier().await?;
+
+        let prober = self.wait_for_terminal().await?;
+
+        let (ifindex, mac) = self.get_interface_details()?;
+        let transport = self.discovery_transport(ifindex)?;
 
         if let Some(padt) = self.last_padt {
             let release = padt + PADT_RELEASE;
@@ -877,51 +921,177 @@ impl<H: PppoeHost> PppoeService<H> {
             if let Some(ref mut meta) = self.active_session {
                 meta.peer_ip = ipcp_res.peer_ip;
             }
-            let (interface_name, _kernel_session) =
+            let (interface_name, kernel_session) =
                 self.host.bring_up(&session, &lcp_res, &ipcp_res).await?;
 
-            self.publish_connected_status(&interface_name, &disc_res, &lcp_res, &ipcp_res);
-
-            info!(
-                interface = %interface_name,
-                ipv4 = ?ipcp_res.local_ip,
-                peer = ?ipcp_res.peer_ip,
-                dns_count = ipcp_res.dns.len(),
-                "PPPoE session established, entering keepalive monitoring loop"
+            let record = SessionRecord::new(
+                &self.cfg,
+                mac,
+                &disc_res,
+                &lcp_res,
+                &ipcp_res,
+                &interface_name,
+                kernel_session.as_ref().map_or(0, |k| k.unit_id),
+                unix_ms(SystemTime::now()),
             );
+            self.kept = self.host.keep_session(kernel_session.as_ref(), &record);
 
-            // The ISP's IPv6 resolvers (RA RDNSS) are followed for as long as the session lives.
-            let wan_ra = self.wan_ra_listener(&interface_name);
-            let keepalive = run_keepalive(
-                &session,
-                &self.ctx,
-                lcp_res.local_magic,
-                lcp_res.peer_magic,
-                &mut self.config_sub,
-                keepalive_prober,
-                PadtWatch {
-                    transport: &transport,
-                    ac_mac: disc_res.ac_mac,
-                    session_id: disc_res.session_id,
-                },
-            );
-            tokio::pin!(keepalive);
-            let rdnss = async {
-                if let Some(ra) = &wan_ra {
-                    follow_wan_rdnss(&self.ctx, ra).await;
-                }
-            };
-            tokio::pin!(rdnss);
-            let mut following = true;
-            loop {
-                tokio::select! {
-                    res = &mut keepalive => break res,
-                    () = &mut rdnss, if following => following = false,
-                }
-            }
+            let res = self
+                .run_established(
+                    &session,
+                    &transport,
+                    &interface_name,
+                    (&disc_res, &lcp_res, &ipcp_res),
+                    keepalive_prober,
+                    Instant::now(),
+                )
+                .await;
+            // The kernel session must live as long as the link.
+            drop(kernel_session);
+            res
         }
         .await;
 
+        self.end_session(flow_res, &disc_res).await
+    }
+
+    /// Takes over the session a previous process (or service task) kept. `None` when it is not
+    /// taken over: it was dialled with other settings, the link changed, or the concentrator no
+    /// longer answers on it. It is then terminated (PADT) and a new session is dialled.
+    async fn take_over(
+        &mut self,
+        record: SessionRecord,
+        kernel: Option<KernelSession>,
+    ) -> Option<Result<Option<SystemInterrupt>, PppoeError>> {
+        let disc = record.discovery();
+        let lcp = record.lcp();
+        let ipcp = record.ipcp();
+        // From here on the old session ends like any other: PADT, and the keeper lets go.
+        self.kept = true;
+        self.active_session = Some(ActiveSessionMeta {
+            wan_mac: MacAddr(record.wan_mac),
+            ac_mac: disc.ac_mac,
+            session_id: disc.session_id,
+            peer_ip: record.peer_ip,
+        });
+
+        let ready = async {
+            // On the link the session runs on, so a PADT reaches its concentrator even when the
+            // configuration moved to another interface.
+            let (ifindex, mac) = self
+                .host
+                .interface(&record.wan_iface)
+                .ok_or_else(|| format!("interface {} is gone", record.wan_iface))?;
+            if mac.0 != record.wan_mac {
+                return Err(format!("the MAC of {} changed", record.wan_iface));
+            }
+            let transport = self
+                .discovery_transport(ifindex)
+                .map_err(|e| e.to_string())?;
+            if !record.dialled_with(&self.cfg) {
+                return Err("it was dialled with other settings".to_owned());
+            }
+            let session = PppoeSession::adopt(transport.clone(), kernel.as_ref())
+                .map_err(|e| e.to_string())?;
+            if !confirm_alive(&session, lcp.local_magic, lcp.peer_magic).await {
+                return Err("the access concentrator does not answer on it".to_owned());
+            }
+            Ok((transport, session))
+        }
+        .await;
+
+        let (transport, session) = match ready {
+            Ok(ready) => ready,
+            Err(why) => {
+                warn!(
+                    interface = %record.interface,
+                    session_id = disc.session_id,
+                    why = %why,
+                    "Not taking over the kept PPPoE session; terminating it"
+                );
+                self.teardown_session(format!("Kept session not taken over: {why}"), true)
+                    .await;
+                return None;
+            }
+        };
+
+        info!(
+            interface = %record.interface,
+            session_id = disc.session_id,
+            ac_mac = %disc.ac_mac,
+            "Took over the PPPoE session kept across the restart (no PADT, no discovery)"
+        );
+        let res = self
+            .run_established(
+                &session,
+                &transport,
+                &record.interface,
+                (&disc, &lcp, &ipcp),
+                None,
+                instant_of(record.connected_at_unix_ms),
+            )
+            .await;
+        drop(kernel);
+        Some(self.end_session(res, &disc).await)
+    }
+
+    /// Announces the established session and watches it until it ends.
+    async fn run_established(
+        &mut self,
+        session: &PppoeSession,
+        transport: &PppoeTransport,
+        interface_name: &str,
+        (disc_res, lcp_res, ipcp_res): (&DiscoveryResult, &LcpNegotiated, &IpcpNegotiated),
+        prober: Option<(&ArpProber, Ipv4Addr, Option<Ipv4Addr>, Duration)>,
+        since: Instant,
+    ) -> Result<Option<SystemInterrupt>, PppoeError> {
+        self.announce_session(interface_name, disc_res, lcp_res, ipcp_res, since);
+
+        info!(
+            interface = %interface_name,
+            ipv4 = ?ipcp_res.local_ip,
+            peer = ?ipcp_res.peer_ip,
+            dns_count = ipcp_res.dns.len(),
+            "PPPoE session established, entering keepalive monitoring loop"
+        );
+
+        // The ISP's IPv6 resolvers (RA RDNSS) are followed for as long as the session lives.
+        let wan_ra = self.wan_ra_listener(interface_name);
+        let keepalive = run_keepalive(
+            session,
+            &self.ctx,
+            lcp_res.local_magic,
+            lcp_res.peer_magic,
+            &mut self.config_sub,
+            prober,
+            PadtWatch {
+                transport,
+                ac_mac: disc_res.ac_mac,
+                session_id: disc_res.session_id,
+            },
+        );
+        tokio::pin!(keepalive);
+        let rdnss = async {
+            if let Some(ra) = &wan_ra {
+                follow_wan_rdnss(&self.ctx, ra).await;
+            }
+        };
+        tokio::pin!(rdnss);
+        let mut following = true;
+        loop {
+            tokio::select! {
+                res = &mut keepalive => break res,
+                () = &mut rdnss, if following => following = false,
+            }
+        }
+    }
+
+    /// Ends the session `disc_res` dialled, after it ended with `flow_res`.
+    async fn end_session(
+        &mut self,
+        flow_res: Result<Option<SystemInterrupt>, PppoeError>,
+        disc_res: &DiscoveryResult,
+    ) -> Result<Option<SystemInterrupt>, PppoeError> {
         if matches!(flow_res, Err(PppoeError::TerminalUnreachable(..))) {
             self.terminal_status = Some((false, None, None));
         }
@@ -948,6 +1118,18 @@ impl<H: PppoeHost> PppoeService<H> {
 
         flow_res
     }
+}
+
+/// Milliseconds since the Unix epoch.
+fn unix_ms(t: SystemTime) -> u64 {
+    t.duration_since(UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
+/// The monotonic instant of wall-clock time `unix_ms` (now if it lies in the future).
+fn instant_of(unix_ms_then: u64) -> Instant {
+    let age = Duration::from_millis(unix_ms(SystemTime::now()).saturating_sub(unix_ms_then));
+    Instant::now().checked_sub(age).unwrap_or_else(Instant::now)
 }
 
 impl<H: PppoeHost> LanforgeService for PppoeService<H> {
