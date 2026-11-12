@@ -54,6 +54,8 @@ pub struct UpstreamManager {
     pub(crate) next_id: AtomicU16,
     pub cache: Arc<DnsCache>,
     pub target: UpstreamTarget,
+    /// Where `target` is reached: its address, or what its host name resolved to.
+    pub addr: SocketAddr,
     pub health: Arc<UpstreamHealth>,
     #[cfg(feature = "doh-upstream")]
     pub doh_client: Option<DohClient>,
@@ -70,8 +72,12 @@ pub struct UpstreamManager {
 }
 
 impl UpstreamManager {
-    pub async fn new(target: &UpstreamTarget, cache: Arc<DnsCache>) -> Result<Arc<Self>, DnsError> {
-        let socket = if target.addr.is_ipv4() {
+    pub async fn new(
+        target: &UpstreamTarget,
+        addr: SocketAddr,
+        cache: Arc<DnsCache>,
+    ) -> Result<Arc<Self>, DnsError> {
+        let socket = if addr.is_ipv4() {
             Arc::new(UdpSocket::bind("0.0.0.0:0").await?)
         } else {
             Arc::new(UdpSocket::bind("[::]:0").await?)
@@ -106,7 +112,7 @@ impl UpstreamManager {
             ));
             config.transport_config(Arc::new(transport_config));
 
-            let bind_addr = if target.addr.is_ipv4() {
+            let bind_addr = if addr.is_ipv4() {
                 "0.0.0.0:0".parse().expect("literal socket address")
             } else {
                 "[::]:0".parse().expect("literal socket address")
@@ -124,10 +130,11 @@ impl UpstreamManager {
             next_id: AtomicU16::new(1),
             cache,
             target: target.clone(),
+            addr,
             health: Arc::new(UpstreamHealth::new()),
             #[cfg(feature = "doh-upstream")]
             doh_client: if target.protocol == UpstreamProtocol::Https {
-                Some(DohClient::new())
+                Some(DohClient::new(target, addr)?)
             } else {
                 None
             },
@@ -153,7 +160,7 @@ impl UpstreamManager {
         let s = Arc::clone(&mgr.socket);
         let p = Arc::clone(&mgr.pending);
         let health_rx = Arc::clone(&mgr.health);
-        let upstream_addr = mgr.target.addr;
+        let upstream_addr = mgr.addr;
 
         let rx_task = tokio::spawn(async move {
             let mut buf = vec![0u8; 4096];
@@ -250,7 +257,7 @@ impl UpstreamManager {
     async fn send_query_wire(&self, data: &[u8]) -> Result<Vec<u8>, DnsError> {
         let start = Instant::now();
         let resp_result = match self.target.protocol {
-            UpstreamProtocol::Udp => self.forward_udp(data, self.target.addr).await,
+            UpstreamProtocol::Udp => self.forward_udp(data, self.addr).await,
             UpstreamProtocol::Tls => self.forward_dot(data, &self.target).await,
             UpstreamProtocol::Quic => {
                 #[cfg(feature = "doq")]
@@ -266,7 +273,7 @@ impl UpstreamManager {
                 #[cfg(feature = "doh-upstream")]
                 {
                     if let Some(client) = &self.doh_client {
-                        client.resolve(&self.target, data).await
+                        client.resolve(data).await
                     } else {
                         Err(DnsError::Generic("DoH client not initialized".to_string()))
                     }
@@ -476,7 +483,7 @@ impl UpstreamManager {
             .as_ref()
             .ok_or_else(|| DnsError::Generic("TLS connector not initialized".to_string()))?;
 
-        let tcp_stream = timeout(Duration::from_secs(5), TcpStream::connect(target.addr))
+        let tcp_stream = timeout(Duration::from_secs(5), TcpStream::connect(self.addr))
             .await
             .map_err(|_| DnsError::UpstreamTimeout)??;
 
@@ -553,7 +560,7 @@ impl UpstreamManager {
             .ok_or_else(|| DnsError::Generic("QUIC endpoint not initialized".to_string()))?;
 
         let conn = endpoint
-            .connect(target.addr, hostname)
+            .connect(self.addr, hostname)
             .map_err(|e| DnsError::Tls(e.to_string()))?;
 
         let conn = timeout(Duration::from_secs(5), conn)

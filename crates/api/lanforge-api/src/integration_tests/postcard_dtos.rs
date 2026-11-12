@@ -10,6 +10,7 @@ use std::sync::Arc;
 use crate::api::dns::{DnsQueryLogEntry, DnsUpstreamConfig, QueryRateEntry};
 use crate::api::system::SystemConfigExport;
 use lanforge_types::network::dns::adblock::{AdblockSourceFormat, AdblockUrlKind, FilterAction};
+use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::dns::{
     AdblockCheckResponse, AdblockSourceMatch, AdblockSourceStatus, DnsRecordType, QueryResult,
     UpstreamHealthSnapshot, UpstreamProtocol, UpstreamStatus,
@@ -31,9 +32,11 @@ fn assert_postcard_roundtrip<T: Serialize + DeserializeOwned>(name: &str, make: 
 fn dns_dtos_with_empty_optional_fields_cross_the_socket() {
     assert_postcard_roundtrip("DnsUpstreamConfig", || DnsUpstreamConfig {
         name: None,
-        addr: SocketAddr::from(([1, 1, 1, 1], 53)),
-        protocol: UpstreamProtocol::Udp,
-        domain: None,
+        target: UpstreamTarget::at(
+            SocketAddr::from(([1, 1, 1, 1], 53)),
+            UpstreamProtocol::Udp,
+            None,
+        ),
     });
     assert_postcard_roundtrip("QueryRateEntry", || QueryRateEntry {
         timestamp: 1,
@@ -73,6 +76,7 @@ fn dns_dtos_with_empty_optional_fields_cross_the_socket() {
         status: UpstreamStatus::Healthy,
         last_success_secs_ago: None,
         domain: None,
+        host_name: None,
     });
     assert_postcard_roundtrip("AdblockSourceStatus", || AdblockSourceStatus {
         id: 1,

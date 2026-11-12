@@ -207,7 +207,8 @@ impl UpstreamStrategy {
                 #[allow(unused_mut)]
                 let mut snap =
                     m.health
-                        .snapshot(m.target.addr, m.target.protocol, m.target.domain.clone());
+                        .snapshot(m.addr, m.target.protocol, m.target.domain.clone());
+                snap.host_name = m.target.host_name().map(str::to_string);
 
                 #[cfg(not(feature = "dot"))]
                 if m.target.protocol == UpstreamProtocol::Tls {
@@ -459,8 +460,8 @@ impl UpstreamStrategy {
                     })
                 }
                 Err(e) => {
-                    tracing::debug!(upstream = %mgr.target.addr, error = %e, "DNS upstream attempt failed");
-                    Err(DnsError::Generic(format!("via {}: {e}", mgr.target.addr)))
+                    tracing::debug!(upstream = %mgr.addr, error = %e, "DNS upstream attempt failed");
+                    Err(DnsError::Generic(format!("via {}: {e}", mgr.addr)))
                 }
             };
         }
@@ -498,7 +499,7 @@ impl UpstreamStrategy {
                             });
                         }
                         Some((mgr, Err(e))) => {
-                            let addr = mgr.target.addr;
+                            let addr = mgr.addr;
                             tracing::debug!(upstream = %addr, error = %e, "DNS upstream attempt failed");
                             last_err = DnsError::Generic(format!("via {addr}: {e}"));
                             if next_idx < available.len() {
@@ -546,7 +547,7 @@ impl UpstreamStrategy {
             let mgr = Arc::clone(mgr);
             let shared_data = shared_data.clone();
             set.spawn(async move {
-                let addr = mgr.target.addr;
+                let addr = mgr.addr;
                 let res = match (
                     WireHeader::parse(&shared_data),
                     WireQuestion::parse(&shared_data),
@@ -623,8 +624,8 @@ impl UpstreamStrategy {
                     });
                 }
                 Err(e) => {
-                    tracing::debug!(upstream = %mgr.target.addr, error = %e, "DNS upstream attempt failed");
-                    last_err = DnsError::Generic(format!("via {}: {e}", mgr.target.addr));
+                    tracing::debug!(upstream = %mgr.addr, error = %e, "DNS upstream attempt failed");
+                    last_err = DnsError::Generic(format!("via {}: {e}", mgr.addr));
                 }
             }
         }
@@ -662,8 +663,8 @@ impl UpstreamStrategy {
                     });
                 }
                 Err(e) => {
-                    tracing::debug!(upstream = %mgr.target.addr, error = %e, "DNS upstream attempt failed");
-                    last_err = DnsError::Generic(format!("via {}: {e}", mgr.target.addr));
+                    tracing::debug!(upstream = %mgr.addr, error = %e, "DNS upstream attempt failed");
+                    last_err = DnsError::Generic(format!("via {}: {e}", mgr.addr));
                 }
             }
         }

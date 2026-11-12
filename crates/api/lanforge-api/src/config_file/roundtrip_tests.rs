@@ -162,7 +162,6 @@ fn base() -> SystemConfigExport {
         AdblockDbConfig, AdblockRuleAction, AdblockRuleEntry, AdblockSourceFormat, AdblockUrlKind,
         RewriteAnswer, RewriteRule,
     };
-    use lanforge_types::network::dns::upstream::UpstreamProtocol;
     use lanforge_types::network::firewall::FirewallConfig;
     use lanforge_types::network::pppoe::PppoeConfig;
     use lanforge_types::network::ra::{DnsslConfig, PrefixLifetime, RAPrefix, RdnssConfig};
@@ -191,9 +190,7 @@ fn base() -> SystemConfigExport {
         }],
         dns_upstreams: vec![DnsUpstreamConfig {
             name: Some("quad9".into()),
-            addr: "9.9.9.9:853".parse().unwrap(),
-            protocol: UpstreamProtocol::Tls,
-            domain: Some("dns.quad9.net".into()),
+            target: "tls://dns.quad9.net@9.9.9.9#dns.quad9.net".parse().unwrap(),
         }],
         dns_adblock_config: AdblockDbConfig::default(),
         dns_adblock_urls: vec![AdblockUrlEntry {

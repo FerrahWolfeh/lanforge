@@ -221,6 +221,7 @@ impl Display for UpstreamStatus {
 /// Serializable snapshot of upstream health metrics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpstreamHealthSnapshot {
+    /// The address queried: a host name's looked-up one, `0.0.0.0:<port>` while it has none.
     pub target: SocketAddr,
     pub protocol: UpstreamProtocol,
     pub rtt_ewma_us: u32,
@@ -238,6 +239,20 @@ pub struct UpstreamHealthSnapshot {
     pub last_success_secs_ago: Option<u64>,
     #[serde(default)]
     pub domain: Option<String>,
+    /// The host name the upstream is given by (`tls://dns.google`); `None` for an address.
+    #[serde(default)]
+    pub host_name: Option<String>,
+}
+
+impl UpstreamHealthSnapshot {
+    /// `dns.google (8.8.8.8:853)` for a host name, else the address.
+    #[must_use]
+    pub fn label(&self) -> String {
+        self.host_name.as_ref().map_or_else(
+            || self.target.to_string(),
+            |name| format!("{name} ({})", self.target),
+        )
+    }
 }
 
 /// The result of a DNS query resolution.

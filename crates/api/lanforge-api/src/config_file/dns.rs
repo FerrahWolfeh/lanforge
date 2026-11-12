@@ -41,6 +41,8 @@ pub struct DnsSettings {
     /// Shortest TTL (seconds) a cached answer keeps; `None` = the default.
     pub cache_min_ttl: Option<u32>,
     pub upstream_mode: UpstreamMode,
+    /// Resolvers that look up upstreams given by host name; `None` = the default.
+    pub bootstrap: Option<Vec<SocketAddr>>,
     /// In order: the order is the one the sequential mode tries.
     pub upstreams: Vec<NamedUpstream>,
     pub reverse: Vec<DnsReverseResolver>,
@@ -69,6 +71,10 @@ impl DnsSettings {
             cache_min_ttl: self
                 .cache_min_ttl
                 .unwrap_or(DnsListenConfig::DEFAULT_CACHE_MIN_TTL),
+            bootstrap: self
+                .bootstrap
+                .clone()
+                .unwrap_or_else(|| DnsListenConfig::DEFAULT_BOOTSTRAP.to_vec()),
             ..live.clone()
         }
     }
@@ -84,6 +90,7 @@ impl Default for DnsSettings {
             cache_size: None,
             cache_min_ttl: None,
             upstream_mode: UpstreamMode::default(),
+            bootstrap: None,
             upstreams: Vec::new(),
             reverse: Vec::new(),
             rewrites: Vec::new(),
@@ -121,6 +128,11 @@ pub struct DnsFile {
     /// `sequential`, `parallel`, `fastest` or `roundrobin`.
     #[serde(default = "default_upstream_mode")]
     pub upstream_mode: String,
+    /// Plain-DNS resolvers (`"9.9.9.9"`, `"[2620:fe::fe]:53"`; port 53 unless given) that look
+    /// up upstreams given by host name. Absent:
+    /// Cloudflare's (`1.1.1.1`, `1.0.0.1`, `2606:4700:4700::1111`, `2606:4700:4700::1001`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bootstrap: Option<Vec<String>>,
     /// `[dns.upstreams.<name>]`, in file order.
     #[serde(default, skip_serializing_if = "Vec::is_empty", with = "named_tables")]
     pub upstreams: Vec<(String, DnsUpstreamFile)>,
@@ -146,6 +158,7 @@ impl Default for DnsFile {
             cache_size: None,
             cache_min_ttl: None,
             upstream_mode: default_upstream_mode(),
+            bootstrap: None,
             upstreams: Vec::new(),
             reverse: Vec::new(),
             rewrites: Vec::new(),
@@ -365,44 +378,6 @@ fn parse_answer(text: &str) -> Result<RewriteAnswer, String> {
         identifier,
         fallback,
     })
-}
-
-/// An upstream resolver: `[udp|tls|quic|https]://[<tls name>@]<ip>[:<port>][#<domain>]`. Without a
-/// port, the protocol's own: 53 (udp), 853 (tls, quic), 443 (https).
-fn parse_upstream(text: &str) -> Result<UpstreamTarget, String> {
-    let text = text.trim();
-    let err = match UpstreamTarget::from_str(text) {
-        Ok(target) => return Ok(target),
-        Err(e) => e,
-    };
-    let (body, domain) = text
-        .split_once('#')
-        .map_or((text, None), |(b, d)| (b, Some(d)));
-    let (scheme, rest) = body.split_once("://").unwrap_or(("udp", body));
-    if !matches!(scheme, "udp" | "tls" | "quic" | "https") {
-        return Err(format!("\"{scheme}://\" is not udp, tls, quic or https"));
-    }
-    let (name, addr) = rest
-        .rsplit_once('@')
-        .map_or((None, rest), |(n, a)| (Some(n), a));
-    let port = match scheme {
-        "udp" => 53,
-        "tls" | "quic" => 853,
-        _ => 443,
-    };
-    let ip: IpAddr = addr
-        .strip_prefix('[')
-        .and_then(|a| a.strip_suffix(']'))
-        .unwrap_or(addr)
-        .parse()
-        .map_err(|_| err.clone())?;
-    let name = name.map(|n| format!("{n}@")).unwrap_or_default();
-    let domain = domain.map(|d| format!("#{d}")).unwrap_or_default();
-    UpstreamTarget::from_str(&format!(
-        "{scheme}://{name}{}{domain}",
-        SocketAddr::new(ip, port)
-    ))
-    .map_err(|_| err)
 }
 
 fn parse_rtype(text: &str) -> Option<DnsRecordType> {
@@ -633,6 +608,18 @@ impl DnsFile {
             cache_size: dns.cache_size,
             cache_min_ttl: dns.cache_min_ttl.map(HumanDuration::from),
             upstream_mode: dns.upstream_mode.to_string(),
+            bootstrap: dns.bootstrap.as_ref().map(|addrs| {
+                addrs
+                    .iter()
+                    .map(|a| {
+                        if a.port() == 53 {
+                            a.ip().to_string()
+                        } else {
+                            a.to_string()
+                        }
+                    })
+                    .collect()
+            }),
             upstreams,
             reverse: dns
                 .reverse
@@ -703,11 +690,31 @@ impl DnsFile {
             UpstreamMode::default()
         });
 
+        let bootstrap = self.bootstrap.as_ref().map(|texts| {
+            texts
+                .iter()
+                .filter_map(|text| {
+                    let text = text.trim();
+                    let addr = SocketAddr::from_str(text).ok().or_else(|| {
+                        IpAddr::from_str(text)
+                            .ok()
+                            .map(|ip| SocketAddr::new(ip, 53))
+                    });
+                    if addr.is_none() {
+                        issues.push(format!(
+                            "[dns] bootstrap \"{text}\" is not an IP address; left out"
+                        ));
+                    }
+                    addr
+                })
+                .collect()
+        });
+
         let mut upstreams = Vec::new();
         for (name, group) in &self.upstreams {
             let at = format!("[dns.upstreams.\"{name}\"]");
             for text in &group.addresses {
-                let mut target = match parse_upstream(text) {
+                let mut target = match UpstreamTarget::from_str(text) {
                     Ok(t) => t,
                     Err(e) => {
                         issues.push(format!(
@@ -741,7 +748,10 @@ impl DnsFile {
                 ));
                 continue;
             };
-            match parse_upstream(resolver) {
+            match UpstreamTarget::from_str(resolver) {
+                Ok(target) if target.host_name().is_some() => issues.push(format!(
+                    "[dns.reverse] \"{subnet}\" = \"{resolver}\": a reverse resolver needs an IP address; left out"
+                )),
                 Ok(target) => reverse.push(DnsReverseResolver {
                     subnet: parsed_subnet,
                     resolver: target,
@@ -787,6 +797,7 @@ impl DnsFile {
                 cache_size,
                 cache_min_ttl,
                 upstream_mode,
+                bootstrap,
                 upstreams,
                 reverse,
                 rewrites,
@@ -852,6 +863,7 @@ mod tests {
             cache_size: None,
             cache_min_ttl: None,
             upstream_mode: UpstreamMode::Sequential,
+            bootstrap: None,
             upstreams: vec![
                 cf("1.1.1.1:53"),
                 cf("1.0.0.1:53"),
@@ -929,9 +941,18 @@ addresses = ["udp://1.1.1.1:53", "udp://1.0.0.1:53",
             cache_size: Some(20_000),
             cache_min_ttl: Some(60),
             upstream_mode: UpstreamMode::RoundRobin,
+            bootstrap: Some(vec![
+                "9.9.9.9:53".parse().unwrap(),
+                "[2620:fe::fe]:5353".parse().unwrap(),
+            ]),
             upstreams: vec![
                 up("cloudflare", "tls://one.one.one.one@1.1.1.1:853"),
                 up("cloudflare", "https://[2606:4700:4700::1111]:443"),
+                // by host name, resolved through the bootstrap resolvers
+                up("named", "tls://dns.google"),
+                up("named", "quic://dns.adguard-dns.com:8853"),
+                up("named", "https://dns.nextdns.io/abc123"),
+                up("named", "https://1.1.1.1/dns-query"),
                 // the whole group forwards one domain
                 up("corp", "udp://10.0.0.1:53#corp.example"),
                 up("corp", "udp://10.0.0.2:53#corp.example"),

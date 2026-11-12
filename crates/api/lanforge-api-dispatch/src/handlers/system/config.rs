@@ -11,7 +11,6 @@ use lanforge_db_core::Stores;
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::rules_file::RulesFile;
 use lanforge_types::network::dns::adblock::{AdblockRuleAction, AdblockRuleEntry};
-use lanforge_types::network::dns::upstream::UpstreamTarget;
 
 use crate::handlers::dns::adblock::with_rule_only;
 use crate::handlers::dns::rewrite::upsert_rewrite;
@@ -62,9 +61,7 @@ impl ClientContext {
             .into_iter()
             .map(|up| DnsUpstreamConfig {
                 name: Some(up.name),
-                addr: up.target.addr,
-                protocol: up.target.protocol,
-                domain: up.target.domain,
+                target: up.target,
             })
             .collect();
 
@@ -240,23 +237,13 @@ impl ClientContext {
                     upsert_rewrite(&mut dns.rewrites, rule);
                 }
                 for up in dns_upstreams {
-                    let known = dns.upstreams.iter().any(|u| {
-                        u.target.addr == up.addr
-                            && u.target.protocol == up.protocol
-                            && u.target.domain == up.domain
-                    });
-                    if !known {
+                    if !dns.upstreams.iter().any(|u| u.target == up.target) {
                         dns.upstreams.push(NamedUpstream {
                             name: up
                                 .name
-                                .or_else(|| up.domain.clone())
+                                .or_else(|| up.target.domain.clone())
                                 .unwrap_or_else(|| "default".to_string()),
-                            target: UpstreamTarget {
-                                addr: up.addr,
-                                protocol: up.protocol,
-                                hostname: None,
-                                domain: up.domain,
-                            },
+                            target: up.target,
                         });
                     }
                 }

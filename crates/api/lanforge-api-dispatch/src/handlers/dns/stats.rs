@@ -7,7 +7,7 @@ use lanforge_api::api::{
 use lanforge_api::config_file::NamedUpstream;
 use lanforge_types::network::dns::{
     DnsRecordType, DnsRequest, DnsResponse, UpstreamHealthSnapshot, UpstreamStatus,
-    upstream::{UpstreamMode, UpstreamProtocol, UpstreamTarget},
+    upstream::{UpstreamAddr, UpstreamMode, UpstreamProtocol, UpstreamTarget},
 };
 use std::collections::hash_map::Entry;
 use std::{
@@ -68,7 +68,10 @@ impl ClientContext {
             .get_dns_upstreams()
             .into_iter()
             .map(|r| UpstreamHealthSnapshot {
-                target: r.addr,
+                target: r
+                    .addr
+                    .ip()
+                    .unwrap_or_else(|| SocketAddr::from(([0, 0, 0, 0], r.addr.port()))),
                 protocol: r.protocol,
                 rtt_ewma_us: 0,
                 last_rtt_us: 0,
@@ -78,6 +81,7 @@ impl ClientContext {
                 total_wins: 0,
                 status: UpstreamStatus::Unknown,
                 last_success_secs_ago: None,
+                host_name: r.host_name().map(str::to_string),
                 domain: r.domain,
             })
             .collect();
@@ -93,19 +97,14 @@ impl ClientContext {
         dns_reply(
             self.change_dns(|dns| {
                 let known = dns.upstreams.iter().any(|u| {
-                    u.target.addr == addr
+                    u.target.addr == UpstreamAddr::Ip(addr)
                         && u.target.protocol == protocol
                         && u.target.domain == domain
                 });
                 if !known {
                     dns.upstreams.push(NamedUpstream {
                         name: domain.clone().unwrap_or_else(|| "default".to_string()),
-                        target: UpstreamTarget {
-                            addr,
-                            protocol,
-                            hostname: None,
-                            domain,
-                        },
+                        target: UpstreamTarget::at(addr, protocol, domain),
                     });
                 }
             }),
@@ -119,8 +118,9 @@ impl ClientContext {
         protocol: UpstreamProtocol,
         domain: Option<String>,
     ) -> Response {
-        let matches =
-            |t: &UpstreamTarget| t.addr == addr && t.protocol == protocol && t.domain == domain;
+        let matches = |t: &UpstreamTarget| {
+            t.addr == UpstreamAddr::Ip(addr) && t.protocol == protocol && t.domain == domain
+        };
         if !self.ctx.get_dns_upstreams().iter().any(matches) {
             return Response::Error {
                 error: "Upstream not found".into(),
@@ -149,12 +149,7 @@ impl ClientContext {
                 dns.upstreams
                     .extend(addrs.iter().map(|&addr| NamedUpstream {
                         name: "default".to_string(),
-                        target: UpstreamTarget {
-                            addr,
-                            protocol: UpstreamProtocol::Udp,
-                            hostname: None,
-                            domain: None,
-                        },
+                        target: UpstreamTarget::at(addr, UpstreamProtocol::Udp, None),
                     }));
             }),
             "Default upstreams replaced successfully".into(),

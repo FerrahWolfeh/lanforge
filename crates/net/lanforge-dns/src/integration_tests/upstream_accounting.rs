@@ -46,9 +46,13 @@ async fn upstream(delay: Option<Duration>) -> Arc<UpstreamManager> {
         });
     }
     let target = format!("udp://{addr}").parse::<UpstreamTarget>().unwrap();
-    UpstreamManager::new(&target, Arc::new(DnsCache::new(100, 30, None)))
-        .await
-        .unwrap()
+    UpstreamManager::new(
+        &target,
+        target.addr.ip().unwrap(),
+        Arc::new(DnsCache::new(100, 30, None)),
+    )
+    .await
+    .unwrap()
 }
 
 fn query(i: usize) -> Vec<u8> {
@@ -82,7 +86,7 @@ async fn a_mute_first_upstream_degrades_and_stops_costing_the_hedge_delay() {
     strategy.resolve(&query(6)).await.unwrap();
 
     let snaps = strategy.snapshots();
-    let snap = snaps.iter().find(|s| s.target == mute.target.addr).unwrap();
+    let snap = snaps.iter().find(|s| s.target == mute.addr).unwrap();
     assert!(snap.total_failures >= 5, "{snap:?}");
     assert_eq!(snap.status, UpstreamStatus::Degraded, "{snap:?}");
 
@@ -110,7 +114,7 @@ async fn counts(mode: UpstreamMode, delays: &[Option<Duration>], n: usize) -> Ve
     let snaps = strategy.snapshots();
     mgrs.iter()
         .map(|m| {
-            let s = snaps.iter().find(|s| s.target == m.target.addr).unwrap();
+            let s = snaps.iter().find(|s| s.target == m.addr).unwrap();
             (s.total_queries, s.total_wins, s.total_failures)
         })
         .collect()
@@ -161,13 +165,8 @@ async fn an_upstream_never_asked_is_untested_not_healthy() {
     );
     strategy.resolve(&query(0)).await.unwrap();
     let snaps = strategy.snapshots();
-    let status = |m: &Arc<UpstreamManager>| {
-        snaps
-            .iter()
-            .find(|s| s.target == m.target.addr)
-            .unwrap()
-            .status
-    };
+    let status =
+        |m: &Arc<UpstreamManager>| snaps.iter().find(|s| s.target == m.addr).unwrap().status;
     assert_eq!(status(&first), UpstreamStatus::Healthy);
     assert_eq!(status(&backup), UpstreamStatus::Untested);
 }

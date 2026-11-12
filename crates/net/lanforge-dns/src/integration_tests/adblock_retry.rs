@@ -100,9 +100,13 @@ async fn adblock_failed_refresh_retries_when_upstreams_appear() {
     // PPPoE comes up: the list host resolves now, and the DNS service installs upstreams.
     online.store(true, Ordering::SeqCst);
     let upstream = MockUpstreamServer::spawn(HashMap::new()).await;
-    let mgr = UpstreamManager::new(&upstream.target(), Arc::clone(&dns_ctx.cache))
-        .await
-        .expect("upstream manager");
+    let mgr = UpstreamManager::new(
+        &upstream.target(),
+        upstream.target().addr.ip().unwrap(),
+        Arc::clone(&dns_ctx.cache),
+    )
+    .await
+    .expect("upstream manager");
     dns_ctx.recursive.replace_upstreams(vec![mgr]);
 
     let deadline = Instant::now() + Duration::from_secs(5);

@@ -1,3 +1,4 @@
+pub mod bootstrap;
 pub mod local;
 pub mod recursive;
 pub mod rewrite;

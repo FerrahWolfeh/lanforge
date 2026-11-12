@@ -11,7 +11,7 @@ use lanforge_core::bus::{LanforgeEvent, PppoeEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_types::events::pppoe::PppoeSessionUp;
-use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
+use lanforge_types::network::dns::upstream::{UpstreamAddr, UpstreamProtocol, UpstreamTarget};
 use lanforge_types::network::dns::{DnsRequest, DnsResponse};
 use lanforge_types::system::{PppoeSessionState, PppoeStatusResponse, ServiceId};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -116,9 +116,10 @@ async fn removing_custom_upstreams_falls_back_to_the_isp_resolvers() {
     let ctx = init_test_context();
     let custom = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(9, 9, 9, 9)), 53);
     ctx.update_dns_upstreams(vec![UpstreamTarget {
-        addr: custom,
+        addr: UpstreamAddr::Ip(custom),
         protocol: UpstreamProtocol::Udp,
         hostname: None,
+        path: None,
         domain: None,
     }]);
     ctx.set_pppoe_status(Some(connected_status()));

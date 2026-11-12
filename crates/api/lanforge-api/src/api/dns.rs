@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 use std::sync::Arc;
 
 use super::common::{
@@ -18,7 +18,7 @@ pub use lanforge_types::network::dns::{
 };
 use lanforge_types::network::{
     DnsRecordEntry, DnsRecordType, DnsReverseResolver, QueryResult, UpstreamHealthSnapshot,
-    dns::{adblock::RewriteRule, upstream::UpstreamProtocol},
+    dns::{adblock::RewriteRule, upstream::UpstreamTarget},
 };
 use serde::{Deserialize, Serialize};
 
@@ -226,14 +226,13 @@ impl HttpWrappedResponse for DnsAdblockGroupsResponse {
     }
 }
 
-/// A configured DNS upstream entry.
+/// A configured DNS upstream entry: the `[dns.upstreams]` group name and the target as written
+/// (`"tls://dns.google"`), TLS name, host name, `DoH` path and domain included.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct DnsUpstreamConfig {
     #[serde(default)]
     pub name: Option<String>,
-    pub addr: SocketAddr,
-    pub protocol: UpstreamProtocol,
-    pub domain: Option<String>,
+    pub target: UpstreamTarget,
 }
 
 /// Response containing all DNS reverse resolvers.

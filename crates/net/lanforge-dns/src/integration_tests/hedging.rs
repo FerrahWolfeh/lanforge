@@ -44,12 +44,20 @@ async fn test_sequential_hedging_recovers_from_unresponsive_upstream_in_under_12
         .unwrap();
 
     let cache = Arc::new(DnsCache::new(100, 30, None));
-    let mgr_silent = UpstreamManager::new(&target_silent, Arc::clone(&cache))
-        .await
-        .unwrap();
-    let mgr_fast = UpstreamManager::new(&target_fast, Arc::clone(&cache))
-        .await
-        .unwrap();
+    let mgr_silent = UpstreamManager::new(
+        &target_silent,
+        target_silent.addr.ip().unwrap(),
+        Arc::clone(&cache),
+    )
+    .await
+    .unwrap();
+    let mgr_fast = UpstreamManager::new(
+        &target_fast,
+        target_fast.addr.ip().unwrap(),
+        Arc::clone(&cache),
+    )
+    .await
+    .unwrap();
 
     // In Sequential mode: silent upstream is tried first, then fast upstream
     let strategy = UpstreamStrategy::new(UpstreamMode::Sequential, vec![mgr_silent, mgr_fast]);

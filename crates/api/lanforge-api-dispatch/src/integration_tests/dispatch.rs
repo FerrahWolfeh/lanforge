@@ -186,9 +186,7 @@ async fn test_dispatch_system_config_import_export() {
         }],
         dns_upstreams: vec![DnsUpstreamConfig {
             name: Some("quad9".to_string()),
-            addr: "9.9.9.9:53".parse().unwrap(),
-            protocol: UpstreamProtocol::Udp,
-            domain: Some("quad9".to_string()),
+            target: "9.9.9.9#quad9".parse().unwrap(),
         }],
         dns_adblock_config: AdblockDbConfig {
             enabled: true,
@@ -259,9 +257,10 @@ async fn test_dispatch_system_config_import_export() {
         );
 
         assert_eq!(cfg.dns_upstreams.len(), 1);
-        assert_eq!(cfg.dns_upstreams[0].addr, "9.9.9.9:53".parse().unwrap());
-        assert_eq!(cfg.dns_upstreams[0].protocol, UpstreamProtocol::Udp);
-        assert_eq!(cfg.dns_upstreams[0].domain.as_deref(), Some("quad9"));
+        assert_eq!(
+            cfg.dns_upstreams[0].target.to_string(),
+            "udp://9.9.9.9:53#quad9"
+        );
 
         assert!(cfg.dns_adblock_config.enabled);
         assert_eq!(cfg.dns_adblock_config.blocking_mode, BlockingMode::NullIp);
@@ -1417,7 +1416,7 @@ async fn dns_default_upstreams_are_replaced_in_one_change() {
     let in_file: Vec<_> = dns
         .upstreams
         .iter()
-        .map(|u| (u.target.addr, u.target.domain.clone()))
+        .map(|u| (u.target.addr.ip().unwrap(), u.target.domain.clone()))
         .collect();
     assert_eq!(
         in_file,
@@ -1462,9 +1461,7 @@ async fn dns_import_overwrite_replaces_the_file_lists() {
     let export = SystemConfigExport {
         dns_upstreams: vec![DnsUpstreamConfig {
             name: Some("quad9".into()),
-            addr: "9.9.9.9:53".parse().unwrap(),
-            protocol: UpstreamProtocol::Udp,
-            domain: None,
+            target: "9.9.9.9".parse().unwrap(),
         }],
         dns_rewrites: vec![RewriteRule {
             id: None,

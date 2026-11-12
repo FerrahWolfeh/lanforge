@@ -352,6 +352,11 @@ impl Bootstrapper {
                 doq_enabled: dns.doq_listen.is_some(),
                 cache_size: dns.cache_size,
                 cache_min_ttl: dns.cache_min_ttl,
+                bootstrap: cfg
+                    .dns
+                    .bootstrap
+                    .clone()
+                    .unwrap_or_else(|| DnsListenConfig::DEFAULT_BOOTSTRAP.to_vec()),
             });
         }
 

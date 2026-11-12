@@ -165,6 +165,7 @@ impl UpstreamHealth {
                 }
             },
             domain,
+            host_name: None,
         }
     }
 }

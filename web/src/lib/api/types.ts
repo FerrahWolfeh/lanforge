@@ -862,6 +862,8 @@ export interface DnsUpstreamEntry {
 	addr?: string;
 	protocol: string;
 	domain?: string | null;
+	/** Host name the upstream is given by (`tls://dns.google`); null for an address. */
+	host_name?: string | null;
 	rtt_ewma_us?: number;
 	last_rtt_us?: number;
 	rtt_ms?: number | null;
@@ -1386,9 +1388,9 @@ export interface ExportedApiToken {
 }
 
 export interface DnsUpstreamConfig {
-	addr: string;
-	protocol: string;
-	domain?: string | null;
+	name?: string | null;
+	/** The target as written: `"tls://dns.google"`, `"udp://9.9.9.9:53#corp"`. */
+	target: string;
 }
 
 export interface AdblockDbConfig {

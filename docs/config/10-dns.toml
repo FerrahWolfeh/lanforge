@@ -15,10 +15,19 @@ doq_listen = "[::]:853"
 cache_size = 10000
 cache_min_ttl = "30s"
 # A change of the listeners or the cache restarts the DNS service alone.
+# Plain-DNS resolvers that look up upstreams given by host name (port 53 unless given); never the
+# system resolver. Absent: Cloudflare (1.1.1.1, 1.0.0.1, 2606:4700:4700::1111, 2606:4700:4700::1001).
+# A change applies in place.
+bootstrap = ["9.9.9.9", "[2620:fe::fe]:53"]
 
-# Upstream resolvers, grouped by name: udp://, tcp://, tls:// (DoT), https:// (DoH), quic:// (DoQ).
+# Upstream resolvers, grouped by name: udp://, tls:// (DoT), https:// (DoH), quic:// (DoQ).
+# An address (TLS name before `@`), or a host name looked up through `bootstrap` and again every
+# 5 minutes; DoH takes a path (default /dns-query). Without a port, the protocol's own.
 [dns.upstreams.cloudflare]
 addresses = ["tls://one.one.one.one@1.1.1.1:853", "udp://[2606:4700:4700::1111]:53"]
+
+[dns.upstreams.named]
+addresses = ["tls://dns.google", "https://dns.quad9.net/dns-query"]
 
 # A group with `domain` only answers that domain (conditional forwarding).
 [dns.upstreams.corp]

@@ -2,7 +2,7 @@
 
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use crate::network::dhcp::{
     DhcpOptionsConfig, Dhcpv4Options, Dhcpv4Pool, Dhcpv6Options, Dhcpv6Pool, TftpOptions,
@@ -234,9 +234,11 @@ pub trait ConfigSection: Clone + PartialEq + Send + Sync + 'static {
 // Section types and implementations
 // ---------------------------------------------------------------------------
 
-/// What the DNS service binds and builds when it starts: whether it runs at all (`[dns]
-/// enabled`), its UDP/TCP, `DoT` and `DoQ` listeners and its response cache. A change restarts
-/// the DNS service alone.
+/// What the DNS service binds and builds when it starts, and its bootstrap resolvers.
+///
+/// Whether it runs at all (`[dns] enabled`), its UDP/TCP, `DoT` and `DoQ` listeners and its
+/// response cache: a change restarts the DNS service alone. The bootstrap resolvers: applied in
+/// place.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DnsListenConfig {
     pub enabled: bool,
@@ -251,11 +253,36 @@ pub struct DnsListenConfig {
     pub cache_size: u64,
     /// Shortest TTL (seconds) a cached answer keeps.
     pub cache_min_ttl: u32,
+    /// Plain-DNS resolvers that look up upstreams given by host name.
+    pub bootstrap: Vec<SocketAddr>,
 }
 
 impl DnsListenConfig {
     pub const DEFAULT_CACHE_SIZE: u64 = 5000;
     pub const DEFAULT_CACHE_MIN_TTL: u32 = 30;
+
+    /// Whether going from `self` to `new` needs the DNS service restarted: anything but the
+    /// bootstrap resolvers changed.
+    #[must_use]
+    pub fn rebinds(&self, new: &Self) -> bool {
+        *new != Self {
+            bootstrap: new.bootstrap.clone(),
+            ..self.clone()
+        }
+    }
+    /// Cloudflare's resolvers (the owner's choice: the most available).
+    pub const DEFAULT_BOOTSTRAP: [SocketAddr; 4] = [
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 53),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 0, 0, 1)), 53),
+        SocketAddr::new(
+            IpAddr::V6(Ipv6Addr::new(0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111)),
+            53,
+        ),
+        SocketAddr::new(
+            IpAddr::V6(Ipv6Addr::new(0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1001)),
+            53,
+        ),
+    ];
 }
 
 impl Default for DnsListenConfig {
@@ -271,6 +298,7 @@ impl Default for DnsListenConfig {
             doq_enabled: false,
             cache_size: Self::DEFAULT_CACHE_SIZE,
             cache_min_ttl: Self::DEFAULT_CACHE_MIN_TTL,
+            bootstrap: Self::DEFAULT_BOOTSTRAP.to_vec(),
         }
     }
 }
@@ -583,8 +611,10 @@ impl ConfigSection for DnsListenConfig {
     fn classify(old: &Self, new: &Self) -> ChangeImpact {
         if old == new {
             ChangeImpact::None
-        } else {
+        } else if old.rebinds(new) {
             ChangeImpact::Rebind
+        } else {
+            ChangeImpact::Hot
         }
     }
 }
@@ -592,7 +622,6 @@ impl ConfigSection for DnsListenConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::Ipv4Addr;
 
     #[test]
     fn test_change_impact_ordering() {

@@ -1020,9 +1020,7 @@ impl From<&ConfigFile> for SystemConfigExport {
             .into_iter()
             .map(|up| DnsUpstreamConfig {
                 name: Some(up.name),
-                addr: up.target.addr,
-                protocol: up.target.protocol,
-                domain: up.target.domain,
+                target: up.target,
             })
             .collect();
         let dns_rewrites = dns.rewrites;
@@ -1084,7 +1082,6 @@ mod tests {
     use lanforge_types::identifiers::MacAddr;
     use lanforge_types::network::DnsRecordType;
     use lanforge_types::network::dns::adblock::{RewriteAnswer, RewriteRule};
-    use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
 
     use super::super::StaticHost;
     use super::super::dns::{DnsFile, DnsSettings, NamedUpstream};
@@ -1113,9 +1110,7 @@ mod tests {
             }],
             dns_upstreams: vec![DnsUpstreamConfig {
                 name: Some("cloudflare".to_string()),
-                addr: "1.1.1.1:853".parse().unwrap(),
-                protocol: UpstreamProtocol::Tls,
-                domain: Some("cloudflare".to_string()),
+                target: "tls://1.1.1.1#cloudflare".parse().unwrap(),
             }],
             dhcp_v4_pools: Some(vec![Dhcpv4Pool {
                 name: Some("lan".to_string()),
@@ -1143,12 +1138,7 @@ mod tests {
         cfg.dns = DnsFile::from_config(&DnsSettings {
             upstreams: vec![NamedUpstream {
                 name: "cloudflare".to_string(),
-                target: UpstreamTarget {
-                    addr: up.addr,
-                    protocol: up.protocol,
-                    hostname: None,
-                    domain: up.domain.clone(),
-                },
+                target: up.target.clone(),
             }],
             rewrites: export.dns_rewrites.clone(),
             ..DnsSettings::default()

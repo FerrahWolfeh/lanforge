@@ -48,7 +48,9 @@ async fn test_coalesced_queries_patch_transaction_id_and_deduplicate() {
         .parse::<UpstreamTarget>()
         .unwrap();
     let cache = Arc::new(DnsCache::new(100, 30, None));
-    let mgr = UpstreamManager::new(&target, cache).await.unwrap();
+    let mgr = UpstreamManager::new(&target, target.addr.ip().unwrap(), cache)
+        .await
+        .unwrap();
     let strategy = UpstreamStrategy::new(UpstreamMode::Sequential, vec![mgr]);
 
     // Build 3 queries for the same domain with different transaction IDs
@@ -144,9 +146,13 @@ async fn test_coalesced_queries_pipeline_metrics() {
     let dns_cfg = common::mock_config();
     let dns_ctx = common::mock_dns_context(lanforge_ctx, dns_cfg).await;
 
-    let mgr = UpstreamManager::new(&target, Arc::clone(&dns_ctx.cache))
-        .await
-        .unwrap();
+    let mgr = UpstreamManager::new(
+        &target,
+        target.addr.ip().unwrap(),
+        Arc::clone(&dns_ctx.cache),
+    )
+    .await
+    .unwrap();
     dns_ctx.recursive.replace_upstreams(vec![mgr]);
 
     let make_query = |id: u16| {
