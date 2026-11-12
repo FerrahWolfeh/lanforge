@@ -1,53 +1,59 @@
-# Sub-System Specification: PPPoE Session Keepalives (`03-02`)
+# Sub-System Specification: PPPoE Session Keepalive (`03-02`)
 
-## 1. Overview & Mechanics
+## 1. Overview
 
-To ensure stale or disconnected PPPoE sessions are cleaned up promptly, `lanforge-pppoe` includes an automated session keepalive worker (`crates/net/lanforge-pppoe/src/keepalive.rs`).
+Once the session is up, `run_keepalive` (`crates/net/lanforge-pppoe/src/keepalive.rs`) watches the one live
+session of the PPPoE client until it ends, and decides how it ended. It runs on the `/dev/ppp` channel (PPP
+control frames) and the discovery socket (PADT), next to the RA listener that follows the ISP's IPv6 resolvers
+(`wan_dns.rs`).
 
 ```
-                    +--------------------------------+
-                    | Keepalive Worker Loop          |
-                    +--------------------------------+
-                                    |
-            +-----------------------+-----------------------+
-            |                                               |
-            v                                               v
- (Active Session Check)                        (LCP Echo Request Sent)
-            |                                               |
-            v                                               v
-  Client Responds (Echo Reply)                 Client Fails to Respond (Timeout)
-            |                                               |
-            v                                               v
- Reset Failure Counter                          Increment Failure Counter
-                                                            |
-                                                            v (Exceeds Max Retries)
-                                                Teardown Session & PADT Sent
-                                                            |
-                                                            v
-                                                LanforgeEvent::Pppoe(Terminated)
+ every lcp_echo_interval_secs ─► Echo-Request (our magic) ─► missed += 1
+ Echo-Reply                   ─► missed = 0
+ missed > lcp_echo_max_failures ─► terminal probe ─► KeepAliveTimeout | TerminalUnreachable
+ LCP Terminate-Request        ─► Terminate-Ack ─► LcpFailed
+ PADT from the AC             ─► PadtReceived (no PADT back)
+ config change / shutdown     ─► Hot: retime in place | Reconnect/Rebind: ConfigUpdated | disabled | Shutdown
 ```
 
 ---
 
-## 2. Inner Workings & Teardown Protocol
+## 2. Inner Workings
 
-### A. LCP Echo Request Polling
-- Transmits LCP Echo-Request packets to all active PPPoE sessions at configurable intervals (e.g. every 10 seconds).
-- Tracks outstanding request sequences per session.
+### A. LCP Echo (RFC 1661 §5.8)
+- Echo-Requests carry our LCP Magic-Number, every `lcp_echo_interval_secs` (default 20 s; `0` sends none). The
+  first goes out one period after the session comes up.
+- Any Echo-Reply resets the miss count. The AC's own Echo-Requests are answered with our magic number.
+- Unknown PPP protocols get a Protocol-Reject; IP frames seen on the control channel are ignored.
 
-### B. Timeout Detection & Retries
-- Maintains per-session miss counters.
-- If a client fails to reply to $N$ consecutive Echo Requests (e.g. 3 misses), the session is marked dead.
+### B. Failure Detection
+- When the misses exceed `lcp_echo_max_failures` (default 5; `0` never gives up), the session ends. With the
+  terminal probe enabled, an ARP probe to the ONT/modem classifies the failure: terminal answers →
+  `KeepAliveTimeout` (upstream), no answer → `TerminalUnreachable` (local hardware or cable).
+- An LCP Terminate-Request is acknowledged and ends the session.
+- A PADT from the AC matching the session (AC MAC, session ID) ends it (RFC 2516 §5.5); no PADT is sent back. A
+  broken discovery socket only stops the PADT watch; LCP echo still detects a dead session.
 
-### C. Session Teardown & Cleanup
-1. Sends a `PADT` (PPPoE Active Discovery Terminate) frame to the client MAC.
-2. Destroys the corresponding Linux kernel `ppp` interface.
-3. Releases assigned IP address back to the pool.
-4. Broadcasts `LanforgeEvent::Pppoe(PppoeEvent::SessionTerminated)` to update state, database storage, and active UI dashboards.
+### C. Configuration While Up
+- `Hot` changes of the echo interval/threshold retime the keepalive in place. `Reconnect`/`Rebind` changes, or
+  `enabled = false`, end the session (`ConfigUpdated` / `ConfigDisabled`). A daemon shutdown ends the watch
+  (`Shutdown`).
+
+### D. Teardown (`service.rs`, `teardown_session`)
+1. PADT (three frames) to the AC, unless the AC ended the session or `send_padt_on_shutdown = false`; a daemon
+   restart that hands the session over (03-01 §D) sends none.
+2. The kernel link goes away with the session's descriptors (the `ppp` unit is destroyed when its last
+   descriptor closes); the fd-store copies are released.
+3. The status is cleared and `SessionDown { reason }` published once.
+4. The service waits the reconnect delay (03 §2) and dials again.
 
 ---
 
 ## 3. System Invariants
 
-1. **Prompt IP Reclamation:** Disconnected PPPoE sessions are reclaimed within the keepalive window, preventing IP address leakage.
-2. **Event-Driven Teardown:** Session teardown triggers immediate updates across all interested subsystems without leaving zombie interface handles in the OS kernel.
+1. **One session, one watch:** the keepalive serves the client's single live session; there is no per-client
+   table.
+2. **Silence is detected:** a session whose AC stopped answering ends within roughly
+   `lcp_echo_interval_secs × (lcp_echo_max_failures + 1)`.
+3. **No zombie links:** every end of the watch goes through `teardown_session`, which releases the kernel link
+   and pairs the `SessionDown` with its `SessionUp`.
