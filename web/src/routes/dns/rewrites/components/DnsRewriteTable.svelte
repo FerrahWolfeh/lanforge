@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import * as Table from "$lib/components/ui/table";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import { Button } from "$lib/components/ui/button";
@@ -21,6 +22,8 @@
 		type DnsRecordType,
 		formatRewriteAnswer,
 	} from "$lib/api/types";
+
+	const canEdit = $derived(auth.can("dns_write"));
 
 	let {
 		loading = false,
@@ -183,8 +186,8 @@
 						{@const isDevice = ans.startsWith("dev:") || rule.rtype === "DEVICE"}
 
 						<Table.Row
-							class="hover:bg-muted/50 transition-colors cursor-pointer group"
-							onclick={() => onEditRule(rule)}
+							class="hover:bg-muted/50 transition-colors group {canEdit ? 'cursor-pointer' : ''}"
+							onclick={() => canEdit && onEditRule(rule)}
 						>
 							<!-- Domain Pattern -->
 							<Table.Cell class="font-medium text-xs">
@@ -310,6 +313,7 @@
 										align="end"
 										class="w-44 text-xs"
 									>
+										{#if canEdit}
 										<DropdownMenu.Item
 											onclick={() => onEditRule(rule)}
 											class="gap-2"
@@ -319,6 +323,7 @@
 											/>
 											Edit Rule
 										</DropdownMenu.Item>
+										{/if}
 										<DropdownMenu.Item
 											onclick={() =>
 												copyToClipboard(
@@ -355,6 +360,7 @@
 											/>
 											Test Resolution
 										</DropdownMenu.Item>
+										{#if canEdit}
 										<DropdownMenu.Separator />
 										<DropdownMenu.Item
 											onclick={() => handleDelete(rule)}
@@ -363,6 +369,7 @@
 											<Trash2Icon class="h-3.5 w-3.5" />
 											Delete Rule
 										</DropdownMenu.Item>
+										{/if}
 									</DropdownMenu.Content>
 								</DropdownMenu.Root>
 							</Table.Cell>

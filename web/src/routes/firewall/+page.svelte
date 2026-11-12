@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import * as Tabs from "$lib/components/ui/tabs";
 	import * as Card from "$lib/components/ui/card";
 	import * as Alert from "$lib/components/ui/alert";
@@ -55,6 +56,9 @@
 	import PortForwardTab from "./components/PortForwardTab.svelte";
 	import HostRulesTab from "./components/HostRulesTab.svelte";
 	import ProposeModal from "./components/ProposeModal.svelte";
+
+	// Every firewall change goes through propose/commit (config_write).
+	const canEdit = $derived(auth.can("config_write"));
 
 	// ---------------------------------------------------------------------------
 	// Page state
@@ -325,7 +329,7 @@
 				Refresh
 			</Button>
 
-			{#if isDirty}
+			{#if isDirty && canEdit}
 				<Button
 					variant="outline"
 					size="sm"
@@ -392,7 +396,7 @@
 			<FirewallModeSelector
 				mode={draft.mode}
 				onSelect={handleModeChange}
-				disabled={committing || proposing}
+				disabled={committing || proposing || !canEdit}
 			/>
 		</Card.Root>
 	{/if}
@@ -431,6 +435,7 @@
 				</Tabs.List>
 
 				<Tabs.Content value="zones">
+					<fieldset disabled={!canEdit} class="contents">
 					<ZonesTab
 						zones={draft.zones}
 						{highlightedZone}
@@ -438,38 +443,47 @@
 						activeWan={fwStatus?.active_wan ?? null}
 						onUpdate={(zones) => { if (draft) draft = { ...draft, zones }; }}
 					/>
+					</fieldset>
 				</Tabs.Content>
 
 				<Tabs.Content value="matrix">
+					<fieldset disabled={!canEdit} class="contents">
 					<MatrixTab
 						zones={draft.zones}
 						forwardings={draft.forwardings}
 						{highlightedZone}
 						onUpdate={(forwardings) => { if (draft) draft = { ...draft, forwardings }; }}
 					/>
+					</fieldset>
 				</Tabs.Content>
 
 				<Tabs.Content value="portforward">
+					<fieldset disabled={!canEdit} class="contents">
 					<PortForwardTab
 						rules={draft.port_forwards}
 						zones={draft.zones}
 						onUpdate={(port_forwards) => { if (draft) draft = { ...draft, port_forwards }; }}
 					/>
+					</fieldset>
 				</Tabs.Content>
 
 				<Tabs.Content value="hostrules">
+					<fieldset disabled={!canEdit} class="contents">
 					<HostRulesTab
 						zones={draft.zones}
 						onZonesUpdate={(zones) => { if (draft) draft = { ...draft, zones }; }}
 					/>
+					</fieldset>
 				</Tabs.Content>
 
 				<Tabs.Content value="tuning">
+					<fieldset disabled={!canEdit} class="contents">
 					<FirewallTuningCard
 						flowOffload={draft.flow_offload}
 						{sqmEnabled}
 						onToggleFlowOffload={(v) => handleGlobalToggle("flow_offload", v)}
 					/>
+					</fieldset>
 				</Tabs.Content>
 			</Tabs.Root>
 
@@ -494,11 +508,13 @@
 					</div>
 				</div>
 
+				<fieldset disabled={!canEdit} class="contents">
 				<FirewallTuningCard
 					flowOffload={draft.flow_offload}
 					{sqmEnabled}
 					onToggleFlowOffload={(v) => handleGlobalToggle("flow_offload", v)}
 				/>
+				</fieldset>
 			</div>
 
 		{:else}
@@ -533,7 +549,7 @@
 
 	<!-- Floating pending changes bar -->
 	<FloatingSaveBar
-		show={isDirty && !showProposeModal}
+		show={isDirty && !showProposeModal && canEdit}
 		count={changeCount}
 		title={`${changeCount} pending ${changeCount === 1 ? "change" : "changes"}`}
 		description="Review and apply to commit new rules to the daemon"

@@ -21,9 +21,10 @@ use lanforge_api::api::{
     DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse,
     DnsRewritesResponse, DnsStatsResponse, DnsUpstreamModeResponse, DnsUpstreamsResponse,
     EventKind, HostConfigEntry, HostsResponse, LeasesResponse, Response, RpcCallError,
-    ServiceBannersResponse, SetupPayload, SetupResponse, SetupStatusResponse, SimpleSuccess,
-    StatusResponse, SystemConfigExport, SystemConfigImportResponse, TransientHostsResponse,
-    UserListResponse, UserResponse, WhoisResponse,
+    ServiceBannersResponse, ServiceStopImpactResponse, SetupPayload, SetupResponse,
+    SetupStatusResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
+    SystemConfigImportResponse, TransientHostsResponse, UserListResponse, UserResponse,
+    WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpc;
 use lanforge_core::context::LanforgeContext;
@@ -748,6 +749,16 @@ impl LanforgeRpc for ClientContext {
     async fn system_config_toml(&self) -> Result<String, RpcCallError> {
         self.export_system_config_toml()
             .map_err(RpcCallError::NotFound)
+    }
+
+    async fn service_stop_impact(
+        &self,
+        id: String,
+    ) -> Result<ServiceStopImpactResponse, RpcCallError> {
+        match self.handle_service_stop_impact(id).await {
+            Response::ServiceStopImpact(s) => Ok(s),
+            other => Err(Self::map_failure(other)),
+        }
     }
 
     async fn system_config_import(

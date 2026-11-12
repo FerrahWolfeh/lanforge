@@ -17,14 +17,20 @@
 	import StatusBadge from "$lib/components/StatusBadge.svelte";
 	import DbStatsCards from "./components/DbStatsCards.svelte";
 	import { dbState, formatBytes, formatTimeAgo } from "./dbState.svelte";
+	import { auth } from "$lib/stores/auth.svelte";
 
 	let { children } = $props();
 
-	const tabs: NavTabItem[] = [
+	// Maintenance is admin-only; the config export holds secrets (config_write).
+	const tabs: NavTabItem[] = $derived([
 		{ label: "Inventory", href: "/system/database", icon: LayersIcon },
-		{ label: "Maintenance", href: "/system/database/maintenance", icon: WrenchIcon },
-		{ label: "Backup & Restore", href: "/system/database/backup", icon: FileDownIcon },
-	];
+		...(auth.can("admin")
+			? [{ label: "Maintenance", href: "/system/database/maintenance", icon: WrenchIcon }]
+			: []),
+		...(auth.can("config_write")
+			? [{ label: "Backup & Restore", href: "/system/database/backup", icon: FileDownIcon }]
+			: []),
+	]);
 
 	onMount(() => {
 		dbState.loadAll();

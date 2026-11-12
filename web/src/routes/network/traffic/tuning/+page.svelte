@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import FloatingSaveBar from "$lib/components/FloatingSaveBar.svelte";
 	import {
 		trafficStatus,
@@ -19,6 +20,8 @@
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 
 	import TrafficTuningTab from "../components/TrafficTuningTab.svelte";
+
+	const canEdit = $derived(auth.can("config_write"));
 
 	let status = $state<TrafficStatusResponse | null>(null);
 	let serverConfig = $state<TrafficConfig | null>(null);
@@ -105,7 +108,8 @@
 				trafficStatus().catch(() => null),
 				trafficConfig().catch(() => null),
 				getSetupStatus().catch(() => null),
-				pppoeConfig().catch(() => null),
+				// The PPPoE config holds the password (config_write); it only names the WAN here.
+				canEdit ? pppoeConfig().catch(() => null) : Promise.resolve(null),
 			]);
 			status = s;
 			setupStatus = setupRes;
@@ -182,6 +186,7 @@
 			Loading tuning configuration...
 		</div>
 	{:else if serverConfig}
+		<fieldset disabled={!canEdit} class="contents">
 		<TrafficTuningTab
 			bind:enabled={tuningEnabled}
 			bind:interfaces={tuningInterfaces}
@@ -197,6 +202,7 @@
 			{detectedLan}
 			detectedWan={physicalWan}
 		/>
+		</fieldset>
 	{/if}
 
 	<!-- Floating Save / Discard Bar -->

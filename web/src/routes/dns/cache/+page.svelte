@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import { Button } from "$lib/components/ui/button";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
@@ -158,6 +159,7 @@
 				<span>Refresh</span>
 			</Button>
 
+			{#if auth.can("dns_write")}
 			<Button
 				variant="destructive"
 				size="sm"
@@ -167,6 +169,7 @@
 				<Trash2Icon class="size-3.5" />
 				<span>Flush Cache</span>
 			</Button>
+			{/if}
 		{/snippet}
 	</PageHeader>
 

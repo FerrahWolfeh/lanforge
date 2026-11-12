@@ -7,6 +7,7 @@
 
 import type {
 	AdblockRuleEntry,
+	ServiceStopImpact,
 	AdblockRulesImport,
 	AuthStatusResponse,
 	AuthToken,
@@ -788,6 +789,10 @@ export const controlService = (
 	id: string,
 	action: 'start' | 'stop' | 'restart' | 'Start' | 'Stop' | 'Restart'
 ) => post<void>(`/service/${encodeURIComponent(id)}/control`, { action: action.toLowerCase() });
+
+/** What stopping `id` does to the running services that require it (dry-run, D-20). */
+export const serviceStopImpact = (id: string) =>
+	get<ServiceStopImpact>(`/service/${encodeURIComponent(id)}/stop-impact`);
 
 /**
  * Fetch historical system events via REST.

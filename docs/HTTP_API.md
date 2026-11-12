@@ -458,9 +458,10 @@ This route is unauthenticated alongside `/login` and `/status`. Used by CLI and 
 | `GET` | `/api/v1/system/setup-status` | `system_setup_status` | Check first-run onboarding status |
 | `POST` | `/api/v1/system/setup` | `system_setup` | Complete first-run setup wizard |
 | `GET` | `/api/v1/system/service_banners` | `service_banners` | Real-time status banners of all services |
-| `POST` | `/api/v1/system/services/{id}/control` | `service_control` | Start, stop, or restart a background service |
-| `GET` | `/api/v1/system/config/export` | `system_config_export` | Bulk export database configuration |
-| `POST` | `/api/v1/system/config/import` | `system_config_import` | Bulk import database configuration |
+| `POST` | `/api/v1/system/service/{id}/control` | `service_control` | Start, stop, or restart a background service |
+| `GET` | `/api/v1/system/service/{id}/stop-impact` | `service_stop_impact` | Dry-run of a stop: running services that require it and their loss outcome |
+| `GET` | `/api/v1/system/config` | `system_config_export` | Bulk export database configuration |
+| `POST` | `/api/v1/system/config` | `system_config_import` | Bulk import database configuration |
 
 
 ---

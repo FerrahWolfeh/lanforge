@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import { Button } from "$lib/components/ui/button";
 	import { Badge } from "$lib/components/ui/badge";
@@ -246,6 +247,7 @@
 							<span>Test Query</span>
 						</Button>
 
+						{#if auth.can("dns_write")}
 						<Button
 							variant="outline"
 							size="sm"
@@ -283,6 +285,7 @@
 							/>
 							<span>Rewrite</span>
 						</Button>
+						{/if}
 					</div>
 				</div>
 

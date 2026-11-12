@@ -19,11 +19,14 @@
 		reverseResolvers = [],
 		onAddReverse = () => {},
 		onRemoveReverse = () => {},
+		canEdit = true,
 	}: {
 		loading?: boolean;
 		reverseResolvers?: ReverseResolverEntry[];
 		onAddReverse?: () => void;
 		onRemoveReverse?: (item: ReverseResolverEntry) => void;
+		/** False hides add and remove (the session lacks upstream_write). */
+		canEdit?: boolean;
 	} = $props();
 
 	function formatSubnet(s: any): string {
@@ -68,10 +71,12 @@
 					Targeted PTR reverse lookup servers for specific LAN subnets
 				</p>
 			</div>
+			{#if canEdit}
 			<Button size="sm" variant="outline" onclick={onAddReverse}>
 				<PlusIcon data-icon="inline-start" />
 				Add Reverse PTR
 			</Button>
+			{/if}
 		</div>
 	</Card.Header>
 	<Card.Content class="p-0">
@@ -166,6 +171,7 @@
 												/>
 												Copy Resolver URI
 											</DropdownMenu.Item>
+											{#if canEdit}
 											<DropdownMenu.Separator />
 											<DropdownMenu.Item
 												onclick={() =>
@@ -177,6 +183,7 @@
 												/>
 												Remove PTR Resolver
 											</DropdownMenu.Item>
+											{/if}
 										</DropdownMenu.Content>
 									</DropdownMenu.Root>
 								</Table.Cell>

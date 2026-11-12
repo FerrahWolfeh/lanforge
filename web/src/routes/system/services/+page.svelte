@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import * as Card from "$lib/components/ui/card";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
@@ -40,6 +41,12 @@
 	import Loader2Icon from "@lucide/svelte/icons/loader-2";
 	import CpuIcon from "@lucide/svelte/icons/cpu";
 	import ShieldIcon from "@lucide/svelte/icons/shield";
+
+	import StopImpactDialog from "$lib/components/StopImpactDialog.svelte";
+	let stopDialog = $state<StopImpactDialog>();
+
+	// Reload and service control are admin-only on the server.
+	const isAdmin = $derived(auth.can("admin"));
 
 	let banners = $state<ServiceBanner[]>([]);
 	let loading = $state(true);
@@ -89,6 +96,14 @@
 	}
 
 	async function executeAction(id: string, action: "Start" | "Stop" | "Restart") {
+		if (action === "Stop") {
+			try {
+				if (!(await stopDialog?.confirmStop(id))) return;
+			} catch (err) {
+				toast.error(`Could not check what stopping '${id}' affects: ${err instanceof Error ? err.message : String(err)}`);
+				return;
+			}
+		}
 		actionLoading[id] = action;
 		try {
 			await controlService(id, action);
@@ -207,6 +222,7 @@
 				<RefreshCwIcon class={["size-3.5", isRefreshing ? "animate-spin" : ""].join(" ")} />
 				Refresh
 			</Button>
+			{#if isAdmin}
 			<Button
 				variant="secondary"
 				size="sm"
@@ -217,6 +233,7 @@
 				<RotateCwIcon class={["size-3.5", reloadingConfig ? "animate-spin" : ""].join(" ")} />
 				Reload Config
 			</Button>
+			{/if}
 		{/snippet}
 	</PageHeader>
 
@@ -413,7 +430,8 @@
 				{@const SvcIcon = meta.icon}
 				{@const isBusy = !!actionLoading[svcId]}
 				{@const currentAction = actionLoading[svcId]}
-				{@const active = isOnline(banner.state)}
+				<!-- A degraded service still serves (Rust `is_serving`): it can be restarted or stopped. -->
+				{@const active = isOnline(banner.state) || banner.state.toLowerCase() === "degraded"}
 				{@const starting = isStarting(banner.state)}
 				{@const inactive = isInactive(banner.state)}
 
@@ -515,7 +533,7 @@
 
 						<!-- Service Lifecycle Actions -->
 						<div class="flex items-center gap-1.5">
-							{#if meta.canControl}
+							{#if meta.canControl && isAdmin}
 								{#if inactive}
 									<!-- Start Action -->
 									<Button
@@ -610,3 +628,5 @@
 		</div>
 	{/if}
 </div>
+
+<StopImpactDialog bind:this={stopDialog} />

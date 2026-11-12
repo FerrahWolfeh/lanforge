@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import { Button } from "$lib/components/ui/button";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import * as Field from "$lib/components/ui/field";
@@ -245,6 +246,7 @@
 			icon={GlobeIcon}
 		>
 			{#snippet actions()}
+				{#if auth.can("upstream_write")}
 				<Button
 					variant="outline"
 					size="sm"
@@ -254,6 +256,7 @@
 					<SlidersIcon class="size-3.5 text-sky-600 dark:text-sky-400" />
 					<span>Tuning & Cache</span>
 				</Button>
+				{/if}
 				<Button
 					variant="outline"
 					size="sm"
@@ -306,12 +309,14 @@
 				onRemoveUpstream={handleRemoveUpstream}
 				onOpenDigModal={() => (digOpen = true)}
 				onReloadAll={loadAllData}
+				canEdit={auth.can("upstream_write")}
 			/>
 			<DnsReverseResolversCard
 				{loading}
 				{reverseResolvers}
 				onAddReverse={() => (reverseOpen = true)}
 				onRemoveReverse={handleRemoveReverse}
+				canEdit={auth.can("upstream_write")}
 			/>
 		</div>
 	</div>

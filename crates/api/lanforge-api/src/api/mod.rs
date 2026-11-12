@@ -150,4 +150,6 @@ pub enum Response {
     /// What a bulk import of adblock rules did.
     DnsAdblockRulesImport(Box<RulesImport>),
     DnsAdblockGroups(Box<DnsAdblockGroupsResponse>),
+    /// The running services a stop would affect (D-20 dry-run).
+    ServiceStopImpact(ServiceStopImpactResponse),
 }

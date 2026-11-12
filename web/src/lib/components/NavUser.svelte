@@ -160,6 +160,7 @@
 				<DatabaseIcon class="size-4 mr-2 text-muted-foreground" />
 				<span>Database & Persistence</span>
 			</DropdownMenu.Item>
+			{#if auth.can("admin")}
 			<DropdownMenu.Item
 				class="cursor-pointer text-xs"
 				onclick={() => {
@@ -180,6 +181,7 @@
 				<KeyRoundIcon class="size-4 mr-2 text-muted-foreground" />
 				<span>Auth & API Keys</span>
 			</DropdownMenu.Item>
+			{/if}
 		</DropdownMenu.Group>
 
 		<DropdownMenu.Separator />

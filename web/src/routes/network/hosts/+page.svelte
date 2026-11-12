@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import {
 		hostList,
 		hostRemove,
@@ -143,6 +144,7 @@
 		onAdd={openAddModal}
 		onEdit={openEditModal}
 		onDelete={handleRemoveHost}
+		canEdit={auth.can("device_write")}
 	/>
 </div>
 

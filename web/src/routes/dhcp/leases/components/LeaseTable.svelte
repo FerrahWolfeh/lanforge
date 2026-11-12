@@ -21,6 +21,7 @@
 		onRelease = () => {},
 		onPromote = () => {},
 		onWol = () => {},
+		canEdit = true,
 	}: {
 		leases?: LeaseEntry[];
 		loading?: boolean;
@@ -28,6 +29,8 @@
 		onRelease?: (lease: LeaseEntry) => void;
 		onPromote?: (lease: LeaseEntry) => void;
 		onWol?: (mac: string) => void;
+		/** False hides renew, promote, wake-on-LAN and release (no device_write). */
+		canEdit?: boolean;
 	} = $props();
 
 	let searchQuery = $state("");
@@ -244,6 +247,7 @@
 						<MoreHorizontalIcon class="size-4" />
 					</DropdownMenu.Trigger>
 					<DropdownMenu.Content align="end" class="w-48 text-xs">
+						{#if canEdit}
 						<DropdownMenu.Item onclick={() => onRenew(lease)} class="gap-2">
 							<RotateCcwIcon class="size-3.5 text-sky-400" />
 							Renew Lease
@@ -257,6 +261,7 @@
 							Send Wake-on-LAN
 						</DropdownMenu.Item>
 						<DropdownMenu.Separator />
+						{/if}
 						<DropdownMenu.Item onclick={() => copyText(lease.mac, "MAC")} class="gap-2">
 							<CopyIcon class="size-3.5 text-muted-foreground" />
 							Copy MAC
@@ -265,11 +270,13 @@
 							<CopyIcon class="size-3.5 text-muted-foreground" />
 							Copy IP
 						</DropdownMenu.Item>
+						{#if canEdit}
 						<DropdownMenu.Separator />
 						<DropdownMenu.Item onclick={() => onRelease(lease)} class="gap-2 text-rose-500">
 							<Trash2Icon class="size-3.5" />
 							Release Lease
 						</DropdownMenu.Item>
+						{/if}
 					</DropdownMenu.Content>
 				</DropdownMenu.Root>
 			</Table.Cell>

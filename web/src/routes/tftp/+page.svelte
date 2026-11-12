@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import { onMount } from "svelte";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
@@ -28,6 +29,12 @@
 		StatusResponse,
 		ServiceBanner,
 	} from "$lib/api/types";
+
+	import StopImpactDialog from "$lib/components/StopImpactDialog.svelte";
+	let stopDialog = $state<StopImpactDialog>();
+
+	// The TFTP and PXE settings are written through the DHCP options (config_write).
+	const canEdit = $derived(auth.can("config_write"));
 
 	let loading = $state(true);
 	let saving = $state(false);
@@ -199,6 +206,14 @@
 	}
 
 	async function handleServiceControl(action: "Start" | "Stop" | "Restart") {
+		if (action === "Stop") {
+			try {
+				if (!(await stopDialog?.confirmStop("tftp"))) return;
+			} catch (err) {
+				toast.error(`Could not check what stopping '${"tftp"}' affects: ${err instanceof Error ? err.message : String(err)}`);
+				return;
+			}
+		}
 		serviceActionLoading = action;
 		try {
 			await controlService("tftp", action);
@@ -292,7 +307,7 @@
 				Refresh
 			</Button>
 
-			{#if isDirty}
+			{#if isDirty && canEdit}
 				<Button
 					variant="ghost"
 					size="sm"
@@ -328,10 +343,11 @@
 		{listenAddr}
 		{rootDir}
 		{serviceActionLoading}
-		onServiceControl={handleServiceControl}
+		onServiceControl={auth.can("admin") ? handleServiceControl : undefined}
 	/>
 
 	<!-- Main Workspace Grid: TFTP Server Config (Col 1) + DHCP PXE Integration (Col 2) -->
+	<fieldset disabled={!canEdit} class="contents">
 	<div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
 		<TftpServerCard
 			{loading}
@@ -352,4 +368,7 @@
 			onUseLanforgeIp={useLanforgeIp}
 		/>
 	</div>
+	</fieldset>
 </div>
+
+<StopImpactDialog bind:this={stopDialog} />

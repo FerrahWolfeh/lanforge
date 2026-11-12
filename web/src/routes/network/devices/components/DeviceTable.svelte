@@ -24,12 +24,13 @@
 		loading = false,
 		scanning = false,
 		onRefresh = () => {},
-		onScan = () => {},
+		// An action left out is hidden: the page passes only what the session may do.
+		onScan,
 		onInspect = () => {},
-		onWol = () => {},
-		onPromote = () => {},
-		onAdblock = () => {},
-		onPurge = () => {},
+		onWol,
+		onPromote,
+		onAdblock,
+		onPurge,
 	}: {
 		devices?: DeviceEntry[];
 		totalCount?: number;
@@ -151,6 +152,7 @@
 			<RefreshCwIcon class="size-3.5 {loading ? 'animate-spin' : ''}" />
 			<span class="hidden sm:inline">Refresh</span>
 		</Button>
+		{#if onScan}
 		<Button
 			size="sm"
 			onclick={onScan}
@@ -164,6 +166,7 @@
 			{/if}
 			<span>Scan Network</span>
 		</Button>
+		{/if}
 	{/snippet}
 
 	{#snippet header()}
@@ -275,18 +278,24 @@
 							<SearchIcon class="size-3.5 text-sky-400" />
 							Inspect Details (Whois)
 						</DropdownMenu.Item>
+						{#if onWol}
 						<DropdownMenu.Item onclick={() => onWol(dev.mac)} class="gap-2">
 							<ZapIcon class="size-3.5 text-emerald-400" />
 							Send Wake-on-LAN
 						</DropdownMenu.Item>
+						{/if}
+						{#if onPromote}
 						<DropdownMenu.Item onclick={() => onPromote(dev)} class="gap-2">
 							<BookmarkIcon class="size-3.5 text-amber-400" />
 							Promote to Static Host
 						</DropdownMenu.Item>
+						{/if}
+						{#if onAdblock}
 						<DropdownMenu.Item onclick={() => onAdblock(dev)} class="gap-2">
 							<ShieldIcon class="size-3.5" />
 							Adblock groups...
 						</DropdownMenu.Item>
+						{/if}
 						<DropdownMenu.Separator />
 						<DropdownMenu.Item onclick={() => copyText(dev.mac, "MAC")} class="gap-2">
 							<CopyIcon class="size-3.5 text-muted-foreground" />
@@ -298,11 +307,13 @@
 								Copy IPv4 Address
 							</DropdownMenu.Item>
 						{/if}
+						{#if onPurge}
 						<DropdownMenu.Separator />
 						<DropdownMenu.Item onclick={() => onPurge(dev.mac)} class="gap-2 text-rose-500">
 							<Trash2Icon class="size-3.5" />
 							Purge Endpoint
 						</DropdownMenu.Item>
+						{/if}
 					</DropdownMenu.Content>
 				</DropdownMenu.Root>
 			</Table.Cell>

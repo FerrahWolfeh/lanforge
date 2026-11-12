@@ -2103,6 +2103,71 @@ async fn test_viewer_cannot_write_or_read_secrets() {
     }
 }
 
+/// The WebUI hides what the server would refuse from `/auth/me` `permissions`, so they must
+/// be exactly what the role (session) or the scopes (token login) grant.
+#[tokio::test]
+async fn test_me_lists_the_permissions_the_server_grants() {
+    let router = authz_app().await;
+    let permissions = |body: &Value| -> Vec<String> {
+        body["data"]["permissions"]
+            .as_array()
+            .expect("permissions array")
+            .iter()
+            .map(|p| p.as_str().unwrap().to_string())
+            .collect()
+    };
+
+    let (_, viewer) = login(
+        &router,
+        json!({"username": "viewer", "password": ADMIN_PASSWORD}),
+    )
+    .await;
+    let (status, body) = send(
+        &router,
+        "GET",
+        "/api/v1/auth/me",
+        &viewer,
+        None,
+        json!(null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(permissions(&body), ["authenticated", "read", "dns_query"]);
+
+    let (_, admin) = login(
+        &router,
+        json!({"username": "admin", "password": ADMIN_PASSWORD}),
+    )
+    .await;
+    let (_, body) = send(&router, "GET", "/api/v1/auth/me", &admin, None, json!(null)).await;
+    assert_eq!(
+        permissions(&body),
+        [
+            "authenticated",
+            "read",
+            "dns_query",
+            "device_write",
+            "dns_write",
+            "upstream_write",
+            "config_write",
+            "admin"
+        ]
+    );
+
+    // A session from a token login carries the token's scopes, not the name's role.
+    let (_, session) = login(&router, json!({"token": "lf_ak_monitoring"})).await;
+    let (_, body) = send(
+        &router,
+        "GET",
+        "/api/v1/auth/me",
+        &session,
+        None,
+        json!(null),
+    )
+    .await;
+    assert_eq!(permissions(&body), ["authenticated", "read"]);
+}
+
 #[tokio::test]
 async fn test_monitoring_token_is_read_only_even_after_login() {
     let router = authz_app().await;

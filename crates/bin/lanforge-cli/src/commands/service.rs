@@ -1,6 +1,7 @@
 use color_eyre::eyre::{Result, bail};
 use colored::Colorize;
 use comfy_table::Cell;
+use inquire::Confirm;
 
 use crate::client::LanforgeClient;
 use crate::output::{Printer, format_duration_secs};
@@ -27,7 +28,7 @@ pub enum ServiceSubcommand {
         /// ID of the service to start
         id: String,
     },
-    /// Stop a running service
+    /// Stop a running service (asks first when running services require it; -y skips)
     Stop {
         /// ID of the service to stop
         id: String,
@@ -50,6 +51,10 @@ impl ServiceArgs {
                 control_service(client, printer, &id, ServiceAction::Start).await
             }
             ServiceSubcommand::Stop { id } => {
+                if !confirm_stop(client, printer, &id).await? {
+                    printer.info("Stop aborted.");
+                    return Ok(());
+                }
                 control_service(client, printer, &id, ServiceAction::Stop).await
             }
             ServiceSubcommand::Show { id } => show_service(client, printer, &id).await,
@@ -132,6 +137,40 @@ fn render_services_table(resp: &ServiceBannersResponse, printer: &Printer) {
     }
 
     println!("{table}");
+}
+
+/// Says what a stop does and asks before it (D-20); `true` when the stop may go ahead.
+///
+/// Asked when running services `Require` the service or it declares a warning (`PPPoE`: the
+/// internet goes down). `-y` skips; without a terminal the prompt fails, so nothing is
+/// stopped. Also used by `pppoe disconnect`.
+pub async fn confirm_stop(client: &LanforgeClient, printer: &Printer, id: &str) -> Result<bool> {
+    let impact = client.service_stop_impact(id.to_string()).await?;
+    if (impact.affected.is_empty() && impact.warning.is_none()) || printer.yes {
+        return Ok(true);
+    }
+    if let Some(warning) = &impact.warning {
+        println!("{} {warning}", "Warning:".yellow().bold());
+    }
+    if !impact.affected.is_empty() {
+        println!(
+            "Stopping '{}' affects {} running service(s) that require it:",
+            impact.id,
+            impact.affected.len()
+        );
+        for entry in &impact.affected {
+            println!(
+                "  {} {} — {}",
+                entry.name.bold(),
+                format!("[{}]", entry.id).dimmed(),
+                entry.outcome.as_str()
+            );
+        }
+        println!("{}", "None of them is stopped or restarted.".dimmed());
+    }
+    Ok(Confirm::new(&format!("Stop '{}'?", impact.id))
+        .with_default(false)
+        .prompt()?)
 }
 
 async fn control_service(

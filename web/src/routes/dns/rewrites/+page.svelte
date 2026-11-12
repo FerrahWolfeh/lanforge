@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import { Button } from "$lib/components/ui/button";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
@@ -33,6 +34,8 @@
 	import DnsRewriteTable from "./components/DnsRewriteTable.svelte";
 	import DnsRewriteDialog from "./components/DnsRewriteDialog.svelte";
 	import DnsRewriteImportDialog from "./components/DnsRewriteImportDialog.svelte";
+
+	const canEdit = $derived(auth.can("dns_write"));
 
 	let loading = $state(true);
 	let rules = $state<RewriteRule[]>([]);
@@ -131,10 +134,12 @@
 	>
 		{#snippet actions()}
 			<!-- Add Rule Button -->
+			{#if canEdit}
 			<Button size="sm" onclick={handleOpenAdd} class="gap-2">
 				<PlusIcon class="h-4 w-4" />
 				Add Rewrite Rule
 			</Button>
+			{/if}
 
 			<!-- Export Button -->
 			<Button
@@ -148,6 +153,7 @@
 			</Button>
 
 			<!-- Import Button -->
+			{#if canEdit}
 			<Button
 				variant="outline"
 				size="sm"
@@ -157,6 +163,7 @@
 				<FileUpIcon class="h-4 w-4" />
 				Import
 			</Button>
+			{/if}
 
 			<!-- Refresh Button -->
 			<Button
@@ -173,6 +180,7 @@
 			</Button>
 
 			<!-- Clear All Button -->
+			{#if canEdit}
 			<Button
 				variant="destructive"
 				size="sm"
@@ -183,6 +191,7 @@
 				<Trash2Icon class="h-4 w-4" />
 				Clear All
 			</Button>
+			{/if}
 		{/snippet}
 	</PageHeader>
 

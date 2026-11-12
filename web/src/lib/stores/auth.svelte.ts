@@ -4,7 +4,7 @@
  */
 
 import { me, setClientToken } from '$lib/api/client';
-import type { UserInfo } from '$lib/api/types';
+import type { Permission, UserInfo } from '$lib/api/types';
 
 const TOKEN_KEY = 'lf_session';
 
@@ -27,6 +27,16 @@ function createAuthStore() {
 		},
 		get authenticated() {
 			return token !== null;
+		},
+
+		/**
+		 * Whether the server grants `permission` to this session, to hide actions it would
+		 * refuse. Without a user (auth off) or without the list (older daemon) everything is
+		 * shown: the server still enforces.
+		 */
+		can(permission: Permission): boolean {
+			const granted = user?.permissions;
+			return granted === undefined || granted.includes(permission);
 		},
 
 		setToken(t: string) {

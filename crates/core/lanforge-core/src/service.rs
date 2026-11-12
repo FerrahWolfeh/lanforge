@@ -272,6 +272,12 @@ pub trait LanforgeService: Send + Sync {
     /// Returns the declarative specification for this service.
     fn spec(&self) -> ServiceSpec;
 
+    /// What an admin stop does beyond the dependency graph, shown before the stop is
+    /// confirmed (D-20), e.g. the WAN session going down. `None` for most services.
+    fn stop_warning(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Returns a one-line description of this service instance for logging.
     fn describe(&self) -> String {
         self.spec().display_name.to_string()

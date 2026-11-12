@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import { onMount } from "svelte";
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import { toast } from "svelte-sonner";
@@ -11,6 +12,8 @@
 	import DhcpV6OptionsCard from "./components/DhcpV6OptionsCard.svelte";
 	import DhcpNetbootCard from "./components/DhcpNetbootCard.svelte";
 	import DhcpRawOptionsCard from "./components/DhcpRawOptionsCard.svelte";
+
+	const canEdit = $derived(auth.can("config_write"));
 
 	let loading = $state(true);
 	let saving = $state(false);
@@ -253,10 +256,10 @@
 		{loading}
 		{saving}
 		{reconciling}
-		onReconcile={reconcileLeases}
+		onReconcile={auth.can("device_write") ? reconcileLeases : undefined}
 		onRefresh={loadOptions}
 		onDiscard={discardChanges}
-		onSave={saveOptions}
+		onSave={canEdit ? saveOptions : undefined}
 	/>
 
 	{#if loading}
@@ -265,6 +268,7 @@
 			<Skeleton class="h-96 rounded-xl" />
 		</div>
 	{:else}
+		<fieldset disabled={!canEdit} class="contents">
 		<!-- 1. PRIMARY IPv4 SERVER OPTIONS -->
 		<DhcpV4OptionsCard
 			bind:v4Enabled
@@ -300,5 +304,6 @@
 			bind:v4RawOptions
 			bind:v6RawOptions
 		/>
+		</fieldset>
 	{/if}
 </div>

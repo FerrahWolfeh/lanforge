@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import { onMount, onDestroy } from "svelte";
 	import { toast } from "svelte-sonner";
 	import {
@@ -246,15 +247,17 @@
 		{loading}
 		{scanning}
 		onRefresh={loadDevices}
-		onScan={triggerScan}
+		onScan={auth.can("admin") ? triggerScan : undefined}
 		onInspect={openDetails}
-		onWol={handleWol}
-		onPromote={openPromoteModal}
-		onAdblock={(dev) => {
-			adblockDevice = dev;
-			adblockOpen = true;
-		}}
-		onPurge={handlePurge}
+		onWol={auth.can("device_write") ? handleWol : undefined}
+		onPromote={auth.can("device_write") ? openPromoteModal : undefined}
+		onAdblock={auth.can("dns_write")
+			? (dev) => {
+					adblockDevice = dev;
+					adblockOpen = true;
+				}
+			: undefined}
+		onPurge={auth.can("device_write") ? handlePurge : undefined}
 	/>
 </div>
 

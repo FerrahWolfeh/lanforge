@@ -3,6 +3,7 @@ use crate::context::caps::CompiledCaps;
 use crate::context::state::network::DhcpPoolStats;
 use crate::context::{DbWorkerMetrics, DnsHandle, DnsRequestRx, EventCounters, StorageHandle};
 use crate::error::CoreError;
+use crate::service::{Edge, EdgeKind, LossPolicy};
 use arc_swap::ArcSwapOption;
 use lanforge_types::build::BuildInfo;
 use lanforge_types::dhcp::{Dhcpv4Stats, Dhcpv6Stats};
@@ -39,6 +40,10 @@ pub struct ServiceSlot {
     pub started_at: Option<Instant>,
     /// Display name, set when the service is registered: only named slots get a banner.
     pub name: Option<&'static str>,
+    /// The service's dependency edges (its spec's `deps`), set when it is registered.
+    pub deps: &'static [Edge],
+    /// What stopping it does beyond the graph (`LanforgeService::stop_warning`).
+    pub stop_warning: Option<&'static str>,
     /// Traffic counters of the sockets the serving instance holds (never the sockets).
     pub transports: Vec<Arc<TransportMetrics>>,
 }
@@ -51,6 +56,8 @@ impl ServiceSlot {
             detail: None,
             started_at: None,
             name: None,
+            deps: &[],
+            stop_warning: None,
             transports: Vec::new(),
         }
     }
@@ -357,13 +364,49 @@ impl ServiceRuntime {
             .transports = transports;
     }
 
-    /// Names a registered service, so it appears in the banners.
-    pub fn register_service(&self, id: ServiceId, name: &'static str) {
+    /// Names a registered service, so it appears in the banners, and records its dependency
+    /// edges for [`Self::stop_dependents`].
+    pub fn register_service(
+        &self,
+        id: ServiceId,
+        name: &'static str,
+        deps: &'static [Edge],
+        stop_warning: Option<&'static str>,
+    ) {
+        let mut services = self.services.write();
+        let slot = services.entry(id).or_insert_with(ServiceSlot::new);
+        slot.name = Some(name);
+        slot.deps = deps;
+        slot.stop_warning = stop_warning;
+        drop(services);
+    }
+
+    /// The service's stop warning, while it is serving (stopping it otherwise changes nothing).
+    #[must_use]
+    pub fn stop_warning(&self, id: ServiceId) -> Option<&'static str> {
         self.services
-            .write()
-            .entry(id)
-            .or_insert_with(ServiceSlot::new)
-            .name = Some(name);
+            .read()
+            .get(&id)
+            .filter(|slot| slot.state_tx.borrow().is_serving())
+            .and_then(|slot| slot.stop_warning)
+    }
+
+    /// The serving services that `Require` `id`, with the policy each applies when it stops
+    /// (D-20). `Wants`/`After` edges are left out: losing them changes nothing in a dependent.
+    #[must_use]
+    pub fn stop_dependents(&self, id: ServiceId) -> Vec<(ServiceId, &'static str, LossPolicy)> {
+        self.services
+            .read()
+            .iter()
+            .filter(|(_, slot)| slot.state_tx.borrow().is_serving())
+            .filter_map(|(&dep, slot)| {
+                let edge = slot
+                    .deps
+                    .iter()
+                    .find(|e| e.kind == EdgeKind::Requires && e.target == id)?;
+                Some((dep, slot.name?, edge.on_loss))
+            })
+            .collect()
     }
 
     /// The lifecycle banner of every registered service (no summary: the API adds it).

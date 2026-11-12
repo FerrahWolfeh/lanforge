@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { auth } from "$lib/stores/auth.svelte";
 	import * as Card from "$lib/components/ui/card";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
@@ -39,6 +40,12 @@
 	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
 	import type { ServerCapabilities } from "$lib/api/types";
 
+	import StopImpactDialog from "$lib/components/StopImpactDialog.svelte";
+	let stopDialog = $state<StopImpactDialog>();
+
+	// Scan, reload and service control are admin-only on the server.
+	const isAdmin = $derived(auth.can("admin"));
+
 	const systemTabs: NavTabItem[] = [
 		{ label: "System Status", href: "/system", icon: ServerIcon },
 		{ label: "Services & Daemons", href: "/system/services", icon: LayersIcon },
@@ -59,6 +66,14 @@
 	let actionLoading = $state<Record<string, string | null>>({});
 
 	async function executeServiceAction(id: string, action: "Start" | "Stop" | "Restart") {
+		if (action === "Stop") {
+			try {
+				if (!(await stopDialog?.confirmStop(id))) return;
+			} catch (err) {
+				toast.error(`Could not check what stopping '${id}' affects: ${err instanceof Error ? err.message : String(err)}`);
+				return;
+			}
+		}
 		actionLoading[id] = action;
 		try {
 			await controlService(id, action);
@@ -173,6 +188,7 @@
 			/>
 			Refresh
 		</Button>
+		{#if isAdmin}
 		<Button
 			variant="outline"
 			size="sm"
@@ -218,6 +234,7 @@
 				</AlertDialog.Footer>
 			</AlertDialog.Content>
 		</AlertDialog.Root>
+		{/if}
 	{/snippet}
 </PageHeader>
 
@@ -501,7 +518,7 @@
 										<ExternalLinkIcon class="size-2.5 text-muted-foreground" />
 									</Button>
 
-									{#if meta.canControl}
+									{#if meta.canControl && isAdmin}
 										{#if isInactive}
 											<Button
 												variant="default"
@@ -631,3 +648,5 @@
 	</Card.Root>
 {/if}
 </div>
+
+<StopImpactDialog bind:this={stopDialog} />

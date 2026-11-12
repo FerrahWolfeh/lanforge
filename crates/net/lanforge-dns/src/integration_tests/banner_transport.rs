@@ -35,7 +35,7 @@ fn dns_transport(ctx: &LanforgeContext) -> Option<TransportSnapshot> {
 #[tokio::test]
 async fn banner_counts_tcp_queries() {
     let ctx = init_test_context();
-    ctx.register_service(ServiceId::Dns, "DNS");
+    ctx.register_service(ServiceId::Dns, "DNS", &[], None);
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, free_port()));
     ctx.update_dns_listen(DnsListenConfig {
         enabled: true,

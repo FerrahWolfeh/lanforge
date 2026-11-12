@@ -10,7 +10,9 @@ use lanforge_types::network::firewall::{
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RaServerConfig, RdnssConfig};
 use lanforge_types::network::traffic::{TrafficConfig, TrafficTelemetryResponse};
-use lanforge_types::system::{PppoeStatusResponse, RaStatusResponse, TrafficStatusResponse};
+use lanforge_types::system::{
+    PppoeStatusResponse, RaStatusResponse, ServiceId, TrafficStatusResponse,
+};
 use serde::{Deserialize, Serialize};
 
 /// Interface information.
@@ -52,6 +54,60 @@ pub struct StatusResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ServiceBannersResponse {
     pub banners: Vec<ServiceBanner>,
+}
+
+/// What stopping a service does to the running services that `Require` it (D-20): they keep
+/// running and apply their loss policy; none is stopped or restarted.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ServiceStopImpactResponse {
+    pub id: ServiceId,
+    pub affected: Vec<StopImpactEntry>,
+    /// What the stop does beyond the graph (e.g. `PPPoE`: the internet goes down), if serving.
+    /// Always serialized (postcard on the UDS).
+    pub warning: Option<String>,
+}
+
+/// One running dependent of a service about to stop.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StopImpactEntry {
+    pub id: ServiceId,
+    pub name: String,
+    pub outcome: StopOutcome,
+}
+
+/// What a dependent does while a service it requires is stopped (its `LossPolicy`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StopOutcome {
+    /// Keeps running unchanged.
+    KeepsRunning,
+    /// Keeps running, shown as degraded.
+    Degraded,
+    /// Stays up but suspends its work until the service is back.
+    Paused,
+}
+
+impl StopOutcome {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::KeepsRunning => "keeps running",
+            Self::Degraded => "degraded",
+            Self::Paused => "paused",
+        }
+    }
+}
+
+impl HttpWrappedResponse for ServiceStopImpactResponse {
+    type Wrapper = HttpDataResponse<ServiceStopImpactResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
 }
 
 /// Statistics and path information for the persistent database.

@@ -325,7 +325,7 @@ fn banner_transport_sums_the_registered_counters() {
     use lanforge_types::system::ServiceId;
 
     let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
-    ctx.register_service(ServiceId::Dns, "DNS Server");
+    ctx.register_service(ServiceId::Dns, "DNS Server", &[], None);
     let transport = |ctx: &LanforgeContext| ctx.service_banners()[0].transport;
     assert_eq!(transport(&ctx), None, "nothing registered, nothing shown");
 
