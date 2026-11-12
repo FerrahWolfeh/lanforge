@@ -26,7 +26,7 @@ async fn summaries_show_live_data_and_nothing_else() {
         (ServiceId::Wan, "WAN"),
         (ServiceId::Tftp, "TFTP Server"),
     ] {
-        ctx.register_service(id, name);
+        ctx.register_service(id, name, &[]);
         ctx.set_service_state(id, ServiceState::Online);
     }
     ctx.set_service_state(ServiceId::Tftp, ServiceState::Inactive);
@@ -100,7 +100,7 @@ async fn pppoe_uptime_is_the_session_age() {
 #[tokio::test]
 async fn pppoe_summary_names_the_state_in_words() {
     let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
-    ctx.register_service(ServiceId::Pppoe, "PPPoE Client");
+    ctx.register_service(ServiceId::Pppoe, "PPPoE Client", &[]);
     ctx.set_service_state(ServiceId::Pppoe, ServiceState::Online);
     ctx.set_pppoe_status(Some(PppoeStatusResponse {
         state: PppoeSessionState::WaitingForCarrier,
@@ -123,7 +123,7 @@ async fn stopped_firewall_says_what_it_left() {
     use lanforge_types::system::ServiceBanner;
 
     let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
-    ctx.register_service(ServiceId::Nft, "Firewall");
+    ctx.register_service(ServiceId::Nft, "Firewall", &[]);
     ctx.set_service_state(ServiceId::Nft, ServiceState::Inactive);
     ctx.set_service_detail(ServiceId::Nft, Some(StateDetail::AdminStopped));
     let client = ClientContext::new(ctx.clone());

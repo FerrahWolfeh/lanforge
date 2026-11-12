@@ -20,7 +20,7 @@ use tokio::time::{sleep, timeout};
 async fn banner_counts_the_serving_sockets() {
     let root = tempfile::tempdir().unwrap();
     let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
-    ctx.register_service(ServiceId::Tftp, "TFTP Server");
+    ctx.register_service(ServiceId::Tftp, "TFTP Server", &[]);
     let cfg = TftpConfig {
         enabled: true,
         listen: "127.0.0.1:0".parse().unwrap(),

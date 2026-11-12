@@ -6,3 +6,4 @@ mod api_tests;
 mod banners;
 mod dispatch;
 mod reload;
+mod stop_impact;

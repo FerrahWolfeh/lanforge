@@ -39,7 +39,7 @@ impl ServiceRegistry {
         let id = spec.id;
         self.ids.insert(id);
 
-        ctx.register_service(id, spec.display_name);
+        ctx.register_service(id, spec.display_name, spec.deps);
 
         self.specs.push(spec.clone());
         self.runners.insert(

@@ -967,6 +967,53 @@ async fn admin_stop_start_restart_via_service_control() {
     supervisor.shutdown(&ctx, Duration::from_millis(200)).await;
 }
 
+/// D-20 stop impact: what the dry-run predicts from the registered specs is what the supervisor
+/// does on the real stop. The registry must hand each spec's edges to the context, or the API
+/// answers "nothing affected" for every stop.
+#[tokio::test]
+async fn stop_impact_predicts_what_the_stop_does() {
+    static REQUIRES_IFACES: &[Edge] = &[Edge::requires(ServiceId::Interfaces, LossPolicy::Degrade)];
+    static WANTS_IFACES: &[Edge] = &[Edge::wants(ServiceId::Interfaces)];
+    let ctx = init_test_ctx();
+    let runs = Arc::new(AtomicU32::new(0));
+    let mut registry = ServiceRegistry::new();
+    registry.register(
+        &ctx,
+        counted(ServiceId::Interfaces, &[], Condition::ALWAYS, &runs),
+    );
+    registry.register(
+        &ctx,
+        counted(ServiceId::Dhcp4, REQUIRES_IFACES, Condition::ALWAYS, &runs),
+    );
+    registry.register(
+        &ctx,
+        counted(ServiceId::Dns, WANTS_IFACES, Condition::ALWAYS, &runs),
+    );
+    let supervisor = registry.start(&ctx).expect("start supervisor");
+    for id in [ServiceId::Interfaces, ServiceId::Dhcp4, ServiceId::Dns] {
+        wait_node_state(&supervisor, id, ServiceState::Online).await;
+    }
+
+    assert_eq!(
+        ctx.stop_dependents(ServiceId::Interfaces),
+        vec![(
+            ServiceId::Dhcp4,
+            ServiceId::Dhcp4.as_str(),
+            LossPolicy::Degrade
+        )]
+    );
+
+    control(&ctx, ServiceId::Interfaces, ServiceAction::Stop);
+    wait_node_state(&supervisor, ServiceId::Dhcp4, ServiceState::Degraded).await;
+    // Not listed, not touched.
+    assert_eq!(
+        supervisor.status_of(ServiceId::Dns).map(|s| s.state),
+        Some(ServiceState::Online)
+    );
+
+    supervisor.shutdown(&ctx, Duration::from_millis(200)).await;
+}
+
 /// A config change toggling a `Condition` stops/starts only that node, with no manual reload (D-3).
 #[tokio::test]
 async fn condition_follows_config_changes() {

@@ -17,6 +17,7 @@ use tokio::sync::{mpsc, watch};
 use crate::context::state::network::DhcpPoolStats;
 use crate::context::{DnsHandle, DnsRequestRx, LanforgeContext, StorageHandle};
 use crate::error::CoreError;
+use crate::service::{Edge, LossPolicy};
 
 impl LanforgeContext {
     /// Sets the global system status.
@@ -117,9 +118,17 @@ impl LanforgeContext {
         self.inner.runtime.set_service_transports(id, transports);
     }
 
-    /// Names a registered service, so it appears in the banners.
-    pub fn register_service(&self, id: ServiceId, name: &'static str) {
-        self.inner.runtime.register_service(id, name);
+    /// Names a registered service, so it appears in the banners, and records its dependency
+    /// edges (its spec's `deps`) for [`Self::stop_dependents`].
+    pub fn register_service(&self, id: ServiceId, name: &'static str, deps: &'static [Edge]) {
+        self.inner.runtime.register_service(id, name, deps);
+    }
+
+    /// The serving services that `Require` `id`, with the policy each applies when it stops
+    /// (D-20 stop impact).
+    #[must_use]
+    pub fn stop_dependents(&self, id: ServiceId) -> Vec<(ServiceId, &'static str, LossPolicy)> {
+        self.inner.runtime.stop_dependents(id)
     }
 
     /// The lifecycle banner of every registered service.

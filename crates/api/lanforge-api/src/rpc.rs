@@ -7,9 +7,10 @@ use crate::api::{
     DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse,
     DnsRewritesResponse, DnsStatsResponse, DnsUpstreamModeResponse, DnsUpstreamsResponse,
     EventKind, HostConfigEntry, HostsResponse, LeasesResponse, RpcCallError,
-    ServiceBannersResponse, SetupPayload, SetupResponse, SetupStatusResponse, SimpleSuccess,
-    StatusResponse, SystemConfigExport, SystemConfigImportResponse, TransientHostsResponse,
-    UserListResponse, UserResponse, WhoisResponse,
+    ServiceBannersResponse, ServiceStopImpactResponse, SetupPayload, SetupResponse,
+    SetupStatusResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
+    SystemConfigImportResponse, TransientHostsResponse, UserListResponse, UserResponse,
+    WhoisResponse,
 };
 use lanforge_macros::lanforge_rpc;
 use lanforge_types::{
@@ -431,4 +432,9 @@ pub trait LanforgeRpc {
     ) -> impl Future<Output = Result<Box<TrafficTelemetryResponse>, RpcCallError>> + Send;
     /// The configuration file as it is on disk.
     fn system_config_toml(&self) -> impl Future<Output = Result<String, RpcCallError>> + Send;
+    /// Dry-run of a stop: the running services that require `id` and what they do (D-20).
+    fn service_stop_impact(
+        &self,
+        id: String,
+    ) -> impl Future<Output = Result<ServiceStopImpactResponse, RpcCallError>> + Send;
 }

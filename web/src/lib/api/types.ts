@@ -142,6 +142,15 @@ export interface TransportSnapshot {
 	last_error_age_secs?: number;
 }
 
+/** Mirrors `lanforge_api::api::StopOutcome`. */
+export type StopOutcome = 'keeps_running' | 'degraded' | 'paused';
+
+/** D-20 dry-run: the running services that require a service about to stop. */
+export interface ServiceStopImpact {
+	id: string;
+	affected: { id: string; name: string; outcome: StopOutcome }[];
+}
+
 export interface ServiceBanner {
 	id?: string;
 	name: string;

@@ -10,9 +10,10 @@ use lanforge_api::api::{
     DhcpReconcileResponse, DnsAdblockGroupsResponse, DnsAdblockRulesResponse, DnsAllowlistResponse,
     DnsAnalyticsResponse, DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse,
     DnsQueryResponse, DnsReverseResolversResponse, DnsRewritesResponse, DnsUpstreamsResponse,
-    HostConfigEntry, HostsResponse, LeasesResponse, ServiceBannersResponse, SetupPayload,
-    SetupResponse, SetupStatusResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
-    SystemConfigImportResponse, UserListResponse, UserResponse, WhoisResponse,
+    HostConfigEntry, HostsResponse, LeasesResponse, ServiceBannersResponse,
+    ServiceStopImpactResponse, SetupPayload, SetupResponse, SetupStatusResponse, SimpleSuccess,
+    StatusResponse, SystemConfigExport, SystemConfigImportResponse, UserListResponse, UserResponse,
+    WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_types::auth::ApiScopes;
@@ -579,6 +580,18 @@ impl LanforgeClient {
         rpc.service_control(id, action)
             .await
             .map_err(|e| eyre!("{e}"))
+    }
+
+    /// Dry-run of a stop: the running services that require `id` (D-20).
+    pub async fn service_stop_impact(&self, id: String) -> Result<ServiceStopImpactResponse> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self
+                .http_get(&format!("/service/{}/stop-impact", urlencoding(&id)))
+                .await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.service_stop_impact(id).await.map_err(|e| eyre!("{e}"))
     }
 
     pub async fn service_banners(&self) -> Result<ServiceBannersResponse> {

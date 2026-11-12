@@ -30,6 +30,9 @@
 		ServiceBanner,
 	} from "$lib/api/types";
 
+	import StopImpactDialog from "$lib/components/StopImpactDialog.svelte";
+	let stopDialog = $state<StopImpactDialog>();
+
 	// The TFTP and PXE settings are written through the DHCP options (config_write).
 	const canEdit = $derived(auth.can("config_write"));
 
@@ -203,6 +206,14 @@
 	}
 
 	async function handleServiceControl(action: "Start" | "Stop" | "Restart") {
+		if (action === "Stop") {
+			try {
+				if (!(await stopDialog?.confirmStop("tftp"))) return;
+			} catch (err) {
+				toast.error(`Could not check what stopping '${"tftp"}' affects: ${err instanceof Error ? err.message : String(err)}`);
+				return;
+			}
+		}
 		serviceActionLoading = action;
 		try {
 			await controlService("tftp", action);
@@ -359,3 +370,5 @@
 	</div>
 	</fieldset>
 </div>
+
+<StopImpactDialog bind:this={stopDialog} />

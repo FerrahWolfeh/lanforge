@@ -44,6 +44,7 @@ pub fn router() -> Router<AppState> {
         .route("/setup", post(handle_setup))
         .route("/service_banners", get(handle_service_banners))
         .route("/service/{id}/control", post(handle_service_control))
+        .route("/service/{id}/stop-impact", get(handle_service_stop_impact))
         .route("/reload", post(handle_reload))
         .route("/shutdown", post(handle_shutdown))
         .route("/context", get(handle_context_dump))
@@ -150,6 +151,14 @@ async fn handle_service_control(
         ctx.handle_service_control(id, payload.action).await,
         Success => NoContent
     )
+}
+
+async fn handle_service_stop_impact(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(ctx.handle_service_stop_impact(id).await, ServiceStopImpact)
 }
 
 async fn handle_setup_status(State(state): State<AppState>) -> impl IntoResponse {

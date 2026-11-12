@@ -42,6 +42,9 @@
 	import CpuIcon from "@lucide/svelte/icons/cpu";
 	import ShieldIcon from "@lucide/svelte/icons/shield";
 
+	import StopImpactDialog from "$lib/components/StopImpactDialog.svelte";
+	let stopDialog = $state<StopImpactDialog>();
+
 	// Reload and service control are admin-only on the server.
 	const isAdmin = $derived(auth.can("admin"));
 
@@ -93,6 +96,14 @@
 	}
 
 	async function executeAction(id: string, action: "Start" | "Stop" | "Restart") {
+		if (action === "Stop") {
+			try {
+				if (!(await stopDialog?.confirmStop(id))) return;
+			} catch (err) {
+				toast.error(`Could not check what stopping '${id}' affects: ${err instanceof Error ? err.message : String(err)}`);
+				return;
+			}
+		}
 		actionLoading[id] = action;
 		try {
 			await controlService(id, action);
@@ -616,3 +627,5 @@
 		</div>
 	{/if}
 </div>
+
+<StopImpactDialog bind:this={stopDialog} />

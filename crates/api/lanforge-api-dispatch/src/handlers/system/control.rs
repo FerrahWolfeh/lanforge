@@ -2,10 +2,13 @@ use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
 use crate::ClientContext;
-use lanforge_api::api::{Response, SimpleSuccess};
+use lanforge_api::api::{
+    Response, ServiceStopImpactResponse, SimpleSuccess, StopImpactEntry, StopOutcome,
+};
 use lanforge_api::config_file::SectionSet;
 use lanforge_core::bus::{FirewallEvent, LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_core::context::ConfigPatch;
+use lanforge_core::service::LossPolicy;
 use lanforge_types::{
     network::{
         TrafficConfig,
@@ -44,6 +47,38 @@ impl ClientContext {
             }));
         Response::Success(SimpleSuccess {
             message: format!("Service control action {action:?} sent for service {service_id}"),
+        })
+    }
+
+    /// Dry-run of an admin stop (D-20): the serving services that `Require` `id` and the loss
+    /// policy each applies. The stop itself stays allowed; the CLI and the web UI confirm with this list.
+    pub async fn handle_service_stop_impact(&self, id: String) -> Response {
+        let service_id = match id.parse::<ServiceId>() {
+            Ok(sid) => sid,
+            Err(e) => {
+                return Response::Rejected {
+                    error: format!("Invalid service id '{id}': {e}"),
+                };
+            }
+        };
+        let mut affected: Vec<StopImpactEntry> = self
+            .ctx
+            .stop_dependents(service_id)
+            .into_iter()
+            .map(|(dep, name, policy)| StopImpactEntry {
+                id: dep,
+                name: name.to_string(),
+                outcome: match policy {
+                    LossPolicy::Continue => StopOutcome::KeepsRunning,
+                    LossPolicy::Degrade => StopOutcome::Degraded,
+                    LossPolicy::Pause => StopOutcome::Paused,
+                },
+            })
+            .collect();
+        affected.sort_by_key(|e| e.id.as_str());
+        Response::ServiceStopImpact(ServiceStopImpactResponse {
+            id: service_id,
+            affected,
         })
     }
 
