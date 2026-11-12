@@ -6,7 +6,7 @@ Thank you for your interest in contributing to Lanforge! Whether you are fixing 
 
 ## 1. Development Prerequisites
 
-- **Rust**: Version 1.85+ (Edition 2024).
+- **Rust**: A recent stable toolchain (Edition 2024).
 - **Node.js & pnpm**: Node.js 22+ and pnpm 9+ (required for building the embedded SvelteKit WebUI).
 - **Linux Environment**: Linux kernel 5.10+ (development on Linux is recommended due to Netlink, raw sockets, and packet routing protocols).
 

@@ -124,13 +124,13 @@ range = "192.168.1.100-192.168.1.250"
 [dhcp.v6]
 enabled = true
 lease = "24h"
-dns = ["fd97:f00d:cafe:3731::1"]
+# dns = ["fd12:3456:789a::1"] # e.g. the router's ULA on the LAN interface
 # search_domains = ["lan"] # defaults to [system].search_domains
 
 [dhcp.v6.pools.lan]
 range = "::100-::1fff"
 # lease = "12h" # omitted: inherit [dhcp.v6].lease
-# dns = ["fd97:f00d:cafe:3731::1"] # omitted: inherit [dhcp.v6].dns
+# dns = ["fd12:3456:789a::1"] # omitted: inherit [dhcp.v6].dns
 
 # ------------------------------------------------------------------------------
 # [ra] — IPv6 Router Advertisements
@@ -261,28 +261,30 @@ input = "drop"
 forward = "drop"
 masquerade = true
 mtu_fix = true
-open_ports = ["51820/udp"]
+# Router services reachable from the WAN, e.g. a WireGuard endpoint on this host:
+# open_ports = ["51820/udp"]
 
 [firewall.zones.internal]
-# The primary system interface is included automatically.
-interfaces = ["br0"]
+# The primary system interface is included automatically; list extra LAN interfaces here.
+# interfaces = ["br0"]
 input = "accept"
 forward = "accept"
 open_ports = ["53/udp", "53/tcp", "67/udp", "8088/tcp"]
 
 # Port forwards are also used for IPv6 pinholes. `to` is the target IP address;
 # `to_port` defaults to `port`.
-[firewall.port_forwards.web-server]
-proto = "tcp"
-port = 443
-to = "192.168.1.50"
-to_port = 443
-description = "Internal HTTPS Web Server"
-
-[firewall.port_forwards.wireguard]
-proto = "udp"
-port = 51820
-to = "192.168.1.10"
+# Examples (each one opens a port from the WAN):
+# [firewall.port_forwards.web-server]
+# proto = "tcp"
+# port = 443
+# to = "192.168.1.50"
+# to_port = 443
+# description = "Internal HTTPS Web Server"
+#
+# [firewall.port_forwards.wireguard]
+# proto = "udp"
+# port = 51820
+# to = "192.168.1.10"
 
 # ------------------------------------------------------------------------------
 # [traffic] — NIC tuning and Smart Queue Management
