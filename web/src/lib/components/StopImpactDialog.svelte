@@ -14,12 +14,12 @@
 	};
 
 	/**
-	 * Resolves true when the stop may go ahead: nothing running requires the service, or the
-	 * admin confirmed after seeing what happens to the services that do (D-20).
+	 * Resolves true when the stop may go ahead: nothing running requires the service and it
+	 * declares no warning, or the admin confirmed after seeing what happens (D-20).
 	 */
 	export async function confirmStop(id: string): Promise<boolean> {
 		const result = await serviceStopImpact(id);
-		if (result.affected.length === 0) return true;
+		if (result.affected.length === 0 && !result.warning) return true;
 		impact = result;
 		open = true;
 		return new Promise((r) => (resolve = r));
@@ -36,11 +36,19 @@
 	<AlertDialog.Content>
 		<AlertDialog.Header>
 			<AlertDialog.Title>Stop '{impact?.id}'?</AlertDialog.Title>
-			<AlertDialog.Description>
-				These running services require it. None of them is stopped or restarted; while it is
-				down they continue as listed.
-			</AlertDialog.Description>
+			{#if impact?.warning}
+				<AlertDialog.Description class="font-medium text-amber-600 dark:text-amber-400">
+					{impact.warning}
+				</AlertDialog.Description>
+			{/if}
+			{#if impact?.affected.length}
+				<AlertDialog.Description>
+					These running services require it. None of them is stopped or restarted; while it is
+					down they continue as listed.
+				</AlertDialog.Description>
+			{/if}
 		</AlertDialog.Header>
+		{#if impact?.affected.length}
 		<ul class="flex flex-col gap-1 text-xs">
 			{#each impact?.affected ?? [] as entry (entry.id)}
 				<li class="flex items-center justify-between gap-3 rounded-md border px-3 py-1.5">
@@ -51,6 +59,7 @@
 				</li>
 			{/each}
 		</ul>
+		{/if}
 		<AlertDialog.Footer>
 			<AlertDialog.Cancel onclick={() => settle(false)}>Cancel</AlertDialog.Cancel>
 			<AlertDialog.Action onclick={() => settle(true)}>Stop</AlertDialog.Action>

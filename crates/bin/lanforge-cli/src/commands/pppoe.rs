@@ -130,6 +130,10 @@ impl PppoeArgs {
                 Ok(())
             }
             PppoeSubcommand::Disconnect => {
+                if !super::service::confirm_stop(client, printer, "pppoe").await? {
+                    printer.info("Disconnect aborted.");
+                    return Ok(());
+                }
                 let resp = client.pppoe_disconnect().await?;
                 if printer.json {
                     return printer.print_json(&resp);

@@ -38,6 +38,9 @@
 	import PageHeader from "$lib/components/PageHeader.svelte";
 	import StatusBadge from "$lib/components/StatusBadge.svelte";
 
+	import StopImpactDialog from "$lib/components/StopImpactDialog.svelte";
+	let stopDialog = $state<StopImpactDialog>();
+
 	// The config holds the PPPoE password: reading it, saving and dialing need config_write.
 	const canEdit = $derived(auth.can("config_write"));
 
@@ -272,6 +275,12 @@
 	}
 
 	async function handleDisconnect() {
+		try {
+			if (!(await stopDialog?.confirmStop("pppoe"))) return;
+		} catch (err) {
+			toast.error(`Could not check what disconnecting affects: ${err instanceof Error ? err.message : String(err)}`);
+			return;
+		}
 		disconnecting = true;
 		try {
 			await pppoeDisconnect();
@@ -469,3 +478,5 @@
 	/>
 	{/if}
 </div>
+
+<StopImpactDialog bind:this={stopDialog} />

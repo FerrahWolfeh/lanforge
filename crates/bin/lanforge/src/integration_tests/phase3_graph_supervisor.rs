@@ -967,6 +967,25 @@ async fn admin_stop_start_restart_via_service_control() {
     supervisor.shutdown(&ctx, Duration::from_millis(200)).await;
 }
 
+/// A service declaring a stop warning (like PPPoE: the internet goes down).
+struct Warned;
+impl LanforgeService for Warned {
+    fn spec(&self) -> ServiceSpec {
+        dummy_spec(ServiceId::Wan, &[], Condition::ALWAYS)
+    }
+    fn stop_warning(&self) -> Option<&'static str> {
+        Some("warned")
+    }
+}
+impl AsyncService for Warned {
+    async fn serve(&mut self, _ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
+        h.ready();
+        h.run_until_stopped(pending::<Result<(), CoreError>>())
+            .await
+            .map(|_| ())
+    }
+}
+
 /// D-20 stop impact: what the dry-run predicts from the registered specs is what the supervisor
 /// does on the real stop. The registry must hand each spec's edges to the context, or the API
 /// answers "nothing affected" for every stop.
@@ -989,8 +1008,14 @@ async fn stop_impact_predicts_what_the_stop_does() {
         &ctx,
         counted(ServiceId::Dns, WANTS_IFACES, Condition::ALWAYS, &runs),
     );
+    registry.register(&ctx, || Warned);
     let supervisor = registry.start(&ctx).expect("start supervisor");
-    for id in [ServiceId::Interfaces, ServiceId::Dhcp4, ServiceId::Dns] {
+    for id in [
+        ServiceId::Interfaces,
+        ServiceId::Dhcp4,
+        ServiceId::Dns,
+        ServiceId::Wan,
+    ] {
         wait_node_state(&supervisor, id, ServiceState::Online).await;
     }
 
@@ -1001,6 +1026,14 @@ async fn stop_impact_predicts_what_the_stop_does() {
             ServiceId::Dhcp4.as_str(),
             LossPolicy::Degrade
         )]
+    );
+
+    // A service's own stop warning reaches the context through the registry too.
+    assert_eq!(ctx.stop_warning(ServiceId::Dhcp4), None);
+    assert_eq!(
+        ctx.stop_warning(ServiceId::Wan),
+        Some("warned"),
+        "the registry must pass LanforgeService::stop_warning"
     );
 
     control(&ctx, ServiceId::Interfaces, ServiceAction::Stop);

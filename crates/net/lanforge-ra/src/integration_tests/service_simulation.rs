@@ -793,7 +793,11 @@ async fn test_ra_rdnss_falls_back_to_the_isp_only_when_local_dns_is_off() {
             service.serve(&ctx_serve, &h).await
         });
         let Ok(Some(ra)) = timeout(Duration::from_millis(500), handle.recv_payload()).await else {
-            panic!("no startup RA: {:?} {:?}", ctx.get_service_state(ServiceId::Ra), serve.await);
+            panic!(
+                "no startup RA: {:?} {:?}",
+                ctx.get_service_state(ServiceId::Ra),
+                serve.await
+            );
         };
         serve.abort();
         let _ = serve.await;

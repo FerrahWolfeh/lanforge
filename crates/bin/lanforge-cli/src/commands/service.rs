@@ -139,27 +139,35 @@ fn render_services_table(resp: &ServiceBannersResponse, printer: &Printer) {
     println!("{table}");
 }
 
-/// D-20: stopping a service others `Require` is allowed, but first list what happens to them
-/// and ask (`-y` skips; without a terminal the prompt fails, so nothing is stopped).
-async fn confirm_stop(client: &LanforgeClient, printer: &Printer, id: &str) -> Result<bool> {
+/// Says what a stop does and asks before it (D-20); `true` when the stop may go ahead.
+///
+/// Asked when running services `Require` the service or it declares a warning (`PPPoE`: the
+/// internet goes down). `-y` skips; without a terminal the prompt fails, so nothing is
+/// stopped. Also used by `pppoe disconnect`.
+pub async fn confirm_stop(client: &LanforgeClient, printer: &Printer, id: &str) -> Result<bool> {
     let impact = client.service_stop_impact(id.to_string()).await?;
-    if impact.affected.is_empty() || printer.yes {
+    if (impact.affected.is_empty() && impact.warning.is_none()) || printer.yes {
         return Ok(true);
     }
-    println!(
-        "Stopping '{}' affects {} running service(s) that require it:",
-        impact.id,
-        impact.affected.len()
-    );
-    for entry in &impact.affected {
-        println!(
-            "  {} {} — {}",
-            entry.name.bold(),
-            format!("[{}]", entry.id).dimmed(),
-            entry.outcome.as_str()
-        );
+    if let Some(warning) = &impact.warning {
+        println!("{} {warning}", "Warning:".yellow().bold());
     }
-    println!("{}", "None of them is stopped or restarted.".dimmed());
+    if !impact.affected.is_empty() {
+        println!(
+            "Stopping '{}' affects {} running service(s) that require it:",
+            impact.id,
+            impact.affected.len()
+        );
+        for entry in &impact.affected {
+            println!(
+                "  {} {} — {}",
+                entry.name.bold(),
+                format!("[{}]", entry.id).dimmed(),
+                entry.outcome.as_str()
+            );
+        }
+        println!("{}", "None of them is stopped or restarted.".dimmed());
+    }
     Ok(Confirm::new(&format!("Stop '{}'?", impact.id))
         .with_default(false)
         .prompt()?)

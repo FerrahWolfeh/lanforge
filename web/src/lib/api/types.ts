@@ -149,6 +149,8 @@ export type StopOutcome = 'keeps_running' | 'degraded' | 'paused';
 export interface ServiceStopImpact {
 	id: string;
 	affected: { id: string; name: string; outcome: StopOutcome }[];
+	/** What the stop does beyond the graph (PPPoE: the internet goes down), while it serves. */
+	warning: string | null;
 }
 
 export interface ServiceBanner {

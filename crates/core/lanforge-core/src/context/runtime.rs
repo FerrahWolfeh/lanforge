@@ -42,6 +42,8 @@ pub struct ServiceSlot {
     pub name: Option<&'static str>,
     /// The service's dependency edges (its spec's `deps`), set when it is registered.
     pub deps: &'static [Edge],
+    /// What stopping it does beyond the graph (`LanforgeService::stop_warning`).
+    pub stop_warning: Option<&'static str>,
     /// Traffic counters of the sockets the serving instance holds (never the sockets).
     pub transports: Vec<Arc<TransportMetrics>>,
 }
@@ -55,6 +57,7 @@ impl ServiceSlot {
             started_at: None,
             name: None,
             deps: &[],
+            stop_warning: None,
             transports: Vec::new(),
         }
     }
@@ -363,12 +366,29 @@ impl ServiceRuntime {
 
     /// Names a registered service, so it appears in the banners, and records its dependency
     /// edges for [`Self::stop_dependents`].
-    pub fn register_service(&self, id: ServiceId, name: &'static str, deps: &'static [Edge]) {
+    pub fn register_service(
+        &self,
+        id: ServiceId,
+        name: &'static str,
+        deps: &'static [Edge],
+        stop_warning: Option<&'static str>,
+    ) {
         let mut services = self.services.write();
         let slot = services.entry(id).or_insert_with(ServiceSlot::new);
         slot.name = Some(name);
         slot.deps = deps;
+        slot.stop_warning = stop_warning;
         drop(services);
+    }
+
+    /// The service's stop warning, while it is serving (stopping it otherwise changes nothing).
+    #[must_use]
+    pub fn stop_warning(&self, id: ServiceId) -> Option<&'static str> {
+        self.services
+            .read()
+            .get(&id)
+            .filter(|slot| slot.state_tx.borrow().is_serving())
+            .and_then(|slot| slot.stop_warning)
     }
 
     /// The serving services that `Require` `id`, with the policy each applies when it stops

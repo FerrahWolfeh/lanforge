@@ -56,7 +56,8 @@ lanforge service stop <service-id>     # Stop an active service
 firewall reapplies its ruleset without tearing the table down). Stopping a service others depend on never restarts
 them: dependents apply their loss policy (continue, degrade or pause). Before stopping a service that running services
 require, `stop` lists them with what each will do and asks; `-y` skips the question, and without a terminal nothing
-is stopped.
+is stopped. A service whose stop has effects outside lanforge asks too: stopping `pppoe` (or `pppoe disconnect`)
+warns that the network loses internet access.
 
 ### `watch` *(alias: `events`)*
 Streams real-time daemon events (device discoveries, DHCP leases, DNS queries, firewall updates, PPPoE status) directly from the event bus.

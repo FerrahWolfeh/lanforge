@@ -79,6 +79,7 @@ impl ClientContext {
         Response::ServiceStopImpact(ServiceStopImpactResponse {
             id: service_id,
             affected,
+            warning: self.ctx.stop_warning(service_id).map(str::to_string),
         })
     }
 

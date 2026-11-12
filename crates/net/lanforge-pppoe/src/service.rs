@@ -1133,6 +1133,12 @@ fn instant_of(unix_ms_then: u64) -> Instant {
 }
 
 impl<H: PppoeHost> LanforgeService for PppoeService<H> {
+    fn stop_warning(&self) -> Option<&'static str> {
+        Some(
+            "This ends the PPPoE session: the network loses internet access until PPPoE is started again.",
+        )
+    }
+
     fn spec(&self) -> ServiceSpec {
         ServiceSpec {
             id: Self::SERVICE_ID,

@@ -120,8 +120,22 @@ impl LanforgeContext {
 
     /// Names a registered service, so it appears in the banners, and records its dependency
     /// edges (its spec's `deps`) for [`Self::stop_dependents`].
-    pub fn register_service(&self, id: ServiceId, name: &'static str, deps: &'static [Edge]) {
-        self.inner.runtime.register_service(id, name, deps);
+    pub fn register_service(
+        &self,
+        id: ServiceId,
+        name: &'static str,
+        deps: &'static [Edge],
+        stop_warning: Option<&'static str>,
+    ) {
+        self.inner
+            .runtime
+            .register_service(id, name, deps, stop_warning);
+    }
+
+    /// What stopping `id` does beyond the graph, while it is serving (D-20).
+    #[must_use]
+    pub fn stop_warning(&self, id: ServiceId) -> Option<&'static str> {
+        self.inner.runtime.stop_warning(id)
     }
 
     /// The serving services that `Require` `id`, with the policy each applies when it stops

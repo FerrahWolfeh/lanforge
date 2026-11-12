@@ -35,11 +35,12 @@ impl ServiceRegistry {
         S: AsyncService + LanforgeService + 'static,
         F: Fn() -> S + Send + Sync + 'static,
     {
-        let spec = factory().spec();
+        let sample = factory();
+        let spec = sample.spec();
         let id = spec.id;
         self.ids.insert(id);
 
-        ctx.register_service(id, spec.display_name, spec.deps);
+        ctx.register_service(id, spec.display_name, spec.deps, sample.stop_warning());
 
         self.specs.push(spec.clone());
         self.runners.insert(

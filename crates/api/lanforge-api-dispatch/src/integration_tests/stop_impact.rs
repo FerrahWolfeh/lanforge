@@ -53,7 +53,7 @@ fn ctx() -> LanforgeContext {
         // Only Wants/After: losing it changes nothing in DNS.
         (ServiceId::Dns, "DNS", WANTS_ONLY, ServiceState::Online),
     ] {
-        ctx.register_service(id, name, deps);
+        ctx.register_service(id, name, deps, None);
         ctx.set_service_state(id, state);
     }
     ctx
@@ -95,4 +95,30 @@ async fn stop_impact_of_a_leaf_is_empty_and_bad_ids_are_rejected() {
             .await,
         Response::Rejected { .. }
     ));
+}
+
+/// Stopping `PPPoE` takes the internet down although nothing `Requires` it: the warning its
+/// service declares comes with the dry-run while it serves, and not when it is not running.
+#[tokio::test]
+async fn stop_impact_carries_the_service_warning_while_it_serves() {
+    const WARNING: &str = "the internet goes down";
+    let ctx = ctx();
+    ctx.register_service(ServiceId::Pppoe, "PPPoE Client", &[], Some(WARNING));
+    ctx.set_service_state(ServiceId::Pppoe, ServiceState::Online);
+    let client = ClientContext::new(ctx.clone());
+    let Response::ServiceStopImpact(impact) =
+        client.handle_service_stop_impact("pppoe".into()).await
+    else {
+        panic!("expected a stop impact");
+    };
+    assert!(impact.affected.is_empty());
+    assert_eq!(impact.warning.as_deref(), Some(WARNING));
+
+    ctx.set_service_state(ServiceId::Pppoe, ServiceState::Inactive);
+    let Response::ServiceStopImpact(impact) =
+        client.handle_service_stop_impact("pppoe".into()).await
+    else {
+        panic!("expected a stop impact");
+    };
+    assert_eq!(impact.warning, None);
 }

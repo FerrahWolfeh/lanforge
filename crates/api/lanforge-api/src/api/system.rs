@@ -62,6 +62,9 @@ pub struct ServiceBannersResponse {
 pub struct ServiceStopImpactResponse {
     pub id: ServiceId,
     pub affected: Vec<StopImpactEntry>,
+    /// What the stop does beyond the graph (e.g. `PPPoE`: the internet goes down), if serving.
+    /// Always serialized (postcard on the UDS).
+    pub warning: Option<String>,
 }
 
 /// One running dependent of a service about to stop.
