@@ -430,7 +430,8 @@
 				{@const SvcIcon = meta.icon}
 				{@const isBusy = !!actionLoading[svcId]}
 				{@const currentAction = actionLoading[svcId]}
-				{@const active = isOnline(banner.state)}
+				<!-- A degraded service still serves (Rust `is_serving`): it can be restarted or stopped. -->
+				{@const active = isOnline(banner.state) || banner.state.toLowerCase() === "degraded"}
 				{@const starting = isStarting(banner.state)}
 				{@const inactive = isInactive(banner.state)}
 
