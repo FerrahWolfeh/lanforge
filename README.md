@@ -104,9 +104,46 @@ See [**ARCHITECTURE.md**](docs/ARCHITECTURE.md) and [**NETWORKING_ARCH.md**](doc
 
 ---
 
+## Status
+
+Lanforge is pre-1.0 (`0.x`). It runs 24/7 as the maintainer's home router, but configuration keys,
+the HTTP API, and the CLI can still change between minor versions. The CLI and the daemon talk over a
+private UDS protocol that is not kept compatible across versions: **always upgrade `lanforge` and
+`lanforged` together.**
+
+---
+
+## Requirements
+
+- **Linux** with nftables and the `nft` command (the firewall applies its ruleset through it).
+  PPPoE needs the kernel `pppoe` module and `/dev/ppp`; SQM needs the `sch_cake` / `sch_fq_codel` qdiscs.
+- **Root, or the capabilities** `CAP_NET_ADMIN`, `CAP_NET_RAW` and `CAP_NET_BIND_SERVICE`
+  (the shipped systemd unit runs as root with a restricted capability set).
+- **Something else manages the interfaces.** Lanforge never assigns addresses to interfaces: the LAN's
+  IPv4 address, ULA and GUA (for example a prefix obtained through DHCPv6-PD) come from whatever manages
+  the system's interfaces (systemd-networkd, NetworkManager, ifupdown, dhcpcd, ...). Lanforge detects
+  them, advertises and leases from them, and follows them when the ISP renumbers the delegated prefix.
+- **SELinux** (Fedora, RHEL): `deploy/install.sh` installs the required policy from `deploy/selinux/`.
+
+### Conflicting services
+
+Lanforge takes over ports and duties that other daemons usually hold. Stop or reconfigure these first:
+
+| Service | Conflict | What to do |
+|:--|:--|:--|
+| `systemd-resolved` | Stub listener on port 53 | Set `DNSStubListener=no` |
+| `dnsmasq`, `unbound`, `pihole-FTL`, ... | DNS (53) and/or DHCP (67) | Disable them on the LAN |
+| `dhcpd`, `kea`, networkd `DHCPServer=` | DHCPv4/v6 server (67, 547) | Disable the server part |
+| `radvd`, networkd `IPv6SendRA=` | Router Advertisements | Disable them |
+| `pppd` / NetworkManager PPPoE | PPPoE session on the WAN | Let only one of them dial |
+| `firewalld` or other nftables rules | Rules still apply next to Lanforge's own table | Remove or align them |
+
+---
+
 ## Quick Start
 
 ### 1. Build
+
 Requires a recent stable Rust toolchain (Edition 2024), Node.js with pnpm (for the WebUI), and standard Linux build tools.
 
 ```bash
@@ -118,24 +155,61 @@ pnpm --prefix web install
 cargo build --release
 ```
 
-### 2. Install
-The release binaries and systemd unit can be installed directly:
+Every service is a Cargo feature, so small boards can build only what they use:
 
 ```bash
-# Install binaries
-sudo install -Dm755 target/release/lanforge /usr/local/bin/lanforged
-sudo install -Dm755 target/release/lanforge-cli /usr/local/bin/lanforge
+# Daemon only, default features: every service, WebUI, DoT/DoH upstreams, adblock
+cargo build --release -p lanforge
 
-# Install configuration and systemd service
-sudo install -Dm640 contrib/lanforge.toml /etc/lanforge/lanforge.toml
-sudo install -Dm644 contrib/lanforge.service /etc/systemd/system/lanforge.service
+# Only DNS + DHCP + RA, controlled through the CLI (no HTTP server, no WebUI)
+cargo build --release -p lanforge --no-default-features --features dns,dhcp,ra,uds
+```
 
-# Enable and start the service
-sudo systemctl daemon-reload
+Services: `dhcp`, `dns`, `ra`, `tftp`, `pppoe`, `nft`, `traffic`, `discovery`, `http`, `uds`, `webui`.
+Extras: `https`, `dns-dot`, `dns-doq`, `dns-doh`, `doh-server`, `adblock`, and the TLS provider
+(`ring` or `aws-lc`). See `[features]` in [`crates/bin/lanforge/Cargo.toml`](crates/bin/lanforge/Cargo.toml).
+For aarch64 boards, `cross build --release --target aarch64-unknown-linux-gnu` uses the image in
+[`cross/`](cross/) (build the WebUI on the host first).
+
+### 2. Install
+
+On the gateway, from the repository root:
+
+```bash
+sudo ./deploy/install.sh
+```
+
+The installer creates the `lanforge` group (members can use the CLI without `sudo`), installs the
+binaries from the release build, a configuration template, the systemd unit and, when SELinux is active,
+its policy. Existing configuration is never overwritten. See the [**deployment guide**](deploy/README.md)
+for the directory layout, remote deploys, and updates.
+
+### 3. First run
+
+```bash
 sudo systemctl enable --now lanforge
 ```
 
-### 3. Minimal Configuration (`/etc/lanforge/lanforge.toml`)
+On a fresh install Lanforge starts in **provisioning mode**: DNS and the WebUI come up, but DHCP, RA and
+PPPoE stay dormant so a half-configured router cannot take over the LAN. Open
+`http://<router-ip>:8088/`: it lands on the onboarding wizard, which creates the admin account and sets up
+the LAN, WAN, DNS and adblock. The same wizard runs in a terminal with `lanforge setup`.
+
+If you configure everything in the file instead, set `auto_provision = true` in `[system]` (or start
+the daemon with `--auto-provision`) and create the admin from the shell:
+
+```bash
+lanforge user add admin
+```
+
+> [!WARNING]
+> Until the first user exists the HTTP API asks for no login. Create the admin right away.
+
+### 4. Configuration
+
+`/etc/lanforge/lanforge.toml` is the single source of configuration; the WebUI and CLI write their
+changes back to it. A minimal file:
+
 ```toml
 [system]
 iface = "eth0"
@@ -163,7 +237,15 @@ listen = "[::]:8088"
 ```
 
 Every key is documented in [`contrib/lanforge.toml`](contrib/lanforge.toml); section snippets
-live in [`docs/config/`](docs/config/). `lanforge reload` applies edits without a restart.
+live in [`docs/config/`](docs/config/). `lanforge reload` applies edits without a restart. An invalid
+entry is skipped and reported (`lanforge status`, WebUI) instead of taking the network down.
+
+### 5. Remote access
+
+On the LAN, the WebUI on port 8088 is fine as is (enable HTTPS in `[http]` if you want it). For access
+from outside, use a VPN or Tailscale and reach the router through it. **Never forward the WebUI/API port
+from the WAN.** The firewall's `external` zone drops inbound traffic by default, so the WebUI is not
+reachable from the WAN unless you add a host rule for it.
 
 ---
 
@@ -188,6 +270,23 @@ lanforge dns adblock resume
 ```
 
 See [**CLI.md**](docs/CLI.md) for full CLI command references and [**WEBUI.md**](docs/WEBUI.md) for the WebUI architecture overview.
+
+---
+
+## Documentation
+
+| Topic | Document |
+|:--|:--|
+| Deployment, systemd, updates | [deploy/README.md](deploy/README.md) |
+| Configuration reference | [contrib/lanforge.toml](contrib/lanforge.toml), [docs/config/](docs/config/) |
+| CLI | [docs/CLI.md](docs/CLI.md) |
+| WebUI | [docs/WEBUI.md](docs/WEBUI.md) |
+| HTTP API | [docs/HTTP_API.md](docs/HTTP_API.md) |
+| RPC API and types | [docs/API.md](docs/API.md), [docs/API_TYPES.md](docs/API_TYPES.md) |
+| Architecture | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/NETWORKING_ARCH.md](docs/NETWORKING_ARCH.md) |
+| DNS internals and rewrites | [docs/DNS_LIBRARY_ARCH.md](docs/DNS_LIBRARY_ARCH.md), [docs/dns_rewrites.md](docs/dns_rewrites.md) |
+| Contributing | [CONTRIBUTING.md](CONTRIBUTING.md) |
+| Reporting security issues | [SECURITY.md](SECURITY.md) |
 
 ---
 
