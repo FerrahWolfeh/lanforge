@@ -113,7 +113,7 @@ impl ClientContext {
             Ok(p) => p,
             Err(e) => return e.response_in("PPPoE configuration not saved"),
         };
-        let _ = self.ctx.apply_config(ConfigPatch::new().with_pppoe(cfg));
+        self.ctx.apply_config(ConfigPatch::new().with_pppoe(cfg));
 
         Response::Success(SimpleSuccess {
             message: persisted.message("PPPoE configuration"),
@@ -157,7 +157,7 @@ impl ClientContext {
             Ok(p) => p,
             Err(e) => return e.response_in("Traffic configuration not saved"),
         };
-        let _ = self.ctx.apply_config(ConfigPatch::new().with_traffic(cfg));
+        self.ctx.apply_config(ConfigPatch::new().with_traffic(cfg));
 
         Response::Success(SimpleSuccess {
             message: persisted.message("Traffic and SQM configuration"),
@@ -177,7 +177,7 @@ impl ClientContext {
             Ok(p) => p,
             Err(e) => return e.response_in("Firewall configuration not saved"),
         };
-        let _ = self.ctx.apply_config(ConfigPatch::new().with_firewall(cfg));
+        self.ctx.apply_config(ConfigPatch::new().with_firewall(cfg));
 
         Response::Success(SimpleSuccess {
             message: persisted.message("Firewall configuration"),
@@ -223,8 +223,7 @@ impl ClientContext {
         if let Some(rollback_secs) = req.auto_rollback_secs {
             // On trial: applied in memory only. The file keeps the previous config until the
             // admin confirms, so a restart during the trial window also rolls back.
-            let _ = self
-                .ctx
+            self.ctx
                 .apply_config(ConfigPatch::new().with_firewall(candidate));
             let _ = self
                 .ctx
@@ -249,7 +248,7 @@ impl ClientContext {
                         tx_id = %tx_id,
                         "Firewall transaction auto-rollback triggered after timeout without confirmation"
                     );
-                    let _ = ctx.apply_config(ConfigPatch::new().with_firewall(previous));
+                    ctx.apply_config(ConfigPatch::new().with_firewall(previous));
                     let _ = ctx
                         .bus()
                         .publish(LanforgeEvent::Firewall(FirewallEvent::RulesetChanged));
@@ -271,8 +270,7 @@ impl ClientContext {
                 Ok(p) => p,
                 Err(e) => return e.response_in("Firewall configuration not saved"),
             };
-            let _ = self
-                .ctx
+            self.ctx
                 .apply_config(ConfigPatch::new().with_firewall(candidate));
             let _ = self.ctx.clear_staged_firewall_transaction(Some(&req.tx_id));
 
@@ -308,8 +306,7 @@ impl ClientContext {
             };
         };
 
-        let _ = self
-            .ctx
+        self.ctx
             .apply_config(ConfigPatch::new().with_firewall(staged.candidate_config));
 
         Response::Success(SimpleSuccess {
@@ -328,8 +325,7 @@ impl ClientContext {
         if staged.auto_rollback_deadline.is_some()
             && let Some(prev) = staged.previous_config
         {
-            let _ = self
-                .ctx
+            self.ctx
                 .apply_config(ConfigPatch::new().with_firewall(prev));
             let _ = self
                 .ctx

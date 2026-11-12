@@ -22,37 +22,37 @@ use crate::context::state::State;
 impl LanforgeContext {
     /// Updates the configured `DHCPv4` pools and publishes the change event.
     pub fn update_dhcp_v4_pools(&self, pools: Vec<Dhcpv4Pool>) {
-        let _ = self.apply_config(ConfigPatch::new().with_dhcp_v4_pools(pools));
+        self.apply_config(ConfigPatch::new().with_dhcp_v4_pools(pools));
     }
 
     /// Updates the configured `DHCPv6` pools and publishes the change event.
     pub fn update_dhcp_v6_pools(&self, pools: Vec<Dhcpv6Pool>) {
-        let _ = self.apply_config(ConfigPatch::new().with_dhcp_v6_pools(pools));
+        self.apply_config(ConfigPatch::new().with_dhcp_v6_pools(pools));
     }
 
     /// Updates the full RA server configuration and publishes the change event.
     pub fn update_ra_server_config(&self, config: RaServerConfig) {
-        let _ = self.apply_config(ConfigPatch::new().with_ra(config));
+        self.apply_config(ConfigPatch::new().with_ra(config));
     }
 
     /// Updates the dynamic `PPPoE` configuration in context and publishes change event.
     pub fn update_pppoe_config(&self, config: PppoeConfig) {
-        let _ = self.apply_config(ConfigPatch::new().with_pppoe(config));
+        self.apply_config(ConfigPatch::new().with_pppoe(config));
     }
 
     /// Updates the dynamic firewall configuration in context and publishes change event.
     pub fn update_firewall_config(&self, config: FirewallConfig) {
-        let _ = self.apply_config(ConfigPatch::new().with_firewall(config));
+        self.apply_config(ConfigPatch::new().with_firewall(config));
     }
 
     /// Updates the dynamic traffic and SQM configuration in context and publishes change event.
     pub fn update_traffic_config(&self, config: TrafficConfig) {
-        let _ = self.apply_config(ConfigPatch::new().with_traffic(config));
+        self.apply_config(ConfigPatch::new().with_traffic(config));
     }
 
     /// Updates the configured DNS upstreams and publishes the change event.
     pub fn update_dns_upstreams(&self, upstreams: Vec<UpstreamTarget>) {
-        let _ = self.apply_config(ConfigPatch::new().with_dns_upstreams(upstreams));
+        self.apply_config(ConfigPatch::new().with_dns_upstreams(upstreams));
     }
 
     /// Returns the currently configured DNS upstream resolution mode.
@@ -63,22 +63,22 @@ impl LanforgeContext {
 
     /// Updates the DNS listeners (UDP/TCP, `DoT`, `DoQ`, TLS identity): restarts the DNS service.
     pub fn update_dns_listen(&self, listen: DnsListenConfig) {
-        let _ = self.apply_config(ConfigPatch::new().with_dns_listen(listen));
+        self.apply_config(ConfigPatch::new().with_dns_listen(listen));
     }
 
     /// Updates the configured DNS adblock config and publishes the change event.
     pub fn update_dns_adblock(&self, adblock: AdblockDbConfig) {
-        let _ = self.apply_config(ConfigPatch::new().with_dns_adblock(adblock));
+        self.apply_config(ConfigPatch::new().with_dns_adblock(adblock));
     }
 
     /// Updates the configured DNS adblock URLs and publishes the change event.
     pub fn update_dns_adblock_urls(&self, urls: Vec<AdblockUrlEntry>) {
-        let _ = self.apply_config(ConfigPatch::new().with_dns_adblock_urls(urls));
+        self.apply_config(ConfigPatch::new().with_dns_adblock_urls(urls));
     }
 
     /// Updates the global adblock rules file's text and publishes the change event.
     pub fn update_dns_adblock_rules(&self, text: String) {
-        let _ = self.apply_config(ConfigPatch::new().with_dns_adblock_rules(text));
+        self.apply_config(ConfigPatch::new().with_dns_adblock_rules(text));
     }
 
     /// Prunes stale discovery caches, old transient hosts, and discovered devices that stayed
@@ -135,6 +135,6 @@ impl LanforgeContext {
 
     /// Sets or replaces all custom reverse DNS resolvers.
     pub fn set_reverse_resolvers(&self, resolvers: Vec<DnsReverseResolver>) {
-        let _ = self.apply_config(ConfigPatch::new().with_dns_reverse(resolvers));
+        self.apply_config(ConfigPatch::new().with_dns_reverse(resolvers));
     }
 }

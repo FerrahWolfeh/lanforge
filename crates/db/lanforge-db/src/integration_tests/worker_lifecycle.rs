@@ -524,10 +524,10 @@ async fn the_worker_never_writes_configuration() {
         range_end: Ipv4Addr::new(192, 168, 1, 200),
         ..Default::default()
     }]);
-    let _ = ctx.apply_config(ConfigPatch::new().with_dhcp_options(DhcpOptionsConfig::default()));
+    ctx.apply_config(ConfigPatch::new().with_dhcp_options(DhcpOptionsConfig::default()));
     ctx.update_firewall_config(FirewallConfig::default());
     ctx.update_dns_adblock_rules("@@||bank.example^\n".to_string());
-    let _ = ctx.apply_config(ConfigPatch::new().with_dns_rewrites(vec![RewriteRule {
+    ctx.apply_config(ConfigPatch::new().with_dns_rewrites(vec![RewriteRule {
         id: None,
         domain: "router.lan".into(),
         rtype: DnsRecordType::A,

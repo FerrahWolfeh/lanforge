@@ -1437,7 +1437,7 @@ async fn test_dhcpv4_without_configured_dns_announces_this_server() -> Result<()
         pools: vec![pool.clone()],
         ..Default::default()
     };
-    let _ = ctx.apply_config(
+    ctx.apply_config(
         ConfigPatch::new()
             .with_dhcp_v4_pools(vec![pool])
             .with_dhcp_v4_options(Dhcpv4Options {
@@ -1505,7 +1505,7 @@ async fn test_dhcpv4_without_configured_router_announces_this_server() -> Result
         pools: vec![pool.clone()],
         ..Default::default()
     };
-    let _ = ctx.apply_config(
+    ctx.apply_config(
         ConfigPatch::new()
             .with_dhcp_v4_pools(vec![pool])
             .with_dhcp_v4_options(Dhcpv4Options {
@@ -1565,7 +1565,7 @@ async fn test_dhcpv4_without_local_dns_announces_the_wan_resolvers() -> Result<(
         local_dns: false,
         ..Default::default()
     };
-    let _ = ctx.apply_config(
+    ctx.apply_config(
         ConfigPatch::new()
             .with_dhcp_v4_pools(vec![pool])
             .with_dhcp_v4_options(Dhcpv4Options {
@@ -1663,7 +1663,7 @@ async fn test_dhcpv4_dns_follows_the_local_dns_server_being_switched() -> Result
         enabled: false,
         ..DnsListenConfig::default()
     };
-    let _ = ctx.apply_config(
+    ctx.apply_config(
         ConfigPatch::new()
             .with_dhcp_v4_pools(vec![pool])
             .with_dhcp_v4_options(Dhcpv4Options {

@@ -189,6 +189,6 @@ impl ClientContext {
             }
         }
 
-        let _ = ctx.apply_config(patch);
+        ctx.apply_config(patch);
     }
 }

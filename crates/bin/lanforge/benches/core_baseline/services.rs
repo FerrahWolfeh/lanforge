@@ -89,7 +89,7 @@ pub(super) fn run(ctx: &LanforgeContext, args: &Args) -> Result<Value> {
                 range_start: ip(0), range_end: ip(args.devices + 100),
                 lease_time: Some(3600), router: Some(cfg.router), ..Default::default()
             }];
-            let _ = ctx.apply_config(ConfigPatch::new().with_dhcp_v4_pools(cfg.pools.clone()).with_dhcp_v4_options(Dhcpv4Options { router: Some(cfg.router), subnet_mask: Some(cfg.subnet_mask), lease_time: cfg.lease_time, ..Default::default() }));
+            ctx.apply_config(ConfigPatch::new().with_dhcp_v4_pools(cfg.pools.clone()).with_dhcp_v4_options(Dhcpv4Options { router: Some(cfg.router), subnet_mask: Some(cfg.subnet_mask), lease_time: cfg.lease_time, ..Default::default() }));
             let (handle, transport) = Dhcpv4Transport::inert();
             let mut service = Dhcpv4Service::with_transport(cfg.clone(), ctx.clone(), transport);
             let serving_ctx = ctx.clone();

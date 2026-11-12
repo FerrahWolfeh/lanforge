@@ -439,7 +439,7 @@ impl ClientContext {
         }
         // File-owned: written with the rest of the setup TOML below.
         patch = patch.with_firewall(initial_firewall.clone());
-        let _ = self.ctx.apply_config(patch);
+        self.ctx.apply_config(patch);
 
         // 8. Write complete declarative TOML file atomically to authoritative path
         let target_path = self.resolve_config_path().unwrap_or_else(|| {

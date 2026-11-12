@@ -999,7 +999,7 @@ async fn condition_follows_config_changes() {
         enabled: false,
         ..FirewallConfig::default()
     };
-    let _ = ctx.apply_config(ConfigPatch::new().with_firewall(disabled.clone()));
+    ctx.apply_config(ConfigPatch::new().with_firewall(disabled.clone()));
     wait_status(
         &ctx,
         ServiceId::Nft,
@@ -1010,7 +1010,7 @@ async fn condition_follows_config_changes() {
     )
     .await;
 
-    let _ = ctx.apply_config(ConfigPatch::new().with_firewall(FirewallConfig {
+    ctx.apply_config(ConfigPatch::new().with_firewall(FirewallConfig {
         enabled: true,
         ..disabled
     }));
