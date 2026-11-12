@@ -351,6 +351,10 @@ pub struct QueryLogEntry {
     /// Identical queries (same client, name, type and outcome) this line stands for: the DNS
     /// folds a burst of repeats into one line per window. `1` = a single query.
     pub repeats: u32,
+    /// The upstream that answered, as configured (`tls://dns.google`, `udp://1.1.1.1:53`);
+    /// `None` when none was asked (local, cached, blocked, rewritten).
+    #[serde(default)]
+    pub upstream: Option<Arc<str>>,
 }
 
 /// A single DNS record entry.

@@ -1181,6 +1181,7 @@ async fn follow_dns_logs(
                             filter: None,
                             coalesce_id: q.coalesce_id,
                             repeats: q.repeats,
+                            upstream: q.upstream.clone(),
                         };
                         println!("{}", format_follow_line(&entry, &ip_to_host, printer));
                     }
@@ -1239,6 +1240,7 @@ async fn follow_dns_logs(
                         filter: None,
                         coalesce_id: q.coalesce_id,
                         repeats: q.repeats,
+                        upstream: q.upstream.clone(),
                     };
                     println!("{}", format_follow_line(&entry, &ip_to_host, printer));
                 }
@@ -2807,6 +2809,7 @@ mod tests {
             filter: None,
             coalesce_id: None,
             repeats: 1,
+            upstream: None,
         };
         let host_map = HashMap::new();
         let printer = Printer::new(false, true, false);
@@ -2843,6 +2846,7 @@ mod tests {
             filter: None,
             coalesce_id: None,
             repeats: 1,
+            upstream: None,
         };
         let host_map = HashMap::new();
         let printer = Printer::new(false, true, false);

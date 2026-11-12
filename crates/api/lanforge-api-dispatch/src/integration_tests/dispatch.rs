@@ -1861,6 +1861,7 @@ async fn a_fresh_query_is_in_the_log_at_once() {
                 filter: None,
                 coalesce_id: None,
                 repeats: 1,
+                upstream: None,
             },
         ))));
     // The query was answered before the admin opened the log.

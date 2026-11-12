@@ -29,7 +29,8 @@ fn hot_types_stay_within_their_size_budget() {
         ("EventVec", size_of::<EventVec>(), 168),
         ("DnsMessage", size_of::<DnsMessage>(), 120),
         ("DnsRecord", size_of::<DnsRecord>(), 64),
-        ("QueryLogEntry", size_of::<QueryLogEntry>(), 112),
+        // + `upstream` (16 B): the in-memory ring holds 1000 lines by default, 16 KB.
+        ("QueryLogEntry", size_of::<QueryLogEntry>(), 128),
     ];
     let over: Vec<String> = sizes
         .iter()

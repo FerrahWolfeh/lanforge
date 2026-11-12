@@ -605,6 +605,7 @@ mod tests {
             filter: None,
             coalesce_id: None,
             repeats: 1,
+            upstream: None,
         });
 
         for _ in 0..MAX_DNS_LOG_BUFFER + 5 {

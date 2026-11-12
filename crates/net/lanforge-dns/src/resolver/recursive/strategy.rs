@@ -27,7 +27,7 @@ pub use lanforge_types::network::dns::UpstreamMode;
 
 static COALESCE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-type InFlightTx = Sender<Result<(Vec<u8>, bool, bool, u64), String>>;
+type InFlightTx = Sender<Result<(Vec<u8>, bool, bool, u64, Option<Arc<str>>), String>>;
 type QueryResult = (
     Arc<UpstreamManager>,
     Result<(Vec<u8>, bool, bool), DnsError>,
@@ -43,6 +43,8 @@ pub struct Resolved {
     pub coalesced: bool,
     /// In-flight batch correlation ID when query was coalesced or was a coalesce leader with followers.
     pub coalesce_id: Option<u64>,
+    /// The upstream that answered ([`UpstreamManager::label`]); `None` for a cached answer.
+    pub upstream: Option<Arc<str>>,
 }
 
 #[derive(Clone)]
@@ -311,7 +313,7 @@ impl UpstreamStrategy {
 
         if let Some(ref mut rx) = rx {
             match rx.recv().await {
-                Ok(Ok((mut data, cached, is_block, batch_id))) => {
+                Ok(Ok((mut data, cached, is_block, batch_id, upstream))) => {
                     if data.len() >= 2 {
                         let id_bytes = header.id().to_be_bytes();
                         data[0] = id_bytes[0];
@@ -323,6 +325,7 @@ impl UpstreamStrategy {
                         is_block,
                         coalesced: true,
                         coalesce_id: Some(batch_id),
+                        upstream,
                     });
                 }
                 Ok(Err(e)) => return Err(DnsError::Generic(e)),
@@ -361,7 +364,15 @@ impl UpstreamStrategy {
             }
             let _ = tx.send(
                 res.as_ref()
-                    .map(|r| (r.data.clone(), r.cached, r.is_block, batch_id))
+                    .map(|r| {
+                        (
+                            r.data.clone(),
+                            r.cached,
+                            r.is_block,
+                            batch_id,
+                            r.upstream.clone(),
+                        )
+                    })
                     .map_err(|e| e.to_string()),
             );
         }
@@ -457,6 +468,7 @@ impl UpstreamStrategy {
                         is_block,
                         coalesced: false,
                         coalesce_id: None,
+                        upstream: (!cached).then(|| Arc::clone(&mgr.label)),
                     })
                 }
                 Err(e) => {
@@ -496,6 +508,7 @@ impl UpstreamStrategy {
                                 is_block,
                                 coalesced: false,
                                 coalesce_id: None,
+                                upstream: (!cached).then(|| Arc::clone(&mgr.label)),
                             });
                         }
                         Some((mgr, Err(e))) => {
@@ -579,6 +592,7 @@ impl UpstreamStrategy {
                         is_block,
                         coalesced: false,
                         coalesce_id: None,
+                        upstream: (!cached).then(|| Arc::clone(&mgr.label)),
                     });
                 }
                 Ok((_, Err(e))) => last_err = e,
@@ -621,6 +635,7 @@ impl UpstreamStrategy {
                         is_block,
                         coalesced: false,
                         coalesce_id: None,
+                        upstream: (!cached).then(|| Arc::clone(&mgr.label)),
                     });
                 }
                 Err(e) => {
@@ -660,6 +675,7 @@ impl UpstreamStrategy {
                         is_block,
                         coalesced: false,
                         coalesce_id: None,
+                        upstream: (!cached).then(|| Arc::clone(&mgr.label)),
                     });
                 }
                 Err(e) => {

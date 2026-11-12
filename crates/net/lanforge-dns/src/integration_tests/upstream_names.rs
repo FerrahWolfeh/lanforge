@@ -1,18 +1,25 @@
 //! Upstreams given by host name (`udp://resolver.example:<port>`, `tls://dns.google`) are looked
 //! up through the bootstrap resolvers (`[dns] bootstrap`), never through the system resolver.
 
-use super::common::{init_test_context, mock_config, wait_for_service_online};
+use super::common::{
+    init_test_context, mock_config, mock_dns_context, process_query_test, wait_for_service_online,
+};
 use crate::config::DnsConfig;
+use crate::resolver::UpstreamManager;
 use crate::server::service::DnsService;
-use crate::test_utils::MockUpstreamServer;
+use crate::test_utils::{DnsPacketBuilder, MockUpstreamServer};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_types::DnsListenConfig;
+use lanforge_types::network::QueryResult;
 use lanforge_types::network::dns::upstream::UpstreamTarget;
-use lanforge_types::network::dns::{DnsRequest, DnsResponse, UpstreamHealthSnapshot};
+use lanforge_types::network::dns::{
+    DnsRecordType, DnsRequest, DnsResponse, UpstreamHealthSnapshot,
+};
 use lanforge_types::system::ServiceId;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout};
@@ -113,4 +120,46 @@ async fn a_bootstrap_change_looks_the_names_up_again_in_place() {
     set_bootstrap(&ctx, vec![boot.addr]);
     wait_named_upstream(&ctx, upstream.addr).await;
     assert!(!dns.is_finished(), "a bootstrap change restarted DNS");
+}
+
+/// The query log names the upstream that answered, as configured: by host name for a named
+/// one, and none for an answer from the cache.
+#[tokio::test]
+async fn the_query_log_names_the_upstream_that_answered() {
+    let upstream = MockUpstreamServer::spawn(HashMap::from([(
+        "www.example.com".to_string(),
+        vec![IpAddr::V4(Ipv4Addr::new(192, 0, 2, 7))],
+    )]))
+    .await;
+    let dns_ctx = mock_dns_context(init_test_context(), mock_config()).await;
+    let target: UpstreamTarget = format!("udp://{NAME}:{}", upstream.addr.port())
+        .parse()
+        .unwrap();
+    let mgr = UpstreamManager::new(&target, upstream.addr, Arc::clone(&dns_ctx.cache))
+        .await
+        .unwrap();
+    dns_ctx.recursive.replace_upstreams(vec![mgr]);
+
+    let query = DnsPacketBuilder::query("www.example.com", DnsRecordType::A).build_bytes();
+    for _ in 0..2 {
+        let mut resp = Vec::new();
+        process_query_test(&query, &dns_ctx, "192.168.1.50".parse().unwrap(), &mut resp)
+            .await
+            .unwrap();
+    }
+
+    let logged: Vec<_> = dns_ctx
+        .query_log
+        .as_ref()
+        .unwrap()
+        .get_recent(2)
+        .into_iter()
+        .map(|e| (e.result, e.upstream.as_deref().map(str::to_string)))
+        .collect();
+    let named = format!("udp://{NAME}:{}", upstream.addr.port());
+    assert!(
+        logged.contains(&(QueryResult::Forwarded, Some(named))),
+        "{logged:?}"
+    );
+    assert!(logged.contains(&(QueryResult::Cached, None)), "{logged:?}");
 }

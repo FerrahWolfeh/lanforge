@@ -56,6 +56,8 @@ pub struct UpstreamManager {
     pub target: UpstreamTarget,
     /// Where `target` is reached: its address, or what its host name resolved to.
     pub addr: SocketAddr,
+    /// `target` as written (`tls://dns.google`): what the query log names it by.
+    pub label: Arc<str>,
     pub health: Arc<UpstreamHealth>,
     #[cfg(feature = "doh-upstream")]
     pub doh_client: Option<DohClient>,
@@ -131,6 +133,7 @@ impl UpstreamManager {
             cache,
             target: target.clone(),
             addr,
+            label: Arc::from(target.to_string()),
             health: Arc::new(UpstreamHealth::new()),
             #[cfg(feature = "doh-upstream")]
             doh_client: if target.protocol == UpstreamProtocol::Https {

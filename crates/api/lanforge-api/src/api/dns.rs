@@ -126,6 +126,9 @@ pub struct DnsQueryLogEntry {
     pub coalesce_id: Option<u64>,
     /// Identical queries this line stands for (`1` = a single query).
     pub repeats: u32,
+    /// The upstream that answered, as configured; `None` when none was asked.
+    #[serde(default)]
+    pub upstream: Option<Arc<str>>,
 }
 
 /// A response containing recent DNS query logs.

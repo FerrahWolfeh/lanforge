@@ -63,6 +63,7 @@ fn dns_dtos_with_empty_optional_fields_cross_the_socket() {
         filter: None,
         coalesce_id: None,
         repeats: 3,
+        upstream: None,
     });
     assert_postcard_roundtrip("UpstreamHealthSnapshot", || UpstreamHealthSnapshot {
         target: SocketAddr::from(([1, 1, 1, 1], 53)),

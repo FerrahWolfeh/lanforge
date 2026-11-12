@@ -72,6 +72,7 @@ impl UpstreamMiddleware {
                     protocol: req.protocol,
                     filter: req.filter_match.clone(),
                     coalesce_id: r.coalesce_id,
+                    upstream: r.upstream,
                 });
 
                 // Update cache size counter in real-time
@@ -103,6 +104,7 @@ impl UpstreamMiddleware {
                     protocol: req.protocol,
                     filter: req.filter_match.clone(),
                     coalesce_id: None,
+                    upstream: None,
                 });
 
                 Err(e)

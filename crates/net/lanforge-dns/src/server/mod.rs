@@ -115,6 +115,8 @@ pub struct DnsLogEvent<'a> {
     pub protocol: TransportProtocol,
     pub filter: Option<Box<FilterMatch>>,
     pub coalesce_id: Option<u64>,
+    /// The upstream that answered (`tls://dns.google`); `None` when none was asked.
+    pub upstream: Option<Arc<str>>,
 }
 
 /// Checks if a domain matches an exact or wildcard pattern (e.g. `*.sonarr.tv`) without heap allocation.
@@ -201,6 +203,7 @@ impl DnsContext {
                 filter: event.filter,
                 coalesce_id: event.coalesce_id,
                 repeats: 1,
+                upstream: event.upstream,
             };
             if let Some(entry) = log.admit(entry) {
                 self.emit_log(log, entry);

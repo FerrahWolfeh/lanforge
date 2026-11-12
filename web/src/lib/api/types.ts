@@ -854,6 +854,8 @@ export interface DnsQueryLogEntry {
 	coalesce_id?: number | null;
 	/** Identical queries (same client, name, type, outcome) this line stands for; 1 = one query. */
 	repeats: number;
+	/** The upstream that answered, as configured (`tls://dns.google`); null when none was asked. */
+	upstream?: string | null;
 }
 
 export interface DnsUpstreamEntry {
