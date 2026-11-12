@@ -20,11 +20,8 @@ if [ -z "$TARGET" ]; then
     exit 1
 fi
 
-# Locate compiled binaries (detects RAM disk if available, or default target directory)
+# Locate compiled binaries (CARGO_TARGET_DIR, or the default target directory)
 TARGET_DIR="${CARGO_TARGET_DIR:-$PROJECT_ROOT/target}"
-if [ -d "/mnt/ram/.rsbuild" ]; then
-    TARGET_DIR="/mnt/ram/.rsbuild"
-fi
 
 BIN_DIR="$TARGET_DIR/release"
 if [ ! -d "$BIN_DIR" ] && [ -d "$TARGET_DIR/target/release" ]; then

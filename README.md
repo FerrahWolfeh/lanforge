@@ -181,7 +181,8 @@ sudo ./deploy/install.sh
 
 The installer creates the `lanforge` group (members can use the CLI without `sudo`), installs the
 binaries from the release build, a configuration template, the systemd unit and, when SELinux is active,
-its policy. Existing configuration is never overwritten. See the [**deployment guide**](deploy/README.md)
+its policy. Existing configuration is never overwritten. If you build with `CARGO_TARGET_DIR`, run it as
+`sudo --preserve-env=CARGO_TARGET_DIR ./deploy/install.sh` so it finds the binaries. See the [**deployment guide**](deploy/README.md)
 for the directory layout, remote deploys, and updates.
 
 ### 3. First run

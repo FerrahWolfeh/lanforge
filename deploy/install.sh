@@ -45,10 +45,8 @@ chmod 0755 /var/lib/lanforge/tftp
 
 # 3. Install compiled binaries if available
 echo "--> [3/7] Checking for compiled binaries..."
+# sudo drops CARGO_TARGET_DIR: keep it with `sudo --preserve-env=CARGO_TARGET_DIR ./deploy/install.sh`
 TARGET_DIR="${CARGO_TARGET_DIR:-$PROJECT_ROOT/target}"
-if [ -d "/mnt/ram/.rsbuild" ]; then
-    TARGET_DIR="/mnt/ram/.rsbuild"
-fi
 BIN_DIR="$TARGET_DIR/release"
 if [ ! -d "$BIN_DIR" ] && [ -d "$TARGET_DIR/target/release" ]; then
     BIN_DIR="$TARGET_DIR/target/release"
