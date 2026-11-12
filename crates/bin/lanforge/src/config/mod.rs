@@ -388,7 +388,11 @@ impl Config {
     #[cfg(feature = "ra")]
     #[must_use]
     pub fn to_ra_config(&self) -> RaConfig {
-        RaConfig::from(self.effective_ra())
+        RaConfig {
+            // Without the DNS server built in, clients get the ISP's resolvers, not this host.
+            local_dns: cfg!(feature = "dns"),
+            ..RaConfig::from(self.effective_ra())
+        }
     }
 
     /// Builds a `Dhcpv4Config` from the merged configuration.
@@ -420,6 +424,8 @@ impl Config {
         let mut cfg = self.dhcpv6_toml.clone();
 
         cfg.enabled = self.dhcpv6_enabled;
+        // Without the DNS server built in, clients get the ISP's resolvers, not this host.
+        cfg.local_dns = cfg!(feature = "dns");
         if cfg.iface.is_empty() {
             cfg.iface.clone_from(&self.system.iface);
         }

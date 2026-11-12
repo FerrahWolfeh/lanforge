@@ -1080,23 +1080,12 @@ impl Dhcpv6Server {
         )
     }
 
-    /// The configured DNS servers or, with none configured, this router while its DNS serves: the
-    /// address the admin gave the LAN interface (its ULA, stable when the delegated prefix
-    /// changes; else its GUA). Never an upstream: clients must reach the local names and filters.
     fn add_dns_options(&self, reply: &mut Message) {
-        if !self.cfg.dns_servers.is_empty() {
+        let servers = self.announced_dns();
+        if !servers.is_empty() {
             reply
                 .opts_mut()
-                .insert(DhcpOption::DomainNameServers(self.cfg.dns_servers.clone()));
-        } else if let Some(ifindex) = self.served_ifindex
-            && self.ctx.get_service_state(ServiceId::Dns).is_serving()
-        {
-            let lan = self.ctx.get_interface_state(ifindex);
-            if let Some(router) = lan.ula.or(lan.gua) {
-                reply
-                    .opts_mut()
-                    .insert(DhcpOption::DomainNameServers(vec![router]));
-            }
+                .insert(DhcpOption::DomainNameServers(servers));
         }
         if !self.cfg.search_domains.is_empty() {
             let names: Vec<Name> = self
@@ -1107,6 +1096,34 @@ impl Dhcpv6Server {
                 .collect();
             reply.opts_mut().insert(DhcpOption::DomainSearchList(names));
         }
+    }
+
+    /// The DNS servers for option 23: the configured ones; with none, this router while its DNS
+    /// serves (the address the admin gave the LAN interface: its ULA, stable when the delegated
+    /// prefix changes, else its GUA); with the local DNS off (disabled or not built), the ISP's
+    /// IPv6 resolvers from the live `PPPoE` session, as `DHCPv4` does. While an enabled local DNS
+    /// is down, none: a client keeps what it gets for the whole lease, out of the local names
+    /// and filters.
+    fn announced_dns(&self) -> Vec<Ipv6Addr> {
+        if !self.cfg.dns_servers.is_empty() {
+            return self.cfg.dns_servers.clone();
+        }
+        let listen = self.ctx.get_dns_listen();
+        if self.cfg.local_dns && listen.enabled && !listen.listen.as_slice().is_empty() {
+            return self
+                .served_ifindex
+                .filter(|_| self.ctx.get_service_state(ServiceId::Dns).is_serving())
+                .and_then(|ifindex| {
+                    let lan = self.ctx.get_interface_state(ifindex);
+                    lan.ula.or(lan.gua)
+                })
+                .into_iter()
+                .collect();
+        }
+        self.ctx
+            .pppoe_status()
+            .map(|s| s.ipv6_dns_servers().collect())
+            .unwrap_or_default()
     }
 
     fn add_boot_options(&self, reply: &mut Message, identity: Option<&DeviceIdentity>) {
@@ -1223,12 +1240,15 @@ mod tests {
     use lanforge_types::{
         device::{Device, Ipv6AddrOrSuffix, Origin},
         network::{Ipv6Suffix, dhcp::Dhcpv6Pool},
-        system::ServiceState,
+        system::{PppoeSessionState, PppoeStatusResponse, ServiceState},
         update::{CliHostUpdate, DeviceUpdate, FieldUpdate, InterfaceState, V6LeaseUpdate},
     };
     use std::iter;
     use std::{collections::HashMap, time::Duration};
-    use std::{net::Ipv6Addr, time::SystemTime};
+    use std::{
+        net::{IpAddr, Ipv6Addr},
+        time::SystemTime,
+    };
 
     fn dummy_server() -> Dhcpv6Server {
         let ctx = init_test_context();
@@ -1266,6 +1286,7 @@ mod tests {
                 ..Default::default()
             }],
             dns_servers: Vec::new(),
+            local_dns: true,
             search_domains: Vec::new(),
             boot_file: None,
             options: HashMap::new(),
@@ -1346,6 +1367,16 @@ mod tests {
             .set_service_state(ServiceId::Dns, ServiceState::Inactive);
         assert_eq!(announced_dns(&server), None, "DNS not serving");
 
+        // Built without the DNS server: the ISP's IPv6 resolvers from the live session.
+        let isp: Ipv6Addr = "2804:14d:1::2".parse().unwrap();
+        server.ctx.set_pppoe_status(Some(PppoeStatusResponse {
+            state: PppoeSessionState::Connected,
+            dns_servers: vec![IpAddr::V6(isp)],
+            ..Default::default()
+        }));
+        server.cfg.local_dns = false;
+        assert_eq!(announced_dns(&server), Some(vec![isp]), "no DNS built in");
+
         let configured: Ipv6Addr = "2001:db8::53".parse().unwrap();
         server.cfg.dns_servers = vec![configured];
         assert_eq!(
@@ -1392,6 +1423,7 @@ mod tests {
             port: 547,
             pools: Vec::new(),
             dns_servers: Vec::new(),
+            local_dns: true,
             search_domains: Vec::new(),
             boot_file: None,
             options: HashMap::new(),
@@ -1633,6 +1665,7 @@ mod tests {
             port: 547,
             pools: Vec::new(),
             dns_servers: Vec::new(),
+            local_dns: true,
             search_domains: Vec::new(),
             boot_file: None,
             options: HashMap::new(),

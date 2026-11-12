@@ -163,7 +163,7 @@ async fn dns_reload_rewrites_on_the_fly() {
     assert_ne!(resp.header.rcode, DnsResponseCode::NoError);
 
     // 2. Update rewrites in the context and trigger reload
-    let _ = ctx.apply_config(ConfigPatch::new().with_dns_rewrites(vec![RewriteRule {
+    ctx.apply_config(ConfigPatch::new().with_dns_rewrites(vec![RewriteRule {
         id: Some(1),
         domain: "my-site.lan".to_string(),
         rtype: DnsRecordType::A,
@@ -361,7 +361,7 @@ async fn site_domains_change_applies_in_place() {
     let before = ask("printer.home.arpa").await;
     assert!(extract_a(&before).is_empty(), "not a site domain yet");
 
-    let _ = ctx.apply_config(ConfigPatch::new().with_site_domains(SiteDomains(vec![
+    ctx.apply_config(ConfigPatch::new().with_site_domains(SiteDomains(vec![
         "home.arpa".to_string(),
         "lan".to_string(),
     ])));

@@ -1,7 +1,7 @@
 //! `LanforgeContext` — Thread-safe central state and event coordination.
 //!
 //! This module provides the main entry point for all system state mutations
-//! and event publishing. It wraps the device [`State`](state::State) in a
+//! and event publishing. It wraps the device [`State`] in a
 //! `parking_lot::RwLock` and provides a unified API for reading and writing.
 //!
 //! # Architecture
@@ -20,7 +20,7 @@
 //! | Submodule | Purpose |
 //! |-----------|---------|
 //! | [`read`]  | Read-only queries (get device by MAC, IP, hostname) |
-//! | [`write`] | State mutations (apply updates, allocate leases) |
+//! | [`write`](mod@write) | State mutations (apply updates, allocate leases) |
 //! | [`state`] | Raw device state and interface storage |
 //!
 //! # Usage Pattern

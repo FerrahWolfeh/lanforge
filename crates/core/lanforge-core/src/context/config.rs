@@ -513,7 +513,10 @@ impl LanforgeContext {
     /// Broadcasts on watch channels ONLY for sections that changed.
     /// Emits exactly one [`SystemEvent::ConfigChanged`] (plus the firewall/traffic ruleset
     /// triggers when their sections changed).
-    #[must_use]
+    #[expect(
+        clippy::must_use_candidate,
+        reason = "applying is the point; the report is optional information no production caller needs"
+    )]
     #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
     pub fn apply_config(&self, patch: ConfigPatch) -> ApplyReport {
         let _guard = self.inner.config_mutex.lock();
@@ -921,7 +924,7 @@ mod tests {
                 })
             };
             yield_now().await;
-            let _ = ctx.apply_config(
+            ctx.apply_config(
                 ConfigPatch::new().with_dns_adblock_rules(format!("||d{round}.example^\n")),
             );
             let (seen, getter) = reader.await.expect("reader task");
@@ -1037,13 +1040,13 @@ mod tests {
             lcp_echo_interval_secs: 25, // Hot
             ..Default::default()
         };
-        let _ = ctx.apply_config(ConfigPatch::new().with_pppoe(cfg1));
+        ctx.apply_config(ConfigPatch::new().with_pppoe(cfg1));
 
         let cfg2 = PppoeConfig {
             password: "new_secret".into(), // Reconnect
             ..Default::default()
         };
-        let _ = ctx.apply_config(ConfigPatch::new().with_pppoe(cfg2));
+        ctx.apply_config(ConfigPatch::new().with_pppoe(cfg2));
 
         // Sub should receive the latest state with Reconnect impact
         let delta = timeout(Duration::from_millis(200), sub.next())

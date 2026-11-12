@@ -10,7 +10,7 @@ use lanforge_types::network::dns::upstream::UpstreamMode;
 #[tokio::test]
 async fn upstream_mode_comes_from_the_live_config() {
     let ctx = init_test_context();
-    let _ = ctx.apply_config(ConfigPatch::new().with_dns_upstream_mode(UpstreamMode::Sequential));
+    ctx.apply_config(ConfigPatch::new().with_dns_upstream_mode(UpstreamMode::Sequential));
     let cfg = DnsConfig {
         upstream_mode: UpstreamMode::Parallel,
         ..mock_config()

@@ -197,7 +197,7 @@ async fn groups_and_bypass_apply_per_client() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = init_test_context();
     ctx.update_dns_adblock_urls(vec![source(port, "global.txt")]);
-    let _ = ctx.apply_config(ConfigPatch::new().with_dns_adblock_policy(owner_policy(port)));
+    ctx.apply_config(ConfigPatch::new().with_dns_adblock_policy(owner_policy(port)));
 
     let mac = |m: &str| MacAddr::parse(m).unwrap();
     register_test_device(
@@ -332,7 +332,7 @@ async fn groups_and_bypass_apply_per_client() {
     // Out of the group (a config change, applied in place): blocked again.
     let mut policy = owner_policy(port);
     policy.groups[0].clients.clear();
-    let _ = ctx.apply_config(ConfigPatch::new().with_dns_adblock_policy(policy));
+    ctx.apply_config(ConfigPatch::new().with_dns_adblock_policy(policy));
     wait_for(&dns, pixel, "app-measurement.com", BLOCKED).await;
 
     ctx.terminate();
@@ -366,7 +366,7 @@ fn a_group_overrides_the_global_layer() {
             group("b", vec![kids], "@@||both.example.com^\n", &["10.0.0.1"]),
         ],
     };
-    let _ = ctx.apply_config(ConfigPatch::new().with_dns_adblock_policy(policy));
+    ctx.apply_config(ConfigPatch::new().with_dns_adblock_policy(policy));
 
     let filter = AdBlocker::new(true);
     filter.sync_from_context(&ctx);
@@ -454,7 +454,7 @@ async fn a_list_added_while_down_is_downloaded_at_boot() {
 
     let ctx = init_test_context();
     ctx.update_dns_adblock_urls(vec![source(port, "global.txt")]);
-    let _ = ctx.apply_config(ConfigPatch::new().with_dns_adblock_policy(owner_policy(port)));
+    ctx.apply_config(ConfigPatch::new().with_dns_adblock_policy(owner_policy(port)));
     let (dns, _upstream) = start(&ctx, dir.path()).await;
     wait_for(&dns, "192.168.1.70", "games.example.com", BLOCKED).await;
     ctx.terminate();

@@ -5,6 +5,7 @@ use super::common::{
 use crate::v4::Dhcpv4Config;
 use crate::v4::io::Dhcpv4InertHandle;
 use crate::v4::system_dns::host_resolvers;
+use crate::v6::Dhcpv6Config;
 use crate::{Dhcpv4Service, Dhcpv4Transport, Dhcpv6Service, Dhcpv6Transport};
 use dhcproto::v4::{
     DhcpOption as DhcpOptionV4, Message as MessageV4, MessageType as MessageTypeV4,
@@ -1437,7 +1438,7 @@ async fn test_dhcpv4_without_configured_dns_announces_this_server() -> Result<()
         pools: vec![pool.clone()],
         ..Default::default()
     };
-    let _ = ctx.apply_config(
+    ctx.apply_config(
         ConfigPatch::new()
             .with_dhcp_v4_pools(vec![pool])
             .with_dhcp_v4_options(Dhcpv4Options {
@@ -1505,7 +1506,7 @@ async fn test_dhcpv4_without_configured_router_announces_this_server() -> Result
         pools: vec![pool.clone()],
         ..Default::default()
     };
-    let _ = ctx.apply_config(
+    ctx.apply_config(
         ConfigPatch::new()
             .with_dhcp_v4_pools(vec![pool])
             .with_dhcp_v4_options(Dhcpv4Options {
@@ -1565,7 +1566,7 @@ async fn test_dhcpv4_without_local_dns_announces_the_wan_resolvers() -> Result<(
         local_dns: false,
         ..Default::default()
     };
-    let _ = ctx.apply_config(
+    ctx.apply_config(
         ConfigPatch::new()
             .with_dhcp_v4_pools(vec![pool])
             .with_dhcp_v4_options(Dhcpv4Options {
@@ -1663,7 +1664,7 @@ async fn test_dhcpv4_dns_follows_the_local_dns_server_being_switched() -> Result
         enabled: false,
         ..DnsListenConfig::default()
     };
-    let _ = ctx.apply_config(
+    ctx.apply_config(
         ConfigPatch::new()
             .with_dhcp_v4_pools(vec![pool])
             .with_dhcp_v4_options(Dhcpv4Options {
@@ -1708,6 +1709,102 @@ async fn test_dhcpv4_dns_follows_the_local_dns_server_being_switched() -> Result
     sleep(Duration::from_millis(50)).await;
     let ack = dhcpv4_acquire(&handle, mac(3), server).await?;
     assert_eq!(dns_of(&ack), Some(vec![isp]), "DNS off again: the ISP's");
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(TEST_TIMEOUT, serve_handle).await?;
+    Ok(())
+}
+
+/// A `[dhcp.v6]` without `dns` announces the nearest resolver in option 23, as DHCPv4 does:
+/// with `[dns] enabled = false`, the ISP's IPv6 resolvers from the live `PPPoE` session (the
+/// RDNSS of its RAs; never the IPv4 ones); with the local DNS on, this router; while that DNS
+/// is not serving (a restart), none — a client keeps what it gets for the whole lease, and the
+/// ISP's would take it out of the local names and filters.
+#[tokio::test]
+async fn test_dhcpv6_dns_falls_back_to_the_isp_only_when_local_dns_is_off()
+-> Result<(), Box<dyn Error>> {
+    const LAN: u32 = 1;
+    let server_mac = MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
+    let (ctx, bus) = init_test_context_with_interface(LAN, "lan0", server_mac);
+    let cfg = Dhcpv6Config {
+        dns_servers: Vec::new(),
+        ..create_test_v6_config()
+    };
+    assert!(cfg.local_dns, "built with the DNS server");
+    ctx.update_dhcp_v6_pools(cfg.pools.clone());
+    set_lan_gua(&ctx, LAN, server_mac, "2804:bdc:50e2:7d00::1");
+    // The router's own address on the LAN: its ULA, else its GUA.
+    let lan = ctx.get_interface_state(LAN);
+    let router = lan.ula.or(lan.gua).ok_or("no LAN address")?;
+    let dns_on = DnsListenConfig::default();
+    let dns_off = DnsListenConfig {
+        enabled: false,
+        ..DnsListenConfig::default()
+    };
+    ctx.update_dns_listen(dns_off.clone());
+    let isp: Ipv6Addr = "2804:14d:1:0:181:213:132:2".parse()?;
+    ctx.set_pppoe_status(Some(PppoeStatusResponse {
+        enabled: true,
+        state: PppoeSessionState::Connected,
+        dns_servers: vec![IpAddr::V4(Ipv4Addr::new(200, 175, 5, 139)), IpAddr::V6(isp)],
+        ..Default::default()
+    }));
+
+    let (handle, transport) = Dhcpv6Transport::inert();
+    let mut service = Dhcpv6Service::with_transport(cfg, ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let serve_handle = tokio::spawn(async move {
+        let h = ServiceHandle::new(ServiceId::Dhcp6, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+    wait_for_service_online(&ctx, ServiceId::Dhcp6).await?;
+    let client_src = SocketAddr::new(IpAddr::V6("fe80::415:21a7:cd05:c6f9".parse()?), 546);
+    let duid = Duid::new(vec![0x00, 0x03, 0x00, 0x01, 0x02, 0, 0, 0, 0, 0x23]);
+    let announced = || {
+        let handle = &handle;
+        let duid = duid.clone();
+        async move {
+            handle
+                .inject(
+                    Dhcpv6PacketBuilder::solicit(duid)
+                        .with_ia_na(1, None)
+                        .build(),
+                    client_src,
+                )
+                .await;
+            let reply = timeout(TEST_TIMEOUT, handle.recv_payload()).await.ok()??;
+            let msg = MessageV6::decode(&mut Decoder::new(&reply)).ok()?;
+            match msg.opts().get(OptionCodeV6::DomainNameServers) {
+                Some(Dhcpv6Option::DomainNameServers(servers)) => Some(servers.clone()),
+                _ => Some(Vec::new()),
+            }
+        }
+    };
+
+    assert_eq!(
+        announced().await,
+        Some(vec![isp]),
+        "DNS off: the ISP's IPv6 ones"
+    );
+
+    ctx.update_dns_listen(dns_on);
+    ctx.set_service_state(ServiceId::Dns, ServiceState::Online);
+    assert_eq!(
+        announced().await,
+        Some(vec![router]),
+        "DNS serving: this router"
+    );
+
+    ctx.set_service_state(ServiceId::Dns, ServiceState::Starting);
+    assert_eq!(announced().await, Some(Vec::new()), "DNS restarting: none");
+
+    ctx.update_dns_listen(dns_off);
+    ctx.set_pppoe_status(None);
+    assert_eq!(
+        announced().await,
+        Some(Vec::new()),
+        "DNS off, WAN down: none"
+    );
 
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = timeout(TEST_TIMEOUT, serve_handle).await?;

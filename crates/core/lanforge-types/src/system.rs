@@ -515,6 +515,19 @@ pub struct PppoeStatusResponse {
     pub connected_at: Option<Instant>,
 }
 
+impl PppoeStatusResponse {
+    /// The ISP's IPv6 resolvers while the session is up (the RDNSS of its RAs); none when down.
+    pub fn ipv6_dns_servers(&self) -> impl Iterator<Item = Ipv6Addr> + '_ {
+        self.dns_servers
+            .iter()
+            .filter(|_| self.state == PppoeSessionState::Connected)
+            .filter_map(|ip| match ip {
+                IpAddr::V6(v6) => Some(*v6),
+                IpAddr::V4(_) => None,
+            })
+    }
+}
+
 /// Status response payload for Network Traffic & SQM.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct TrafficStatusResponse {

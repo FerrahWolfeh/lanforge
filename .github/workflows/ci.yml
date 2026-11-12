@@ -50,6 +50,39 @@ jobs:
       - name: CLI feature matrix
         run: ./scripts/check-cli-features.sh
 
+  size:
+    name: Release Size Budget
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      # The daemon embeds the WebUI: build it like a deploy does, or the budget measures a placeholder.
+      - name: Install WebUI dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: Check release binary sizes
+        run: ./scripts/check-size.sh
+
   web:
     name: WebUI Build & Check
     runs-on: ubuntu-latest

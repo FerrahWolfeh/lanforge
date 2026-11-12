@@ -171,7 +171,7 @@ impl ClientContext {
         if dhcp.v6_pools != live.v6_pools {
             patch = patch.with_dhcp_v6_pools(dhcp.v6_pools);
         }
-        let _ = self.ctx.apply_config(patch);
+        self.ctx.apply_config(patch);
         Ok(persisted)
     }
 
@@ -200,7 +200,7 @@ impl ClientContext {
         if ra.iface.is_none() {
             ra.iface = lan_iface;
         }
-        let _ = self.ctx.apply_config(ConfigPatch::new().with_ra(ra));
+        self.ctx.apply_config(ConfigPatch::new().with_ra(ra));
         Ok(persisted)
     }
 
@@ -300,7 +300,7 @@ impl ClientContext {
                 .adblock_policy_patch(patch, &adblock, path.as_deref())
                 .0;
         }
-        let _ = self.ctx.apply_config(patch);
+        self.ctx.apply_config(patch);
         Ok(persisted)
     }
 
@@ -369,8 +369,7 @@ impl ClientContext {
     /// Applies the parts of `dns` that differ from the live settings. The listener is bound at
     /// start-up and is not changed here.
     pub fn apply_dns_settings(&self, dns: DnsSettings) {
-        let _ = self
-            .ctx
+        self.ctx
             .apply_config(self.dns_settings_patch(ConfigPatch::new(), dns));
     }
 
@@ -510,7 +509,7 @@ impl ClientContext {
         let patch = self.adblock_settings_patch(ConfigPatch::new(), adblock);
         let path = self.writable_config_path();
         let (patch, _) = self.adblock_policy_patch(patch, adblock, path.as_deref());
-        let _ = self.ctx.apply_config(patch);
+        self.ctx.apply_config(patch);
     }
 
     /// `patch` plus the groups and `bypass` of `adblock` when they differ from the live ones
@@ -630,7 +629,7 @@ impl ClientContext {
                 ConfigPatch::new().with_dns_adblock_policy(policy)
             }
         };
-        let _ = self.ctx.apply_config(patch);
+        self.ctx.apply_config(patch);
         Ok(persisted)
     }
 

@@ -591,7 +591,7 @@ impl ClientContext {
             }
         }
 
-        let _ = self.ctx.apply_config(patch);
+        self.ctx.apply_config(patch);
 
         // Flush live config and snapshot to disk immediately before replying
         let _ = self.flush_now().await;

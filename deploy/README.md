@@ -17,7 +17,8 @@ This directory contains production deployment configurations, scripts, and syste
 4. **Atomic In-Place Binaries Replacement**:
    - Update scripts download release binaries to `/tmp` and perform atomic installations via `install -Dm755` (preventing `Text file busy` errors) with near-instantaneous service restarts (< 200ms).
 5. **Unprivileged CLI Administration**:
-   - The UDS control socket at `/run/lanforge/control.sock` is owned by group `lanforge` with permissions `0750`. Local users in the `lanforge` group can execute `lanforge status`, `lanforge dhcp leases`, `lanforge devices`, etc. without requiring `sudo`.
+   - The UDS control socket at `/run/lanforge/control.sock` is owned by group `lanforge` with permissions `0660`. Local users in the `lanforge` group can execute `lanforge status`, `lanforge dhcp leases`, `lanforge devices`, etc. without requiring `sudo`.
+   - The socket has no roles: every member of `lanforge` is a full administrator (it can change the firewall, PPPoE credentials and users), like the `docker` group. Add only users you would give `sudo`. Role-based access is the HTTP API's job.
 
 ---
 

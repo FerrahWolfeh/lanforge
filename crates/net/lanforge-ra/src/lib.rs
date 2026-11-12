@@ -955,16 +955,14 @@ fn send_ra_internal(
     let dst_sa = SocketAddrV6::new(dst_ip, 0, 0, iface_index);
 
     let gua_info = gua.as_ref().map(|g| (g, gua_pref, gua_val));
-    // No RDNSS configured: clients use this router's DNS while it serves, at the address the
-    // admin gave the LAN interface (its ULA: stable when the delegated prefix changes).
-    let router_dns = ula.filter(|_| lctx.get_service_state(ServiceId::Dns).is_serving());
+    let default_dns = default_dns(cfg, lctx, ula);
     let mut pkt = build_ra_packet(
         cfg,
         mac,
         gua_info,
         ula.as_ref(),
         &deprecated_list,
-        router_dns,
+        &default_dns,
     );
 
     let csum = icmpv6_checksum(&src_ll, &dst_ip, &pkt);
@@ -976,6 +974,24 @@ fn send_ra_internal(
         .map_err(|e| RaError::Socket(format!("ICMPv6 send: {e}")))?;
 
     Ok(())
+}
+
+/// The RDNSS servers when `[ra]` names none: this router's DNS while it serves, at the address
+/// the admin gave the LAN interface (its ULA: stable when the delegated prefix changes); with
+/// the local DNS off (disabled or not built), the ISP's IPv6 resolvers from the live `PPPoE`
+/// session, as DHCP does. While an enabled local DNS is down, none: a client would keep the
+/// ISP's for the RDNSS lifetime, away from the local names and filters.
+fn default_dns(cfg: &RaConfig, lctx: &LanforgeContext, ula: Option<Ipv6Addr>) -> Vec<Ipv6Addr> {
+    let listen = lctx.get_dns_listen();
+    if cfg.local_dns && listen.enabled && !listen.listen.as_slice().is_empty() {
+        return ula
+            .filter(|_| lctx.get_service_state(ServiceId::Dns).is_serving())
+            .into_iter()
+            .collect();
+    }
+    lctx.pppoe_status()
+        .map(|s| s.ipv6_dns_servers().collect())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -1130,7 +1146,7 @@ mod tests {
             Some((&new_gua, 7 * 24 * 3600, 30 * 24 * 3600)),
             None,
             &deprecated_list,
-            None,
+            &[],
         );
 
         // Find prefix options in the packet

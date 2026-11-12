@@ -12,7 +12,7 @@
 //!
 //! # Service Lifecycle
 //!
-//! 1. **Dependencies**: Declares required services via [`AsyncService::dependencies`].
+//! 1. **Dependencies**: Declares its dependency edges in [`ServiceSpec::deps`], returned by [`spec()`](LanforgeService::spec).
 //! 2. **Initialization**: [`init()`](AsyncService::init) binds resources before readiness.
 //! 3. **Readiness**: Supervisor signals online and readiness automatically.
 //! 4. **Execution**: [`serve()`](AsyncService::serve) runs the main event/packet loop.

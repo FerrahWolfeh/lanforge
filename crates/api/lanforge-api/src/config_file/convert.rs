@@ -1223,12 +1223,6 @@ mod tests {
     fn sorted_firewall(mut fw: FirewallConfig) -> FirewallConfig {
         // TOML tables are keyed maps: order is not part of the contract, content is.
         fw.zones.sort_by(|a, b| a.name.cmp(&b.name));
-        // Open ports are written as `port/proto`: their comments are cosmetic and not kept.
-        for zone in &mut fw.zones {
-            for port in &mut zone.open_ports {
-                port.comment = None;
-            }
-        }
         fw.port_forwards.sort_by(|a, b| a.comment.cmp(&b.comment));
         fw
     }
@@ -1284,8 +1278,9 @@ mod tests {
                 family: None,
             },
         ];
+        // A commented open port is written as a table and keeps its comment.
         custom.zones[0].open_ports.push(HostPortRule {
-            comment: None,
+            comment: Some("mDNS".into()),
             port: 5353,
             protocol: L4Protocol::Both,
         });

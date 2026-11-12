@@ -143,6 +143,8 @@ Inter-service communication is powered by a multi-topic broadcast bus:
   no services (CI runs it; run it when touching `#[cfg(feature = ...)]` in `crates/bin/lanforge`).
 - `./scripts/check-cli-features.sh` - Feature matrix for the CLI (`lanforge-cli`): without `remote`, each crypto
   provider (CI runs it; run it when touching `#[cfg(feature = ...)]` in `crates/bin/lanforge-cli`).
+- `./scripts/check-size.sh` - Release binaries against `scripts/size-budget` (CI runs it; `SKIP_BUILD=1` checks
+  what is already built). A deliberate growth over 5 % raises the budget in the same commit.
 - Iterate with `cargo check --all-targets -p <crate>`; run the full `cargo test` once at the end. Feature-matrix
   runs produce many large test binaries, so prefer `-p <crate>` over `--workspace` while iterating.
 - **One test binary per crate.** Integration tests live in the lib as `#[cfg(test)] mod integration_tests`
