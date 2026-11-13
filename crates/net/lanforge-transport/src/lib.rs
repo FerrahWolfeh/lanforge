@@ -7,6 +7,8 @@
 //! - **Rootless Inert Testing** (`InertHandle`): In-memory synthetic datagram and reply channels for sudo-free tests.
 //! - **Transparent Metrics & Rate Limiting** (`TransportMetrics`, `RateLimiter`): Zero-overhead counters and bounded token buckets.
 
+#![warn(clippy::missing_errors_doc)]
+
 pub mod arp;
 mod bind;
 pub mod icmp;

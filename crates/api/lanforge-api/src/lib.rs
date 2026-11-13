@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![warn(clippy::missing_errors_doc)]
 pub mod api;
 pub mod config_file;
 pub mod rpc;
