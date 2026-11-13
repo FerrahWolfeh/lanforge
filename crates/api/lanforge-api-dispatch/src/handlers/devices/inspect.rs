@@ -41,7 +41,7 @@ impl ClientContext {
 
             Response::Whois(Box::new(WhoisResponse { entry }))
         } else {
-            Response::Error {
+            Response::NotFound {
                 error: format!("Device '{target}' not found"),
             }
         }
@@ -63,7 +63,7 @@ impl ClientContext {
             match found_mac {
                 Some(m) => m,
                 None => {
-                    return Response::Error {
+                    return Response::NotFound {
                         error: format!("Target '{target}' not found (not a MAC or known Hostname)"),
                     };
                 }
@@ -134,7 +134,7 @@ impl ClientContext {
             return e.response_in(&format!("Device {mac} not purged"));
         }
         if !self.ctx.apply(DeviceUpdate::HostRemoved { mac }) {
-            return Response::Error {
+            return Response::NotFound {
                 error: "Failed to purge device".to_string(),
             };
         }
