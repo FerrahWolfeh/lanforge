@@ -1094,6 +1094,42 @@ async fn test_adblock_groups_contract() {
 // Group 4 — DNS Upstreams contract
 // ---------------------------------------------------------------------------
 
+/// Bad input to the reverse resolver routes is the client's fault (400), never a 500.
+#[tokio::test]
+async fn test_dns_reverse_resolvers_refuse_bad_input() {
+    let app = TestApp::no_auth().await;
+    let base = "/api/v1/dns/reverse-resolvers";
+
+    let (status, _) = app
+        .post(
+            &format!("{base}?subnet=100.64.0.0%2F10&resolver_uri=100.100.100.100"),
+            &json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "a valid entry is added");
+
+    let cases = [
+        (
+            "subnet=not-a-subnet&resolver_uri=100.100.100.100",
+            "bad subnet",
+        ),
+        (
+            "subnet=100.64.0.0%2F10&resolver_uri=ftp%3A%2F%2Fx",
+            "bad resolver URI",
+        ),
+        (
+            "subnet=100.64.0.0%2F10&resolver_uri=tls%3A%2F%2Fdns.google",
+            "host name",
+        ),
+    ];
+    for (query, desc) in cases {
+        let (status, _) = app.post(&format!("{base}?{query}"), &json!({})).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "add with {desc}");
+    }
+    let (status, _) = app.delete(&format!("{base}?subnet=not-a-subnet")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "remove with a bad subnet");
+}
+
 #[tokio::test]
 async fn test_dns_upstreams_contract() {
     let app = TestApp::no_auth().await;

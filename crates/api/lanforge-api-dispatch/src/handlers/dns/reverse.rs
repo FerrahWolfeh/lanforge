@@ -12,7 +12,7 @@ impl ClientContext {
         let subnet = match subnet_str.parse::<IpSubnet>() {
             Ok(s) => s,
             Err(e) => {
-                return Response::Error {
+                return Response::Rejected {
                     error: format!("Invalid subnet: {e}"),
                 };
             }
@@ -25,7 +25,7 @@ impl ClientContext {
             }
             Ok(r) => r,
             Err(e) => {
-                return Response::Error {
+                return Response::Rejected {
                     error: format!("Invalid resolver URI: {e}"),
                 };
             }
@@ -44,7 +44,7 @@ impl ClientContext {
         let subnet = match subnet_str.parse::<IpSubnet>() {
             Ok(s) => s,
             Err(e) => {
-                return Response::Error {
+                return Response::Rejected {
                     error: format!("Invalid subnet: {e}"),
                 };
             }
