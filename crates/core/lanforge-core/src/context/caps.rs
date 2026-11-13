@@ -21,7 +21,6 @@ impl CompiledCaps {
         compiled.push(Cap::MdnsProbe);
         compiled.push(Cap::Uds);
         compiled.push(Cap::Http);
-        compiled.push(Cap::Zstd);
         compiled.push(Cap::Storage);
         compiled.push(Cap::Pppoe);
         compiled.push(Cap::Tftp);

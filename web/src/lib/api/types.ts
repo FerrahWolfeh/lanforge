@@ -166,7 +166,6 @@ export interface ServiceBanner {
 
 export interface CapabilitiesInfo {
 	encodings: string[];
-	compression: string[];
 }
 
 export interface ServerCapabilities {

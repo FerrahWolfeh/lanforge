@@ -285,7 +285,6 @@ impl Bootstrapper {
         compiled.push(Cap::Uds);
         #[cfg(feature = "http")]
         compiled.push(Cap::Http);
-        compiled.push(Cap::Zstd);
         compiled.push(Cap::Storage);
         #[cfg(feature = "pppoe")]
         compiled.push(Cap::Pppoe);

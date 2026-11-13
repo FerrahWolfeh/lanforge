@@ -4,8 +4,8 @@ use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use lanforge_api::api::{
-    Capabilities, Compression, DbStatus, DevicesStats, Encoding, NetworkStatus, ResourcesStatus,
-    Response, ServiceBannersResponse, StatusResponse,
+    Capabilities, DbStatus, DevicesStats, Encoding, NetworkStatus, ResourcesStatus, Response,
+    ServiceBannersResponse, StatusResponse,
 };
 use lanforge_types::device::Origin;
 use lanforge_types::network::firewall::{FirewallPolicy, FirewallStatus};
@@ -310,7 +310,6 @@ impl ClientContext {
     pub fn gather_capabilities() -> Capabilities {
         Capabilities {
             encodings: vec![Encoding::Json, Encoding::Postcard],
-            compression: vec![Compression::None],
         }
     }
 

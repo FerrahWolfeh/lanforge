@@ -1,8 +1,14 @@
 use std::env;
+use std::fmt::Write as _;
 use std::fs;
-use std::path::Path;
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
+
+use flate2::Compression;
+use flate2::write::GzEncoder;
 
 fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
@@ -61,6 +67,7 @@ fn main() {
             );
             create_placeholder(&build_dir, &index_html);
         }
+        pack_assets(&build_dir);
         return;
     }
 
@@ -82,9 +89,82 @@ fn main() {
         }
     }
 
-    // Guarantee that web/build and index.html exist so RustEmbed macro can compile
+    // Guarantee that web/build and index.html exist so there is something to embed.
     if !index_html.exists() {
         create_placeholder(&build_dir, &index_html);
+    }
+    pack_assets(&build_dir);
+}
+
+/// Packs `web/build` into `OUT_DIR`: every file gzip-compressed at the best level (kept as is
+/// when that does not shrink it, e.g. woff2), plus `assets.rs`, the sorted table `lib.rs`
+/// includes. Compressing here instead of per request keeps a compressor out of the daemon.
+fn pack_assets(build_dir: &Path) {
+    println!("cargo:rerun-if-changed={}", build_dir.display());
+    let out = PathBuf::from(env::var("OUT_DIR").expect("cargo sets OUT_DIR for build scripts"));
+    let mut files = Vec::new();
+    collect_files(build_dir, build_dir, &mut files);
+    files.sort();
+
+    let mut table = String::from("&[\n");
+    for (i, rel) in files.iter().enumerate() {
+        let src = build_dir.join(rel);
+        let raw = fs::read(&src).unwrap_or_else(|e| panic!("read {}: {e}", src.display()));
+        let mut enc = GzEncoder::new(Vec::new(), Compression::best());
+        enc.write_all(&raw).expect("gzip into a Vec cannot fail");
+        let gz = enc.finish().expect("gzip into a Vec cannot fail");
+        let gzip = gz.len() < raw.len();
+        let blob = out.join(format!("asset{i}"));
+        fs::write(&blob, if gzip { &gz } else { &raw })
+            .unwrap_or_else(|e| panic!("write {}: {e}", blob.display()));
+
+        // Changes whenever the content does; stable for one toolchain (fixed SipHash keys).
+        let mut hasher = DefaultHasher::new();
+        raw.hash(&mut hasher);
+        let etag = format!("\"{:016x}\"", hasher.finish());
+        writeln!(
+            table,
+            "    Asset {{ path: {rel:?}, mime: {:?}, etag: {etag:?}, gzip: {gzip}, data: include_bytes!({:?}) }},",
+            mime(rel),
+            blob.to_string_lossy(),
+        )
+        .expect("write to a String cannot fail");
+    }
+    table.push(']');
+    fs::write(out.join("assets.rs"), table).expect("write assets.rs");
+}
+
+/// Every file under `dir`, as a `/`-separated path relative to `root`.
+fn collect_files(root: &Path, dir: &Path, files: &mut Vec<String>) {
+    let entries = fs::read_dir(dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display()));
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files(root, &path, files);
+        } else {
+            let rel = path.strip_prefix(root).expect("walked from root");
+            let parts: Vec<_> = rel.iter().map(|p| p.to_string_lossy()).collect();
+            files.push(parts.join("/"));
+        }
+    }
+}
+
+/// The `Content-Type` of a web UI file, by extension.
+fn mime(path: &str) -> &'static str {
+    match path.rsplit_once('.').map(|(_, ext)| ext) {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js" | "mjs") => "text/javascript",
+        Some("css") => "text/css",
+        Some("json" | "map") => "application/json",
+        Some("webmanifest") => "application/manifest+json",
+        Some("txt") => "text/plain; charset=utf-8",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("webp") => "image/webp",
+        Some("ico") => "image/x-icon",
+        Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        _ => "application/octet-stream",
     }
 }
 
@@ -219,7 +299,7 @@ fn run_frontend_build(web_dir: &Path) -> bool {
 
 fn create_placeholder(build_dir: &Path, index_html: &Path) {
     if !index_html.exists() {
-        println!("cargo:warning=Creating placeholder index.html in web/build for RustEmbed...");
+        println!("cargo:warning=Creating placeholder index.html in web/build...");
         if let Err(e) = fs::create_dir_all(build_dir) {
             println!("cargo:warning=Failed to create web/build directory: {e}");
         }

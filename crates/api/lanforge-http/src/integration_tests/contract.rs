@@ -44,15 +44,15 @@ struct TestApp {
     elevation: Option<String>,
 }
 
-/// Build the same router the real `HttpService` builds, minus
-/// `CompressionLayer`/`CorsLayer` (not needed in tests).
+/// The `/api` routes as the real `HttpService` mounts them (`api_router`, layers included),
+/// without `/metrics`, `/boot` and the WebUI.
 fn build_router(state: AppState) -> Router {
     Router::new()
         .nest("/api", api_router(&state))
         .with_state(state)
 }
 
-async fn make_state(with_auth: bool) -> AppState {
+pub(super) async fn make_state(with_auth: bool) -> AppState {
     let bus = Arc::new(EventBus::new());
     let table = CoreState::new();
     let db = Arc::new(

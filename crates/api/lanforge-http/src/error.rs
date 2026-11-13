@@ -9,8 +9,6 @@ use axum::{
     response::{IntoResponse, Response as AxumResponse},
 };
 #[cfg(feature = "server")]
-use jsonwebtoken::errors::Error as JwtError;
-#[cfg(feature = "server")]
 use lanforge_core::error::CoreError;
 use thiserror::Error;
 
@@ -29,11 +27,6 @@ pub enum HttpError {
     #[cfg(feature = "server")]
     #[error("Core error: {0}")]
     Core(#[from] CoreError),
-
-    /// JWT error (server-side).
-    #[cfg(feature = "server")]
-    #[error("JWT error: {0}")]
-    Jwt(#[from] JwtError),
 
     /// HTTP client error (remote-side).
     #[cfg(feature = "client")]
@@ -120,7 +113,6 @@ impl IntoResponse for HttpError {
                     StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
                 (code, message)
             }
-            Self::Jwt(e) => (StatusCode::UNAUTHORIZED, e.to_string()),
             Self::Core(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
             Self::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
             Self::ServiceUnavailable(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg),

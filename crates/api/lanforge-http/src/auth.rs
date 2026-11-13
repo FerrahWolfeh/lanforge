@@ -14,8 +14,10 @@ use axum::{
     middleware::Next,
     response::Response as AxumResponse,
 };
-use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use lanforge_core::context::LanforgeContext;
+use lanforge_crypto::hmac::{HmacSha256, TAG_LEN};
 use lanforge_db_core::DatabaseStore;
 use lanforge_types::auth::ApiScopes;
 use serde::{Deserialize, Serialize};
@@ -48,6 +50,14 @@ pub const ELEVATION_HEADER: &str = "x-lanforge-elevation";
 /// How long an elevation token lasts.
 pub const ELEVATION_TTL_SECS: u64 = 300;
 
+/// The only JOSE header issued or accepted, `{"typ":"JWT","alg":"HS256"}`, compared byte for
+/// byte: `alg: none` and algorithm-confusion tokens never reach the signature check
+/// (RFC 8725 §2.1, §3.1).
+const JWT_HEADER: &str = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9";
+
+/// Clock skew tolerated past `exp` (RFC 7519 §4.1.4).
+const EXP_LEEWAY_SECS: u64 = 60;
+
 /// Represents an authenticated user (either via JWT or API Token).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthenticatedUser {
@@ -65,8 +75,8 @@ pub enum AuthMethod {
 
 #[derive(Clone)]
 pub struct AuthManager {
-    encoding_key: EncodingKey,
-    decoding_key: DecodingKey,
+    /// Signs session and elevation tokens (HS256, RFC 7515 §3.3).
+    key: HmacSha256,
     has_users: Arc<AtomicBool>,
     /// Password-guess throttling, shared by every clone.
     pub throttle: Arc<LoginThrottle>,
@@ -82,8 +92,7 @@ impl AuthManager {
     #[must_use]
     pub fn from_secret(secret: &[u8]) -> Self {
         Self {
-            encoding_key: EncodingKey::from_secret(secret),
-            decoding_key: DecodingKey::from_secret(secret),
+            key: HmacSha256::new(secret),
             has_users: Arc::new(AtomicBool::new(false)),
             throttle: Arc::new(LoginThrottle::default()),
         }
@@ -124,7 +133,7 @@ impl AuthManager {
             uv: version,
         };
 
-        Ok(encode(&Header::default(), &claims, &self.encoding_key)?)
+        self.sign(&claims)
     }
 
     /// Issues a short-lived elevation token for `username`, after it re-entered its password.
@@ -142,7 +151,20 @@ impl AuthManager {
             elev: true,
             uv: 0,
         };
-        Ok(encode(&Header::default(), &claims, &self.encoding_key)?)
+        self.sign(&claims)
+    }
+
+    /// `claims` as a JWS in compact serialization (RFC 7515 §7.1).
+    pub(crate) fn sign(&self, claims: &Claims) -> HttpResult<String> {
+        let payload = serde_json::to_vec(claims)?;
+        let mut token = String::with_capacity(JWT_HEADER.len() + payload.len() * 4 / 3 + 48);
+        token.push_str(JWT_HEADER);
+        token.push('.');
+        URL_SAFE_NO_PAD.encode_string(&payload, &mut token);
+        let tag = self.key.sign(token.as_bytes());
+        token.push('.');
+        URL_SAFE_NO_PAD.encode_string(tag, &mut token);
+        Ok(token)
     }
 
     /// Whether `token` is a valid elevation token for `username`.
@@ -161,10 +183,32 @@ impl AuthManager {
         Ok(claims)
     }
 
+    /// The claims of `token`, if this manager signed it and it has not expired: the header
+    /// must be [`JWT_HEADER`], and the payload is read only once the signature checks out.
     pub fn validate_token(&self, token: &str) -> HttpResult<Claims> {
-        let validation = Validation::default();
-        let token_data = decode::<Claims>(token, &self.decoding_key, &validation)?;
-        Ok(token_data.claims)
+        let invalid = || HttpError::Auth("Invalid or expired token".into());
+        let (signed, signature) = token.rsplit_once('.').ok_or_else(invalid)?;
+        let (header, payload) = signed.split_once('.').ok_or_else(invalid)?;
+        if header != JWT_HEADER {
+            return Err(invalid());
+        }
+        let mut tag = [0; TAG_LEN];
+        if URL_SAFE_NO_PAD.decode_slice(signature, &mut tag) != Ok(TAG_LEN)
+            || !self.key.verify(signed.as_bytes(), &tag)
+        {
+            return Err(invalid());
+        }
+        let payload = URL_SAFE_NO_PAD.decode(payload).map_err(|_| invalid())?;
+        let claims: Claims = serde_json::from_slice(&payload).map_err(|_| invalid())?;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| HttpError::Time(e.to_string()))?
+            .as_secs();
+        let exp = u64::try_from(claims.exp).unwrap_or(u64::MAX);
+        if exp.saturating_add(EXP_LEEWAY_SECS) < now {
+            return Err(invalid());
+        }
+        Ok(claims)
     }
 }
 

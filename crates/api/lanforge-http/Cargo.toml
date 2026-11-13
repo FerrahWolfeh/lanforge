@@ -36,14 +36,8 @@ tower-http = { version = "0.7.0", features = [
     "cors",
     "fs",
     "trace",
-    "compression-gzip",
-    "compression-br",
     "set-header",
 ], optional = true }
-jsonwebtoken = { version = "11.0.0", optional = true, default-features = false, features = [
-    "use_pem",
-    "rust_crypto",
-] }
 axum-server = { version = "0.8.0", optional = true, features = [
     "tls-rustls-no-provider",
 ] }
@@ -76,7 +70,7 @@ server = [
     "dep:axum",
     "dep:tower-http",
     "lanforge-crypto/tls",
-    "dep:jsonwebtoken",
+    "dep:base64",
     "dep:axum-server",
     "dep:futures",
     "dep:rustls",
@@ -112,6 +106,7 @@ hotpath = [
 ]
 
 [dev-dependencies]
+flate2 = "1.1.9"
 tower = { version = "0.5.2", features = ["util"] }
 http-body-util = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }

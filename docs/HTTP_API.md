@@ -470,6 +470,6 @@ This route is unauthenticated alongside `/login` and `/status`. Used by CLI and 
 
 - Use `axum::response::sse::Sse` for all SSE endpoints.
 - All route handlers receive a shared `AppState` (Arc) containing the RPC channel to the daemon's internal bus.
-- Middleware stack (applied globally): CORS → auth extractor → compression → routes. Auth extractor short-circuits with `401` before reaching any handler, except for `POST /api/v1/auth/validate` which is explicitly excluded.
+- Middleware stack (applied globally): CORS → auth extractor → routes. Responses are not compressed; the embedded WebUI is stored gzip-compressed and sent as such to clients that accept gzip. Auth extractor short-circuits with `401` before reaching any handler, except for `POST /api/v1/auth/validate` which is explicitly excluded.
 - `DELETE /api/v1/db` should require a `X-Confirm: wipe` header in addition to auth, as a minimal mechanical safeguard against accidental calls from scripts.
 - UDS-only routes (`POST /auth/tokens`, `DELETE /auth/tokens/{id}`, `POST /auth/tokens/{id}/renew`) should be registered normally but return `403` immediately in the handler body — this way they appear correctly in any auto-generated API documentation.

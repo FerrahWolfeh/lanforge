@@ -13,6 +13,7 @@
 use anyhow::Result;
 use lanforge::app::Daemon;
 use lanforge::bootstrap::Bootstrapper;
+use lanforge::logging;
 #[cfg(feature = "pppoe")]
 use lanforge_pppoe::kernel::store;
 #[cfg(feature = "ring")]
@@ -23,7 +24,7 @@ use std::{env, process};
 use tokio::runtime::Builder;
 use tokio::time::interval;
 use tracing::info;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::util::SubscriberInitExt;
 
 #[cfg(all(feature = "jemalloc", not(feature = "hotpath-alloc")))]
 #[global_allocator]
@@ -59,12 +60,7 @@ async fn async_main(started: Instant) -> Result<()> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     // 1. Setup Logging
-    tracing_subscriber::fmt()
-        .without_time()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
+    logging::subscriber(env::var("RUST_LOG").ok().as_deref()).init();
 
     // 1.0.1 The PPPoE session a restart left in the fd store (before any child process could
     // inherit its descriptors).

@@ -20,6 +20,54 @@ pub struct RewriteRule {
     pub answer: RewriteAnswer,
 }
 
+/// What a rewrite rule's `domain` matches.
+///
+/// One name (`nas.home`), or with `*.` the name and every name below it at any depth
+/// (`*.corp.lan`: `corp.lan`, `a.b.corp.lan`, never `evilcorp.lan`). Stored lowercase: names
+/// compare case-insensitively (RFC 4343).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RewritePattern {
+    Name(Box<str>),
+    Subtree(Box<str>),
+}
+
+impl RewritePattern {
+    /// Whether the query name `name` (lowercase, no trailing dot) is matched.
+    #[must_use]
+    pub fn matches(&self, name: &str) -> bool {
+        match self {
+            Self::Name(n) => name == &**n,
+            Self::Subtree(base) => name
+                .strip_suffix(&**base)
+                .is_some_and(|head| head.is_empty() || head.ends_with('.')),
+        }
+    }
+}
+
+impl FromStr for RewritePattern {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        let (subtree, name) = s.strip_prefix("*.").map_or((false, s), |rest| (true, rest));
+        if name.is_empty() || name.split('.').any(str::is_empty) {
+            return Err("is not a domain".into());
+        }
+        if name
+            .chars()
+            .any(|c| c.is_whitespace() || matches!(c, '*' | '?' | '[' | ']' | '{' | '}' | '\\'))
+        {
+            return Err("is not a domain or *.<domain> (no other wildcards)".into());
+        }
+        let name = name.to_ascii_lowercase().into_boxed_str();
+        Ok(if subtree {
+            Self::Subtree(name)
+        } else {
+            Self::Name(name)
+        })
+    }
+}
+
 impl RewriteRule {
     #[must_use]
     pub fn parse_answer(&self) -> RewriteAnswer {
@@ -776,6 +824,34 @@ impl Display for ClientSelector {
 mod tests {
     use super::*;
     use std::str::FromStr;
+
+    #[test]
+    fn rewrite_patterns_match_whole_labels() {
+        let wild: RewritePattern = "*.Corp.lan".parse().unwrap();
+        assert_eq!(wild, RewritePattern::Subtree("corp.lan".into()));
+        for name in ["corp.lan", "a.corp.lan", "a.b.corp.lan"] {
+            assert!(wild.matches(name), "{name}");
+        }
+        for name in ["evilcorp.lan", "lan", "corp.lan.x"] {
+            assert!(!wild.matches(name), "{name}");
+        }
+        let exact: RewritePattern = " NAS.home ".parse().unwrap();
+        assert!(exact.matches("nas.home"));
+        assert!(!exact.matches("x.nas.home"));
+        for bad in [
+            "",
+            "*.",
+            "*",
+            "api?.lan",
+            "*corp.lan",
+            "a.*.lan",
+            "nas..lan",
+            "nas.lan.",
+            "a b.lan",
+        ] {
+            assert!(bad.parse::<RewritePattern>().is_err(), "{bad:?}");
+        }
+    }
 
     #[test]
     fn api_rules_become_rules_file_lines() {

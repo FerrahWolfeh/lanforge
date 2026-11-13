@@ -21,29 +21,11 @@ impl fmt::Display for Encoding {
     }
 }
 
-/// Supported compression algorithms.
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
-#[serde(rename_all = "snake_case")]
-pub enum Compression {
-    /// No compression.
-    None,
-}
-
-impl fmt::Display for Compression {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::None => write!(f, "none"),
-        }
-    }
-}
-
 /// Daemon capabilities payload.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Capabilities {
     /// List of supported response encodings.
     pub encodings: Vec<Encoding>,
-    /// List of supported compression algorithms.
-    pub compression: Vec<Compression>,
 }
 
 /// A simple success result containing a message.
