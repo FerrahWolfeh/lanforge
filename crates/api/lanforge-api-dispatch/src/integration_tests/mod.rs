@@ -5,6 +5,15 @@
 mod api_tests;
 mod banners;
 mod dispatch;
+#[cfg(feature = "adblock")]
+mod error_kinds_adblock;
+mod error_kinds_auth;
+mod error_kinds_control;
+mod error_kinds_inspect;
+mod error_kinds_query;
+mod error_kinds_rewrite;
+mod error_kinds_setup;
+mod error_kinds_stats;
 mod log_level;
 mod reload;
 mod stop_impact;

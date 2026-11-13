@@ -100,9 +100,14 @@ impl ClientContext {
             .await
         {
             Ok(Some(info)) => info,
-            _ => {
-                return Response::Error {
+            Ok(None) => {
+                return Response::NotFound {
                     error: format!("Token '{id_or_name}' not found"),
+                };
+            }
+            Err(e) => {
+                return Response::Error {
+                    error: format!("Database error: {e}"),
                 };
             }
         };

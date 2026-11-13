@@ -234,8 +234,18 @@ async fn handle_setup(
             )
                 .into_response()
         }
-        ApiResponse::Error { error } => (
+        ApiResponse::Rejected { error } => (
             StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": error })),
+        )
+            .into_response(),
+        ApiResponse::NotFound { error } => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": error })),
+        )
+            .into_response(),
+        ApiResponse::Error { error } => (
+            StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": error })),
         )
             .into_response(),

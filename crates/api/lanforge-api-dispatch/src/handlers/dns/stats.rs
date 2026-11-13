@@ -122,7 +122,7 @@ impl ClientContext {
             t.addr == UpstreamAddr::Ip(addr) && t.protocol == protocol && t.domain == domain
         };
         if !self.ctx.get_dns_upstreams().iter().any(matches) {
-            return Response::Error {
+            return Response::NotFound {
                 error: "Upstream not found".into(),
             };
         }

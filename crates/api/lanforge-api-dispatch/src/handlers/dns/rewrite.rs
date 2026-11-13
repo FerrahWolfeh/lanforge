@@ -66,7 +66,7 @@ impl ClientContext {
             .iter()
             .any(|r| r.effective_id() == id)
         {
-            return Response::Error {
+            return Response::NotFound {
                 error: format!("DNS rewrite with ID {id} not found"),
             };
         }

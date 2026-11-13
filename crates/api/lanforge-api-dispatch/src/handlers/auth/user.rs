@@ -22,12 +22,12 @@ impl ClientContext {
 
         let username = username.trim().to_lowercase();
         if username.is_empty() {
-            return Response::Error {
+            return Response::Rejected {
                 error: "Username cannot be empty".to_string(),
             };
         }
         if password.len() < 8 {
-            return Response::Error {
+            return Response::Rejected {
                 error: "Password must be at least 8 characters long".to_string(),
             };
         }
@@ -35,7 +35,7 @@ impl ClientContext {
         let role_str = role.as_deref().unwrap_or("admin");
         let parsed_role = match UserRole::from_str(role_str) {
             Ok(r) => r,
-            Err(e) => return Response::Error { error: e },
+            Err(e) => return Response::Rejected { error: e },
         };
 
         let password_hash = hash_password(&password);
@@ -113,7 +113,7 @@ impl ClientContext {
         match storage.call(|s: &Stores| s.auth().list_users()).await {
             Ok(users) => {
                 if users.len() <= 1 {
-                    return Response::Error {
+                    return Response::Rejected {
                         error: "Cannot delete the last remaining user account".to_string(),
                     };
                 }
@@ -151,7 +151,7 @@ impl ClientContext {
 
         let username = username.trim().to_lowercase();
         if new_password.len() < 8 {
-            return Response::Error {
+            return Response::Rejected {
                 error: "Password must be at least 8 characters long".to_string(),
             };
         }

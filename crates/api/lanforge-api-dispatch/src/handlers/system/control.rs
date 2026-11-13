@@ -123,7 +123,7 @@ impl ClientContext {
     pub async fn handle_pppoe_config(&self) -> Response {
         match self.ctx.get_pppoe_config() {
             Some(cfg) => Response::PppoeConfig(Box::new(cfg)),
-            None => Response::Error {
+            None => Response::NotFound {
                 error: "PPPoE configuration not found".to_string(),
             },
         }
@@ -238,14 +238,14 @@ impl ClientContext {
 
     pub async fn handle_firewall_commit(&self, req: FirewallCommitRequest) -> Response {
         let Some(staged) = self.ctx.get_staged_firewall_transaction() else {
-            return Response::Error {
+            return Response::NotFound {
                 error: "No active staged firewall transaction found or transaction expired"
                     .to_string(),
             };
         };
 
         if staged.tx_id != req.tx_id {
-            return Response::Error {
+            return Response::Rejected {
                 error: format!(
                     "Transaction ID mismatch: expected '{}', got '{}'",
                     staged.tx_id, req.tx_id
@@ -325,7 +325,7 @@ impl ClientContext {
             .get_staged_firewall_transaction()
             .filter(|s| s.tx_id == tx_id)
         else {
-            return Response::Error {
+            return Response::NotFound {
                 error: format!("No active transaction found with ID '{tx_id}' to confirm"),
             };
         };
@@ -337,7 +337,7 @@ impl ClientContext {
             ));
         }
         let Some(staged) = self.ctx.clear_staged_firewall_transaction(Some(&tx_id)) else {
-            return Response::Error {
+            return Response::NotFound {
                 error: format!("Firewall transaction '{tx_id}' expired before it was confirmed"),
             };
         };
@@ -352,7 +352,7 @@ impl ClientContext {
 
     pub async fn handle_firewall_abort(&self, tx_id: String) -> Response {
         let Some(staged) = self.ctx.clear_staged_firewall_transaction(Some(&tx_id)) else {
-            return Response::Error {
+            return Response::NotFound {
                 error: format!("No active transaction found with ID '{tx_id}' to abort"),
             };
         };
