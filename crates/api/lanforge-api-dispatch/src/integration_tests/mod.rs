@@ -7,6 +7,7 @@ mod banners;
 mod dispatch;
 #[cfg(feature = "adblock")]
 mod error_kinds_adblock;
+mod error_kinds_control;
 mod error_kinds_inspect;
 mod error_kinds_rewrite;
 mod error_kinds_stats;
