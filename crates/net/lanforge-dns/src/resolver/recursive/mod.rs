@@ -11,7 +11,7 @@ use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
 #[cfg(feature = "doq")]
 use quinn::crypto::rustls::QuicClientConfig;
 pub use strategy::{Resolved, UpstreamMode, UpstreamStrategy};
-use tokio::task::{JoinHandle, yield_now};
+use tokio::task::JoinHandle;
 #[cfg(feature = "dot")]
 use tokio_rustls::TlsConnector;
 #[cfg(feature = "dot")]
@@ -227,12 +227,12 @@ impl UpstreamManager {
                             }
                         }
                     }
-                    Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                        yield_now().await;
-                    }
                     Err(e) => {
                         match e.kind() {
-                            ErrorKind::Interrupted
+                            // tokio waits for readiness itself; a stray `WouldBlock` is
+                            // retried by the next `recv_from`, which awaits again.
+                            ErrorKind::WouldBlock
+                            | ErrorKind::Interrupted
                             | ErrorKind::ConnectionRefused
                             | ErrorKind::ConnectionReset
                             | ErrorKind::NetworkUnreachable
