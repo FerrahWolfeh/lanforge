@@ -207,8 +207,11 @@ fn render_nic_tuning_status(status: &TrafficStatusResponse) {
 }
 
 fn render_sqm_status(status: &TrafficStatusResponse) {
+    // `flow_offload_suppressed` is set whenever SQM is configured.
     let sqm_state = if status.sqm_active {
         "ACTIVE".green().bold().to_string()
+    } else if status.flow_offload_suppressed {
+        "WAITING FOR WAN".yellow().to_string()
     } else {
         "INACTIVE".dimmed().to_string()
     };

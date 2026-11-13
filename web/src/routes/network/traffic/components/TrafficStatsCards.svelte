@@ -33,6 +33,8 @@
 	const stateStr = $derived((status?.service_state ?? "inactive").toLowerCase());
 	const isOnline = $derived(stateStr === "online" || stateStr === "active");
 	const isStarting = $derived(stateStr === "starting");
+	// SQM is configured (it suppresses flow offload) but has no WAN to attach to yet.
+	const sqmWaiting = $derived(!!status?.flow_offload_suppressed && !status?.sqm_active);
 
 	// Instantaneous rates for gateway uplink and physical interfaces (excluding IFB mirrors and container veths)
 	const wanIface = $derived(telemetry?.wan_interface ?? status?.wan_interface);
@@ -138,8 +140,8 @@
 				description: "Active Queue Management (CAKE) bounds buffer latency to prevent lag spikes under load.",
 			}}
 			badge={{
-				text: status?.sqm_active ? "Active" : "Disabled",
-				variant: status?.sqm_active ? "online" : "dormant",
+				text: status?.sqm_active ? "Active" : sqmWaiting ? "Waiting for WAN" : "Disabled",
+				variant: status?.sqm_active ? "online" : sqmWaiting ? "starting" : "dormant",
 				showDot: true,
 			}}
 		>
@@ -152,7 +154,9 @@
 						</span>
 					{:else}
 						<XCircleIcon class="size-5 text-muted-foreground shrink-0" />
-						<span class="text-base text-muted-foreground font-normal">Shaper Disabled</span>
+						<span class="text-base text-muted-foreground font-normal">
+							{sqmWaiting ? "Attaches when the WAN is up" : "Shaper Disabled"}
+						</span>
 					{/if}
 				</div>
 			{/snippet}

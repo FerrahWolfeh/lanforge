@@ -181,17 +181,6 @@ impl<H: TrafficHost> TrafficService<H> {
         }
     }
 
-    /// Updates the service state and publishes it to the event bus.
-    fn update_service_state(&self, ctx: &LanforgeContext) {
-        let next_state = if !self.tuned_interfaces.is_empty() || self.active_wan.is_some() {
-            ServiceState::Online
-        } else {
-            ServiceState::Inactive
-        };
-        ctx.set_service_state(Self::SERVICE_ID, next_state);
-        self.publish_status(ctx, next_state);
-    }
-
     /// Initializes tuning, SQM, and telemetry. Returns false if both features are disabled.
     async fn initialize(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> bool {
         if let Some(dynamic_cfg) = ctx.get_traffic_config() {
@@ -207,8 +196,6 @@ impl<H: TrafficHost> TrafficService<H> {
             h.dormant(DormantReason::disabled("traffic.enabled"));
             return false;
         }
-
-        ctx.set_service_state(Self::SERVICE_ID, ServiceState::Starting);
 
         if is_tuning_enabled {
             let default_ifaces = Self::resolve_default_interfaces(ctx);
@@ -234,7 +221,8 @@ impl<H: TrafficHost> TrafficService<H> {
             }
         }
 
-        self.update_service_state(ctx);
+        // Running is Online: an SQM that waits for the WAN is idle, not dormant.
+        self.publish_status(ctx, ServiceState::Online);
         h.ready();
 
         let wan = self.active_wan.as_deref();
@@ -282,7 +270,7 @@ impl<H: TrafficHost> TrafficService<H> {
         }
 
         self.cfg = new_cfg;
-        self.update_service_state(ctx);
+        self.publish_status(ctx, ServiceState::Online);
     }
 
     async fn handle_wan_snapshot(&mut self, ctx: &LanforgeContext, snap: &WanSnapshot) {
@@ -300,7 +288,6 @@ impl<H: TrafficHost> TrafficService<H> {
                     if self.cfg.sqm.enabled {
                         self.apply_sqm_internal(ctx, ifname, is_pppoe).await;
                     }
-                    ctx.set_service_state(Self::SERVICE_ID, ServiceState::Online);
                     self.publish_status(ctx, ServiceState::Online);
                 }
             }
@@ -309,7 +296,7 @@ impl<H: TrafficHost> TrafficService<H> {
             self.active_wan = None;
             self.is_pppoe_active = false;
             self.clear_sqm_internal(ctx).await;
-            self.update_service_state(ctx);
+            self.publish_status(ctx, ServiceState::Online);
         }
     }
 
@@ -325,14 +312,13 @@ impl<H: TrafficHost> TrafficService<H> {
                 if self.cfg.sqm.enabled {
                     self.apply_sqm_internal(ctx, &session.interface, true).await;
                 }
-                ctx.set_service_state(Self::SERVICE_ID, ServiceState::Online);
                 self.publish_status(ctx, ServiceState::Online);
             }
             PppoeEvent::SessionDown { reason } => {
                 info!(reason = %reason, "PPPoE SessionDown, removing session SQM queues");
                 self.is_pppoe_active = false;
                 self.clear_sqm_internal(ctx).await;
-                self.update_service_state(ctx);
+                self.publish_status(ctx, ServiceState::Online);
             }
             _ => {}
         }
@@ -361,7 +347,7 @@ impl<H: TrafficHost> TrafficService<H> {
             changed = true;
         }
         if changed {
-            self.update_service_state(ctx);
+            self.publish_status(ctx, ServiceState::Online);
         }
     }
 
@@ -513,7 +499,6 @@ impl<H: TrafficHost> AsyncService for TrafficService<H> {
             self.clear_sqm_internal(ctx).await;
         }
 
-        ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
         self.publish_status(ctx, ServiceState::Inactive);
         Ok(())
     }
@@ -522,7 +507,6 @@ impl<H: TrafficHost> AsyncService for TrafficService<H> {
         if self.cfg.sqm.enabled {
             self.clear_sqm_internal(ctx).await;
         }
-        ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
         self.publish_status(ctx, ServiceState::Inactive);
         Ok(())
     }
