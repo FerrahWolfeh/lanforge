@@ -2657,3 +2657,62 @@ async fn test_log_level_contract() {
     .await;
     assert!(status.is_client_error(), "{status}");
 }
+
+#[tokio::test]
+async fn test_setup_http_maps_rejected_to_400_and_error_to_500() {
+    use lanforge_core::service::{AsyncService, ServiceHandle};
+    use lanforge_db::LogDb;
+    use lanforge_db::config::DatabaseConfig;
+    use lanforge_db::worker::DbWorker;
+    use lanforge_types::system::ServiceId;
+    use tokio::task::yield_now;
+
+    // 1. Without a storage worker, handle_setup returns Response::Error -> HTTP 500.
+    let db = in_memory_db();
+    let state = bare_state(&db);
+    let router = build_router(state);
+    let res = router.clone().oneshot(setup_request()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    // 2. With a storage worker, invalid input returns Response::Rejected -> HTTP 400.
+    let db2 = in_memory_db();
+    let state2 = bare_state(&db2);
+    let log_db = Arc::new(LogDb::open_in_memory());
+    let mut worker = DbWorker::new(
+        DatabaseConfig::default(),
+        state2.ctx.clone(),
+        Arc::clone(&db2),
+        log_db,
+    );
+    let ctx_worker = state2.ctx.clone();
+    tokio::spawn(async move {
+        let h = ServiceHandle::new(ServiceId::Db, ctx_worker.clone());
+        let _ = worker.serve(&ctx_worker, &h).await;
+    });
+    while state2.ctx.storage_handle().is_none() {
+        yield_now().await;
+    }
+    let router2 = build_router(state2);
+    let bad_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/system/setup")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "admin_username": "   ",
+                "admin_password": "short",
+                "lan_iface": "lan0",
+                "lan_ip": "192.168.1.1",
+                "domain_name": "lan",
+                "dhcp_enabled": true,
+                "dhcp_pool_start": "192.168.1.100",
+                "dhcp_pool_end": "192.168.1.200",
+                "adblock_enabled": false,
+                "wan": null
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let res2 = router2.oneshot(bad_req).await.unwrap();
+    assert_eq!(res2.status(), StatusCode::BAD_REQUEST);
+}

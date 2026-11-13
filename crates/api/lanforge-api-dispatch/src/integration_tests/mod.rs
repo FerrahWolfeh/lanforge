@@ -10,6 +10,7 @@ mod error_kinds_adblock;
 mod error_kinds_control;
 mod error_kinds_inspect;
 mod error_kinds_rewrite;
+mod error_kinds_setup;
 mod error_kinds_stats;
 mod log_level;
 mod reload;

@@ -143,7 +143,7 @@ impl ClientContext {
             }
         };
         if is_provisioned || self.ctx.is_recovery_mode() {
-            return Response::Error {
+            return Response::Rejected {
                 error: "Forbidden: Initial onboarding setup has already been completed and locked."
                     .to_string(),
             };
@@ -151,12 +151,12 @@ impl ClientContext {
 
         let username = payload.admin_username.trim().to_lowercase();
         if username.is_empty() {
-            return Response::Error {
+            return Response::Rejected {
                 error: "Administrator username cannot be empty".to_string(),
             };
         }
         if payload.admin_password.len() < 8 {
-            return Response::Error {
+            return Response::Rejected {
                 error: "Administrator password must be at least 8 characters long".to_string(),
             };
         }
