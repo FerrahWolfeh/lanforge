@@ -200,24 +200,26 @@ impl UdpTransport {
                 UdpBackend::KernelDual { v4, v6 } => {
                     tokio::select! {
                         res = v4.readable() => {
-                            res?;
+                            res.map_err(|e| self.counted(e))?;
                             match v4.try_recv_from(buf) {
                                 Ok(r) => r,
                                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => continue,
-                                Err(e) => return Err(e),
+                                Err(e) => return Err(self.counted(e)),
                             }
                         }
                         res = v6.readable() => {
-                            res?;
+                            res.map_err(|e| self.counted(e))?;
                             match v6.try_recv_from(buf) {
                                 Ok(r) => r,
                                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => continue,
-                                Err(e) => return Err(e),
+                                Err(e) => return Err(self.counted(e)),
                             }
                         }
                     }
                 }
-                UdpBackend::KernelSingle(sock) => sock.recv_from(buf).await?,
+                UdpBackend::KernelSingle(sock) => {
+                    sock.recv_from(buf).await.map_err(|e| self.counted(e))?
+                }
                 #[cfg(any(test, feature = "inert"))]
                 UdpBackend::Inert(port) => {
                     let mut rx = port.in_rx.lock().await;
@@ -269,10 +271,13 @@ impl UdpTransport {
                 .map_err(|e| io::Error::new(io::ErrorKind::BrokenPipe, e.to_string())),
         };
 
-        if let Ok(n) = res {
-            self.inner.metrics.record_tx(n);
+        match res {
+            Ok(n) => {
+                self.inner.metrics.record_tx(n);
+                Ok(n)
+            }
+            Err(e) => Err(self.counted(e)),
         }
-        res
     }
 
     /// Sends a datagram to the specified destination address.
@@ -301,10 +306,21 @@ impl UdpTransport {
                 .map_err(|e| io::Error::new(io::ErrorKind::WouldBlock, e.to_string())),
         };
 
-        if let Ok(n) = res {
-            self.inner.metrics.record_tx(n);
+        match res {
+            Ok(n) => {
+                self.inner.metrics.record_tx(n);
+                Ok(n)
+            }
+            // A full send buffer is back-pressure, not a failing socket.
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Err(e),
+            Err(e) => Err(self.counted(e)),
         }
-        res
+    }
+
+    /// Counts a socket error (the health signal the supervisor degrades on) and passes it on.
+    fn counted(&self, e: io::Error) -> io::Error {
+        self.inner.metrics.record_error();
+        e
     }
 }
 
@@ -320,6 +336,22 @@ mod tests {
     use crate::limiter::RateLimitConfig;
     use std::net::SocketAddr;
     use tokio::time::{Duration, timeout};
+
+    /// A send the kernel refuses is counted as an error (broadcast without `SO_BROADCAST` is
+    /// `EACCES`); a successful one is not.
+    #[tokio::test]
+    async fn should_count_kernel_send_errors() {
+        let transport =
+            UdpTransport::bind_single("127.0.0.1:0".parse().unwrap()).expect("bind loopback");
+        let target: SocketAddr = "255.255.255.255:9".parse().unwrap();
+        assert!(transport.send(b"x", &target).await.is_err());
+        assert!(transport.try_send(b"x", &target).is_err());
+        let own = transport.local_addrs().expect("bound")[0];
+        transport.send(b"x", &own).await.expect("send to itself");
+        let snap = transport.snapshot();
+        assert_eq!(snap.errors, 2);
+        assert_eq!(snap.tx_packets, 1);
+    }
 
     #[test]
     fn should_report_inert_status_and_synthetic_addresses() {
