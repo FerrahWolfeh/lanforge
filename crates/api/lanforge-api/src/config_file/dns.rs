@@ -8,7 +8,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 
 use lanforge_types::config::DnsListenConfig;
-use lanforge_types::network::dns::adblock::{RewriteAnswer, RewriteRule};
+use lanforge_types::network::dns::adblock::{RewriteAnswer, RewritePattern, RewriteRule};
 use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamTarget};
 use lanforge_types::network::{DnsRecordType, DnsReverseResolver, IpSubnet, ListenConfig};
 use serde::de::Deserializer;
@@ -765,8 +765,8 @@ impl DnsFile {
         let mut rewrites = Vec::new();
         for (domain, value) in &self.rewrites {
             let at = format!("[dns.rewrites] \"{domain}\"");
-            if domain.trim().is_empty() || domain.chars().any(char::is_whitespace) {
-                issues.push(format!("{at} is not a domain; rewrite not served"));
+            if let Err(e) = domain.parse::<RewritePattern>() {
+                issues.push(format!("{at} {e}; rewrite not served"));
                 continue;
             }
             if value.0.is_empty() {
@@ -1147,6 +1147,36 @@ addresses = ["udp://10.0.0.1:53#other.example"]
             );
         }
         assert_eq!(issues.len(), expected_keys.len(), "{issues:#?}");
+    }
+
+    /// A rewrite domain is a name or `*.<name>`; any other wildcard is reported and that rule
+    /// alone is left out.
+    #[test]
+    fn only_names_and_star_dot_names_are_rewrite_patterns() {
+        let file = parse(
+            r#"
+[dns.rewrites]
+"*.ok.lan" = "192.168.1.10"
+"api?.lan" = "192.168.1.11"
+"*corp.lan" = "192.168.1.12"
+"a.*.lan" = "192.168.1.13"
+"nas..lan" = "192.168.1.14"
+"Nas.LAN" = "192.168.1.15"
+"#,
+        );
+        let (dns, issues) = file.to_config();
+        assert_eq!(
+            dns.rewrites,
+            vec![
+                rule("*.ok.lan", DnsRecordType::A, "192.168.1.10"),
+                rule("Nas.LAN", DnsRecordType::A, "192.168.1.15"),
+            ]
+        );
+        assert_eq!(issues.len(), 4, "{issues:?}");
+        assert!(
+            issues.iter().all(|i| i.ends_with("rewrite not served")),
+            "{issues:?}"
+        );
     }
 
     /// An entry the reader does not understand is written back as it was, not dropped.

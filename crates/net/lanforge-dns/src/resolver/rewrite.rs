@@ -1,21 +1,31 @@
 use crate::server::DnsContext;
-use globset::{Glob, GlobSet, GlobSetBuilder};
 use lanforge_dns_wire::{WireHeader, WireOptScanner, WireQuestion, WireResponseWriter};
 use lanforge_types::network::dns::DnsRecordType;
-use lanforge_types::network::dns::adblock::{RewriteAnswer, RewriteRule};
+use lanforge_types::network::dns::adblock::{RewriteAnswer, RewritePattern, RewriteRule};
 use parking_lot::RwLock;
 use std::net::IpAddr;
 use std::sync::Arc;
 
-/// A thread-safe store for DNS rewrite rules compiled into a `GlobSet` for high-performance wildcard matching.
+/// A thread-safe store for DNS rewrite rules, each matched by its [`RewritePattern`].
 pub struct RewriteStore {
     state: RwLock<RewriteState>,
 }
 
 struct RewriteState {
     rules: Arc<Vec<RewriteRule>>,
-    glob_set: GlobSet,
-    rule_indices: Vec<usize>,
+    /// Each servable rule's pattern with its index in `rules`, in file order. A linear scan:
+    /// rule sets are small, and an empty one costs nothing per query.
+    patterns: Vec<(RewritePattern, usize)>,
+}
+
+impl RewriteState {
+    /// Indices of the rules matching `name`, in file order.
+    fn matching<'a>(&'a self, name: &'a str) -> impl Iterator<Item = usize> + 'a {
+        self.patterns
+            .iter()
+            .filter(move |(pattern, _)| pattern.matches(name))
+            .map(|&(_, idx)| idx)
+    }
 }
 
 impl RewriteStore {
@@ -25,56 +35,31 @@ impl RewriteStore {
         Self {
             state: RwLock::new(RewriteState {
                 rules: Arc::new(Vec::new()),
-                glob_set: GlobSet::empty(),
-                rule_indices: Vec::new(),
+                patterns: Vec::new(),
             }),
         }
     }
 
-    /// Replace the current rules with new ones, compiling them into a `GlobSet`.
+    /// Replace the current rules with new ones. A rule whose domain is not a pattern is not
+    /// served (the config file reports it as an issue).
     pub fn replace_rules(&self, new_rules: Vec<RewriteRule>) {
-        let mut builder = GlobSetBuilder::new();
-        let mut rule_indices = Vec::new();
-
-        for (idx, rule) in new_rules.iter().enumerate() {
-            // Query names arrive lowercased; DNS names compare case-insensitively (RFC 4343).
-            let domain = rule.domain.trim().to_ascii_lowercase();
-            let domain = domain.as_str();
-            if let Some(base) = domain.strip_prefix("*.") {
-                if let Ok(glob1) = Glob::new(domain) {
-                    builder.add(glob1);
-                    rule_indices.push(idx);
-                }
-                if let Ok(glob2) = Glob::new(base) {
-                    builder.add(glob2);
-                    rule_indices.push(idx);
-                }
-            } else {
-                if let Ok(glob) = Glob::new(domain) {
-                    builder.add(glob);
-                    rule_indices.push(idx);
-                }
-            }
-        }
-
-        let glob_set = builder.build().unwrap_or_else(|_| GlobSet::empty());
+        let patterns = new_rules
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, rule)| Some((rule.domain.parse().ok()?, idx)))
+            .collect();
         *self.state.write() = RewriteState {
             rules: Arc::new(new_rules),
-            glob_set,
-            rule_indices,
+            patterns,
         };
     }
 
-    /// Match the domain query name against the compiled glob patterns.
+    /// The answer of the first rule matching the query name `qname`.
     #[must_use]
     pub fn resolve_rewrite(&self, qname: &str) -> Option<RewriteAnswer> {
         let state = self.state.read();
-        let matches = state.glob_set.matches(qname);
-        if let Some(&pattern_idx) = matches.first() {
-            let rule_idx = state.rule_indices[pattern_idx];
-            return Some(state.rules[rule_idx].parse_answer());
-        }
-        None
+        let idx = state.matching(qname).next()?;
+        Some(state.rules[idx].parse_answer())
     }
 
     /// Answers a query whose name a rewrite matches. Every matching rule is tried in order; the
@@ -92,24 +77,14 @@ impl RewriteStore {
         resp: &mut Vec<u8>,
     ) -> bool {
         let state = self.state.read();
-        let mut matched = state
-            .glob_set
-            .matches(domain)
-            .into_iter()
-            .map(|pattern| state.rule_indices[pattern])
-            .peekable();
+        let mut matched = state.matching(domain).peekable();
         if matched.peek().is_none() {
             return false;
         }
         let edns = WireOptScanner::scan(data, header, question);
         let ra = !ctx.recursive.is_empty();
         let qtype = DnsRecordType::from(question.qtype());
-        let mut last_rule = None;
         for idx in matched {
-            if last_rule == Some(idx) {
-                continue; // `*.x` and `x` both match the base name
-            }
-            last_rule = Some(idx);
             let rule = &state.rules[idx];
             if delimits(rule.rtype, qtype)
                 && Self::answer_wire(data, question, ctx, &rule.answer, qtype, edns, ra, resp)

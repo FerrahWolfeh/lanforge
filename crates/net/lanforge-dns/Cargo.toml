@@ -22,7 +22,6 @@ hotpath = { workspace = true, optional = true }
 smallvec = { workspace = true }
 arc-swap = { workspace = true }
 tempfile = { workspace = true, optional = true }
-globset = { workspace = true }
 futures = { workspace = true }
 rustls = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
