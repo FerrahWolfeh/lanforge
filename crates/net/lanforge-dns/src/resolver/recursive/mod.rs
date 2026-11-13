@@ -23,10 +23,11 @@ use crate::utils::health::UpstreamHealth;
 use lanforge_dns_wire::{WireHeader, WireQuestion, WireResponseScanner};
 use parking_lot::Mutex;
 use std::collections::HashMap;
+use std::hash::{BuildHasher, RandomState};
 use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
@@ -42,16 +43,41 @@ const DOT_POOL_MAX: usize = 8;
 /// answer within the normal upstream timeout counts as a failure: without it a mute upstream
 /// never degraded and kept costing every query the hedge delay.
 const ABANDONED_AFTER: Duration = Duration::from_secs(3);
+/// Fresh query IDs tried before giving up when they all collide with queries in flight.
+const ID_ATTEMPTS: usize = 16;
 
 pub(crate) struct PendingQuery {
     pub sent_at: Instant,
     pub tx: Option<Sender<Vec<u8>>>,
+    /// The question section sent (QNAME, QTYPE, QCLASS): an answer must repeat it.
+    pub question: smallvec::SmallVec<[u8; 64]>,
+}
+
+impl PendingQuery {
+    /// Whether `resp` answers this query (RFC 5452 §9.1): a response carrying the same
+    /// question, the name compared case-insensitively.
+    fn answered_by(&self, resp: &[u8]) -> bool {
+        let Some(header) = WireHeader::parse(resp) else {
+            return false;
+        };
+        let Some(got) = resp.get(12..12 + self.question.len()) else {
+            return false;
+        };
+        let (name, rest) = self.question.split_at(self.question.len() - 4);
+        !header.is_query()
+            && got[..name.len()].eq_ignore_ascii_case(name)
+            && got[name.len()..] == *rest
+    }
 }
 
 pub struct UpstreamManager {
     pub(crate) socket: Arc<UdpSocket>,
     pub(crate) pending: Arc<Mutex<HashMap<u16, PendingQuery>>>,
-    pub(crate) next_id: AtomicU16,
+    /// UDP query IDs are a keyed hash of this counter (RFC 5452 §4.3: unpredictable; the
+    /// source port stays fixed per upstream, so the ID is the only thing an off-path answer
+    /// has to guess).
+    pub(crate) next_id: AtomicU64,
+    pub(crate) id_key: RandomState,
     pub cache: Arc<DnsCache>,
     pub target: UpstreamTarget,
     /// Where `target` is reached: its address, or what its host name resolved to.
@@ -129,7 +155,8 @@ impl UpstreamManager {
         let mgr = Arc::new(Self {
             socket,
             pending,
-            next_id: AtomicU16::new(1),
+            next_id: AtomicU64::new(0),
+            id_key: RandomState::new(),
             cache,
             target: target.clone(),
             addr,
@@ -175,13 +202,19 @@ impl UpstreamManager {
                         }
                         if len >= 2 {
                             let id = u16::from_be_bytes([buf[0], buf[1]]);
+                            let resp = &buf[..len];
                             let entry = {
                                 let mut map = p.lock();
-                                map.remove(&id)
+                                // An answer to another question keeps the query waiting.
+                                if map.get(&id).is_some_and(|q| q.answered_by(resp)) {
+                                    map.remove(&id)
+                                } else {
+                                    None
+                                }
                             };
                             if let Some(entry) = entry {
                                 if let Some(tx) = entry.tx {
-                                    let _ = tx.send(buf[..len].to_vec());
+                                    let _ = tx.send(resp.to_vec());
                                 } else if len >= 12 {
                                     let rtt = entry
                                         .sent_at
@@ -365,23 +398,36 @@ impl UpstreamManager {
 
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn forward_udp(&self, data: &[u8], upstream: SocketAddr) -> Result<Vec<u8>, DnsError> {
-        let internal_id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let mut data_to_send = smallvec::SmallVec::<[u8; 512]>::from_slice(data);
-        WireHeader::patch_id(&mut data_to_send, internal_id);
+        let question = WireQuestion::parse(data).ok_or(DnsError::WireParseError)?;
+        let question = smallvec::SmallVec::from_slice(&data[12..question.wire_len()]);
 
         self.sweep_abandoned();
         let (tx, rx) = oneshot::channel();
         let now = Instant::now();
-        {
+        let internal_id = {
             let mut map = self.pending.lock();
+            let id = (0..ID_ATTEMPTS)
+                .map(|_| {
+                    let n = self.next_id.fetch_add(1, Ordering::Relaxed);
+                    // Truncation intended: any 16 bits of the keyed hash.
+                    #[expect(clippy::cast_possible_truncation, reason = "a 16-bit query ID")]
+                    let id = self.id_key.hash_one(n) as u16;
+                    id
+                })
+                .find(|id| !map.contains_key(id))
+                .ok_or_else(|| DnsError::Generic("no free upstream query ID".to_string()))?;
             map.insert(
-                internal_id,
+                id,
                 PendingQuery {
                     sent_at: now,
                     tx: Some(tx),
+                    question,
                 },
             );
-        }
+            id
+        };
+        let mut data_to_send = smallvec::SmallVec::<[u8; 512]>::from_slice(data);
+        WireHeader::patch_id(&mut data_to_send, internal_id);
 
         struct PendingGuard<'a> {
             pending: &'a Mutex<HashMap<u16, PendingQuery>>,
