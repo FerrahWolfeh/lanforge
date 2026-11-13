@@ -1,10 +1,11 @@
 use std::{io, result};
 
 #[cfg(feature = "server")]
+use axum::http::header::RETRY_AFTER;
+#[cfg(feature = "server")]
 use axum::{
     Json,
     http::StatusCode,
-    http::header::RETRY_AFTER,
     response::{IntoResponse, Response as AxumResponse},
 };
 #[cfg(feature = "server")]
