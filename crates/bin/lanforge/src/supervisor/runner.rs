@@ -4,7 +4,6 @@ use crate::supervisor::RunnerLinks;
 use crate::supervisor::backoff::{BackoffDecision, calculate_backoff, is_healthy};
 use crate::supervisor::node::{NodeHandle, is_settled};
 use futures::future::select_all;
-use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
@@ -159,9 +158,6 @@ where
                 }
             }
 
-            // Listen for readiness events to sync NodeStatus watch channel
-            let mut sys_bus = self.ctx.bus().subscribe_system();
-
             debug!(service = %self.spec.id, "Serving service");
             let mut serve_fut = Box::pin(service.serve(&self.ctx, &handle));
 
@@ -232,18 +228,6 @@ where
                             if !loss_overridden {
                                 self.node.set_status(&self.ctx, reported.0, reported.1.clone());
                             }
-                        }
-                    }
-
-                    // Compatibility for services that still write their state to the context
-                    // directly and announce it with ServiceReady.
-                    Ok(event) = sys_bus.recv() => {
-                        if let LanforgeEvent::System(SystemEvent::ServiceReady { id }) = event.event
-                            && id == self.spec.id
-                        {
-                            let current_state = self.ctx.get_service_state(self.spec.id);
-                            let current_detail = self.ctx.get_service_detail(self.spec.id);
-                            self.node.set_status(&self.ctx, current_state, current_detail);
                         }
                     }
 
