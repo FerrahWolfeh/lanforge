@@ -7,7 +7,6 @@ use hotpath as _;
 
 use rustls as _;
 use toml as _;
-use tracing_subscriber as _;
 
 #[cfg(test)]
 use dhcproto as _;
@@ -24,6 +23,7 @@ pub mod app;
 pub mod bootstrap;
 pub mod config;
 pub mod event_loop;
+pub mod logging;
 pub mod registry;
 pub mod supervisor;
 pub mod synthetic;
