@@ -1146,3 +1146,42 @@ async fn test_firewall_degraded_while_the_ruleset_is_refused() {
         .publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = serve_handle.await;
 }
+
+/// A refused ruleset is retried on its own (backoff from 1 s): a transient refusal (a device a
+/// flowtable names not there yet, `nft` busy) heals without waiting for an unrelated event.
+#[tokio::test]
+async fn test_firewall_retries_a_refused_ruleset() {
+    let (ctx, _bus) = create_test_context();
+    let applier = FlakyNft::default();
+    applier.failing.store(true, Ordering::SeqCst);
+
+    let mut service = NftService::with_applier(applier.clone());
+    service.init(&ctx).await.expect("Init must succeed");
+    let ctx_clone = ctx.clone();
+    let serve_handle = tokio::spawn(async move {
+        let h = ServiceHandle::new(ServiceId::Nft, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+    timeout(Duration::from_secs(1), async {
+        while ctx.get_service_state(ServiceId::Nft) != ServiceState::Degraded {
+            sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("a refused ruleset degrades the firewall");
+
+    // The kernel accepts again; nothing else happens.
+    applier.failing.store(false, Ordering::SeqCst);
+    timeout(Duration::from_secs(3), async {
+        while ctx.get_service_state(ServiceId::Nft) != ServiceState::Online {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the firewall must retry the ruleset by itself");
+
+    let _ = ctx
+        .bus()
+        .publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = serve_handle.await;
+}

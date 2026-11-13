@@ -14,6 +14,7 @@ use crate::applier::{KernelNft, NftApplier};
 
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task;
+use tokio::time::{Instant, sleep_until};
 
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
@@ -43,6 +44,10 @@ use nftables::types::NfFamily;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::ruleset::RulesetBuilder;
+
+/// Backoff between retries of a ruleset the kernel refused.
+const RETRY_MIN: Duration = Duration::from_secs(1);
+const RETRY_MAX: Duration = Duration::from_secs(60);
 
 const FIREWALL_DEPS: &[Edge] = &[
     Edge::requires(ServiceId::Interfaces, LossPolicy::Continue),
@@ -507,8 +512,11 @@ impl<A: NftApplier> AsyncService for NftService<A> {
             }
 
             let mut reported_failed = None;
+            let mut retry_delay = RETRY_MIN;
+            let mut retry_at: Option<Instant> = None;
             loop {
-                // Every arm ends here (`continue` included): report what the last apply left.
+                // Every arm ends here (`continue` included): report what the last apply left,
+                // and schedule a retry of a refused ruleset (backoff, reset once one applies).
                 if reported_failed != Some(self.apply_failed) {
                     reported_failed = Some(self.apply_failed);
                     if self.apply_failed {
@@ -517,7 +525,18 @@ impl<A: NftApplier> AsyncService for NftService<A> {
                         h.ready();
                     }
                 }
+                if !self.apply_failed {
+                    retry_at = None;
+                    retry_delay = RETRY_MIN;
+                } else if retry_at.is_none() {
+                    retry_at = Some(Instant::now() + retry_delay);
+                    retry_delay = (retry_delay * 2).min(RETRY_MAX);
+                }
                 tokio::select! {
+                    () = sleep_until(retry_at.unwrap_or_else(Instant::now)), if retry_at.is_some() => {
+                        retry_at = None;
+                        self.reapply(&ctx, "retry").await;
+                    }
                     cmd = h.next_command() => {
                         match cmd {
                             // `cleanup()` locks the WAN down once serve returns.
