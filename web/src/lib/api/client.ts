@@ -8,6 +8,8 @@
 import type {
 	AdblockRuleEntry,
 	ServiceStopImpact,
+	LogLevelStatus,
+	SetLogLevelRequest,
 	AdblockRulesImport,
 	AuthStatusResponse,
 	AuthToken,
@@ -789,6 +791,12 @@ export const controlService = (
 	id: string,
 	action: 'start' | 'stop' | 'restart' | 'Start' | 'Stop' | 'Restart'
 ) => post<void>(`/service/${encodeURIComponent(id)}/control`, { action: action.toLowerCase() });
+
+/** The daemon's log filter and where it comes from. */
+export const logLevel = () => get<LogLevelStatus>('/system/log-level');
+
+/** Saves the filter (`duration_secs: null`), sets it for a while, or resets it (`filter: null`). */
+export const setLogLevel = (req: SetLogLevelRequest) => put<LogLevelStatus>('/system/log-level', req);
 
 /** What stopping `id` does to the running services that require it (dry-run, D-20). */
 export const serviceStopImpact = (id: string) =>

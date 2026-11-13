@@ -110,6 +110,20 @@ unaffected services are not touched. A full restart is `systemctl restart lanfor
 lanforge reload
 ```
 
+### `log` *(alias: `log-level`)*
+Shows or changes what the daemon logs, without editing `RUST_LOG` or restarting. A bare level covers lanforge's own
+modules (libraries stay at `info`); `-all` includes libraries; `module=level` raises one module. A filter without
+`--for` is saved in the database and survives restarts; with `--for` it lasts that long (memory only), then the saved
+filter (or `RUST_LOG`) returns. `trace` always needs `--for` (at most 1h) and an admin; `debug` needs an operator.
+```bash
+lanforge log                               # Filter in force and where it comes from
+lanforge log debug                         # Save: lanforge at debug
+lanforge log info,lanforge_dns=debug       # Save: only DNS at debug
+lanforge log debug-all --for 2h            # Everything at debug for two hours
+lanforge log trace --for 15m               # Trace (admin), back to the saved filter after 15 minutes
+lanforge log --reset                       # Drop saved/temporary filters: back to RUST_LOG
+```
+
 ### `pppoe`
 Monitors and manages the native PPPoE WAN client session.
 ```bash

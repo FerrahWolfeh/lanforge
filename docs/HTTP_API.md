@@ -460,6 +460,8 @@ This route is unauthenticated alongside `/login` and `/status`. Used by CLI and 
 | `GET` | `/api/v1/system/service_banners` | `service_banners` | Real-time status banners of all services |
 | `POST` | `/api/v1/system/service/{id}/control` | `service_control` | Start, stop, or restart a background service |
 | `GET` | `/api/v1/system/service/{id}/stop-impact` | `service_stop_impact` | Dry-run of a stop: running services that require it and their loss outcome |
+| `GET` | `/api/v1/system/log-level` | `log_level` | The daemon's log filter (`active`, `source`, `saved`, `boot`, `expires_in_secs`) |
+| `PUT` | `/api/v1/system/log-level` | `set_log_level` | `{filter, duration_secs}`: save a filter (`duration_secs: null`), set one for a limited time, or `filter: null` to return to `RUST_LOG`. Needs `diagnostics` (operator, `config_write` token); a filter with `trace` needs `admin` and a limit of at most an hour |
 | `GET` | `/api/v1/system/config` | `system_config_export` | Bulk export database configuration |
 | `POST` | `/api/v1/system/config` | `system_config_import` | Bulk import database configuration |
 

@@ -86,6 +86,9 @@ async fn run(cli: Cli, no_color: bool) -> Result<()> {
         Some(Command::Reload(args)) => {
             args.execute(&client, &printer).await?;
         }
+        Some(Command::Log(args)) => {
+            args.execute(&client, &printer).await?;
+        }
         Some(Command::Pppoe(args)) => {
             args.execute(&client, &printer).await?;
         }

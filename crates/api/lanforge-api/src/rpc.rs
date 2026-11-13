@@ -7,8 +7,8 @@ use crate::api::{
     DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse,
     DnsRewritesResponse, DnsStatsResponse, DnsUpstreamModeResponse, DnsUpstreamsResponse,
     EventKind, HostConfigEntry, HostsResponse, LeasesResponse, RpcCallError,
-    ServiceBannersResponse, ServiceStopImpactResponse, SetupPayload, SetupResponse,
-    SetupStatusResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
+    ServiceBannersResponse, ServiceStopImpactResponse, SetLogLevelRequest, SetupPayload,
+    SetupResponse, SetupStatusResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
     SystemConfigImportResponse, TransientHostsResponse, UserListResponse, UserResponse,
     WhoisResponse,
 };
@@ -16,6 +16,7 @@ use lanforge_macros::lanforge_rpc;
 use lanforge_types::{
     auth::ApiScopes,
     identifiers::MacAddr,
+    logging::LogLevelStatus,
     network::{
         QueryResult, TrafficConfig,
         dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool},
@@ -437,4 +438,11 @@ pub trait LanforgeRpc {
         &self,
         id: String,
     ) -> impl Future<Output = Result<ServiceStopImpactResponse, RpcCallError>> + Send;
+    /// The daemon's log filter and where it comes from.
+    fn log_level(&self) -> impl Future<Output = Result<Box<LogLevelStatus>, RpcCallError>> + Send;
+    /// Changes the log filter (saved, or for a limited time); answers the new status.
+    fn set_log_level(
+        &self,
+        req: SetLogLevelRequest,
+    ) -> impl Future<Output = Result<Box<LogLevelStatus>, RpcCallError>> + Send;
 }

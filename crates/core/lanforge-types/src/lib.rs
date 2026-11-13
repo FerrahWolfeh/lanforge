@@ -8,6 +8,7 @@ pub mod device;
 pub mod dhcp;
 pub mod events;
 pub mod identifiers;
+pub mod logging;
 pub mod network;
 pub mod storage;
 pub mod system;

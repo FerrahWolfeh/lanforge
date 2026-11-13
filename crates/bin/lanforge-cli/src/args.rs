@@ -1,5 +1,5 @@
 use crate::commands::{
-    AuthArgs, ConfigArgs, DbArgs, DevicesArgs, DhcpArgs, DnsArgs, FirewallArgs, HostArgs,
+    AuthArgs, ConfigArgs, DbArgs, DevicesArgs, DhcpArgs, DnsArgs, FirewallArgs, HostArgs, LogArgs,
     LoginArgs, PppoeArgs, RaArgs, ReloadArgs, ServiceArgs, SetupArgs, ShutdownArgs, StatusArgs,
     TrafficArgs, UserArgs, WatchArgs, WolArgs,
 };
@@ -84,6 +84,9 @@ pub enum Command {
     Wol(WolArgs),
     /// Trigger configuration reload across all running services in-place
     Reload(ReloadArgs),
+    /// Show or change what the daemon logs (debug, debug-all, trace with --for, --reset)
+    #[command(alias = "log-level")]
+    Log(LogArgs),
     /// Manage `PPPoE` WAN session (status, reconnect, disconnect)
     Pppoe(PppoeArgs),
     /// Manage IPv6 Router Advertisement daemon (status, trigger, config, prefixes, RDNSS, DNSSL)

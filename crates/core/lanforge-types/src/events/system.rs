@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::config::DomainSet;
+use crate::logging::LogFilter;
 use crate::system::{ServiceAction, ServiceId};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -21,5 +22,10 @@ pub enum SystemEvent {
     ServiceControl {
         id: ServiceId,
         action: ServiceAction,
+    },
+    /// The log filter was saved through the API (`None`: back to `RUST_LOG`); the database
+    /// worker persists it.
+    LogFilterSaved {
+        filter: Option<LogFilter>,
     },
 }

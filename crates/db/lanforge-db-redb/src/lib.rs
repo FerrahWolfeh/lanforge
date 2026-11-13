@@ -3,11 +3,13 @@
 
 pub mod device;
 pub mod log;
+pub mod log_filter;
 pub mod prefix;
 pub mod tables;
 pub mod user;
 
 use lanforge_db_core::DbError;
+use lanforge_db_core::config_keys::IN_USE;
 pub use redb;
 use redb::{Database, ReadableDatabase, ReadableTable, WriteTransaction};
 use serde::Serialize;
@@ -419,7 +421,7 @@ impl RedbDatabase {
     }
 
     /// Names of the config keys an older binary left (configuration now lives in the config
-    /// files; the only key still in use is `last_gua_prefix`).
+    /// files; the keys still in use are state, [`lanforge_db_core::config_keys::IN_USE`]).
     pub fn legacy_config_keys(&self) -> Result<Vec<String>, DbError> {
         let read_txn = self
             .db
@@ -434,7 +436,7 @@ impl RedbDatabase {
         for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
             let (key, _) = item.map_err(|e| DbError::Backend(e.to_string()))?;
             let key = key.value();
-            if key != lanforge_db_core::LAST_GUA_PREFIX.name() {
+            if !IN_USE.contains(&key) {
                 names.push(key.to_string());
             }
         }
@@ -1001,19 +1003,37 @@ mod tests {
     }
 
     /// Config keys an older binary left are reported by name (boot warns about them); the
-    /// last GUA prefix is state, not one of them.
+    /// last GUA prefix and the saved log filter are state, not among them.
     #[test]
-    fn legacy_config_keys_are_listed_except_the_prefix_state() {
-        use lanforge_db_core::{ConfigKey, PrefixStore};
+    fn legacy_config_keys_are_listed_except_the_state_keys() {
+        use lanforge_db_core::{ConfigKey, LogFilterStore, PrefixStore};
         use lanforge_types::network::Ipv6Prefix;
 
         let db = RedbDatabase::open_temp().unwrap();
         assert!(db.legacy_config_keys().unwrap().is_empty());
         db.save_last_gua_prefix(Some(Ipv6Prefix::from_addr("2001:db8::".parse().unwrap())))
             .unwrap();
+        db.save_log_filter(Some(&"debug".parse().unwrap())).unwrap();
         assert!(db.legacy_config_keys().unwrap().is_empty());
         db.put(ConfigKey::<u32>::new("dhcp_options"), &1).unwrap();
         assert_eq!(db.legacy_config_keys().unwrap(), vec!["dhcp_options"]);
+    }
+
+    #[test]
+    fn the_log_filter_is_saved_replaced_and_removed() {
+        use lanforge_db_core::LogFilterStore;
+        use lanforge_types::logging::LogFilter;
+
+        let db = RedbDatabase::open_temp().unwrap();
+        assert_eq!(db.load_log_filter().unwrap(), None);
+        let debug: LogFilter = "debug,lanforge_dns=trace".parse().unwrap();
+        db.save_log_filter(Some(&debug)).unwrap();
+        assert_eq!(db.load_log_filter().unwrap(), Some(debug));
+        let all: LogFilter = "debug-all".parse().unwrap();
+        db.save_log_filter(Some(&all)).unwrap();
+        assert_eq!(db.load_log_filter().unwrap(), Some(all));
+        db.save_log_filter(None).unwrap();
+        assert_eq!(db.load_log_filter().unwrap(), None);
     }
 
     #[tokio::test]

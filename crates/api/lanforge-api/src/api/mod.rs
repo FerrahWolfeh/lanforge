@@ -1,5 +1,6 @@
 use lanforge_types::{
     events::TimedEvent,
+    logging::LogLevelStatus,
     network::{
         TrafficConfig,
         dns::adblock::rules_file::RulesImport,
@@ -152,4 +153,6 @@ pub enum Response {
     DnsAdblockGroups(Box<DnsAdblockGroupsResponse>),
     /// The running services a stop would affect (D-20 dry-run).
     ServiceStopImpact(ServiceStopImpactResponse),
+    /// The daemon's log filter and where it comes from.
+    LogLevel(Box<LogLevelStatus>),
 }
