@@ -8,6 +8,7 @@ mod dispatch;
 #[cfg(feature = "adblock")]
 mod error_kinds_adblock;
 mod error_kinds_rewrite;
+mod error_kinds_stats;
 mod log_level;
 mod reload;
 mod stop_impact;
