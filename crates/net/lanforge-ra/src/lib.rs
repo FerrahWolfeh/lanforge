@@ -990,8 +990,7 @@ fn default_dns(cfg: &RaConfig, lctx: &LanforgeContext, ula: Option<Ipv6Addr>) ->
             .collect();
     }
     lctx.pppoe_status()
-        .map(|s| s.ipv6_dns_servers().collect())
-        .unwrap_or_default()
+        .map_or_default(|s| s.ipv6_dns_servers().collect())
 }
 
 #[cfg(test)]

@@ -933,8 +933,7 @@ fn format_log_entry(
 ) -> Vec<String> {
     use chrono::{DateTime, Local, Utc};
     let time_str = DateTime::<Utc>::from_timestamp(entry.timestamp.cast_signed(), 0)
-        .map(|utc| DateTime::<Local>::from(utc).format("%H:%M:%S").to_string())
-        .unwrap_or_default();
+        .map_or_default(|utc| DateTime::<Local>::from(utc).format("%H:%M:%S").to_string());
 
     let client_ip = entry.src_ip.to_string();
     let client_display = entry

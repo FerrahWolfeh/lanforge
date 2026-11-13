@@ -1122,8 +1122,7 @@ impl Dhcpv6Server {
         }
         self.ctx
             .pppoe_status()
-            .map(|s| s.ipv6_dns_servers().collect())
-            .unwrap_or_default()
+            .map_or_default(|s| s.ipv6_dns_servers().collect())
     }
 
     fn add_boot_options(&self, reply: &mut Message, identity: Option<&DeviceIdentity>) {

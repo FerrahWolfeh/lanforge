@@ -320,7 +320,7 @@ impl Dhcpv4Service {
         self.ctx
             .pppoe_status()
             .filter(|s| s.state == PppoeSessionState::Connected)
-            .map(|s| {
+            .map_or_default(|s| {
                 s.dns_servers
                     .iter()
                     .filter_map(|ip| match ip {
@@ -329,7 +329,6 @@ impl Dhcpv4Service {
                     })
                     .collect()
             })
-            .unwrap_or_default()
     }
 
     fn publish_pool_update(&self, server: &DhcpServer, current_cfg: &Dhcpv4Config) {
@@ -776,8 +775,7 @@ impl Dhcpv4Service {
                     state
                         .devices
                         .get(&mac)
-                        .map(|d| d.hostname.name.clone())
-                        .unwrap_or_default()
+                        .map_or_default(|d| d.hostname.name.clone())
                 });
                 let name = if hostname.is_empty() {
                     "unknown"
