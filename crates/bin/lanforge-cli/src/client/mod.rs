@@ -11,13 +11,14 @@ use lanforge_api::api::{
     DnsAnalyticsResponse, DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse,
     DnsQueryResponse, DnsReverseResolversResponse, DnsRewritesResponse, DnsUpstreamsResponse,
     HostConfigEntry, HostsResponse, LeasesResponse, ServiceBannersResponse,
-    ServiceStopImpactResponse, SetupPayload, SetupResponse, SetupStatusResponse, SimpleSuccess,
-    StatusResponse, SystemConfigExport, SystemConfigImportResponse, UserListResponse, UserResponse,
-    WhoisResponse,
+    ServiceStopImpactResponse, SetLogLevelRequest, SetupPayload, SetupResponse,
+    SetupStatusResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
+    SystemConfigImportResponse, UserListResponse, UserResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_types::auth::ApiScopes;
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::logging::LogLevelStatus;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::adblock::{
     AdblockSourceFormat, AdblockUrlKind, BlockingMode, RewriteRule, TimeOfDay,
@@ -592,6 +593,29 @@ impl LanforgeClient {
         }
         let mut rpc = self.connect_rpc().await?;
         rpc.service_stop_impact(id).await.map_err(|e| eyre!("{e}"))
+    }
+
+    /// The daemon's log filter and where it comes from.
+    pub async fn log_level(&self) -> Result<LogLevelStatus> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_get("/system/log-level").await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.log_level().await.map(|s| *s).map_err(|e| eyre!("{e}"))
+    }
+
+    /// Saves, time-limits or resets the daemon's log filter; answers the new status.
+    pub async fn set_log_level(&self, req: SetLogLevelRequest) -> Result<LogLevelStatus> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_put("/system/log-level", &req).await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.set_log_level(req)
+            .await
+            .map(|s| *s)
+            .map_err(|e| eyre!("{e}"))
     }
 
     pub async fn service_banners(&self) -> Result<ServiceBannersResponse> {
