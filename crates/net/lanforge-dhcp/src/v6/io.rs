@@ -1,9 +1,8 @@
 use lanforge_core::error::CoreError;
 use lanforge_transport::{InertHandle, TransportMetrics, UdpTransport, sys};
 use std::io;
-use std::net::{Ipv6Addr, SocketAddr, UdpSocket};
+use std::net::{Ipv6Addr, SocketAddr};
 use std::sync::Arc;
-use tokio::net::UdpSocket as TokioUdpSocket;
 
 const ALL_DHCP_RELAY_AGENTS_AND_SERVERS: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 1, 2);
 
@@ -14,30 +13,18 @@ pub struct Dhcpv6Transport {
 }
 
 impl Dhcpv6Transport {
-    /// Binds the UDP socket, joins the `DHCPv6` multicast group on `iface`, and sets non-blocking mode.
+    /// Binds `[::]:port` on `iface` only and joins the `DHCPv6` servers group (`ff02::1:2`) there.
+    ///
+    /// # Errors
+    /// The interface does not exist, the port cannot be bound, or the group cannot be joined: a
+    /// server that never hears Solicits must not report itself running.
     pub fn new(iface: &str, port: u16) -> Result<Self, CoreError> {
-        let std_socket = UdpSocket::bind(("::", port))
-            .map_err(|e| CoreError::Generic(format!("Failed to bind DHCPv6 socket: {e}")))?;
-
+        let inner =
+            UdpTransport::bind_device(iface, SocketAddr::from((Ipv6Addr::UNSPECIFIED, port)))?;
+        // The socket is bound to `iface`, so the name resolves.
         let ifindex = sys::if_name_to_index(iface).unwrap_or(0);
-        if let Err(e) = std_socket.join_multicast_v6(&ALL_DHCP_RELAY_AGENTS_AND_SERVERS, ifindex) {
-            tracing::warn!("Failed to join ff02::1:2 on {iface} (index {ifindex}): {e}");
-        }
-
-        let sock = socket2::Socket::from(std_socket);
-        if let Err(e) = sock.bind_device(Some(iface.as_bytes())) {
-            tracing::debug!("DHCPv6 SO_BINDTODEVICE({iface}): {e} (continuing anyway)");
-        }
-        let std_socket: UdpSocket = sock.into();
-
-        std_socket.set_nonblocking(true).map_err(CoreError::Io)?;
-
-        let socket = TokioUdpSocket::from_std(std_socket)
-            .map_err(|e| CoreError::Generic(format!("tokio UdpSocket conversion: {e}")))?;
-
-        Ok(Self {
-            inner: UdpTransport::from_tokio(socket),
-        })
+        inner.join_multicast_v6(&ALL_DHCP_RELAY_AGENTS_AND_SERVERS, ifindex)?;
+        Ok(Self { inner })
     }
 
     /// Creates an in-memory inert transport for rootless testing and simulation.
@@ -82,6 +69,20 @@ mod tests {
     use crate::test_utils::Dhcpv6PacketBuilder;
     use lanforge_types::identifiers::Duid;
     use tokio::time::{Duration, timeout};
+
+    /// A LAN interface that does not exist fails the bind as `NoDevice` (it used to bind
+    /// anyway and listen on every interface, reporting itself running).
+    #[tokio::test]
+    async fn a_missing_interface_fails_as_no_device() {
+        let Err(err) = Dhcpv6Transport::new("lfnone0", 0) else {
+            panic!("bound on an interface that does not exist");
+        };
+        assert_eq!(
+            err.bind_error().map(|e| e.kind),
+            Some(lanforge_transport::BindErrorKind::NoDevice),
+            "{err}"
+        );
+    }
 
     #[test]
     fn should_initialize_inert_transport_and_report_is_inert() {

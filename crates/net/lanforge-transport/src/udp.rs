@@ -168,12 +168,6 @@ impl UdpTransport {
         res.map_err(|e| bind_error(format!("{group}%{ifindex}"), e))
     }
 
-    /// Wraps an existing Tokio UDP socket as a single-socket transport.
-    #[must_use]
-    pub fn from_tokio(socket: TokioUdpSocket) -> Self {
-        Self::from_backend(UdpBackend::KernelSingle(socket))
-    }
-
     fn from_backend(backend: UdpBackend) -> Self {
         Self {
             inner: Arc::new(UdpInner {
