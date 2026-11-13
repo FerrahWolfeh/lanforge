@@ -6,6 +6,11 @@ use lanforge_types::network::dns::{DnsRecordEntry, DnsRecordType, DnsRequest, Dn
 use std::{collections::HashMap, net::IpAddr, time::Instant};
 use tracing::debug;
 
+enum DiagnosticError {
+    Rejected(String),
+    Internal(String),
+}
+
 impl ClientContext {
     pub async fn handle_dns_query(
         &self,
@@ -22,7 +27,10 @@ impl ClientContext {
                 authoritative: auth,
                 result,
             })),
-            Err(e) => Response::Error {
+            Err(DiagnosticError::Rejected(e)) => Response::Rejected {
+                error: format!("DNS resolution failed: {e}"),
+            },
+            Err(DiagnosticError::Internal(e)) => Response::Error {
                 error: format!("DNS resolution failed: {e}"),
             },
         }
@@ -32,9 +40,11 @@ impl ClientContext {
         &self,
         name: &str,
         qtype: DnsRecordType,
-    ) -> Result<(Vec<DnsRecordEntry>, bool, String), String> {
+    ) -> Result<(Vec<DnsRecordEntry>, bool, String), DiagnosticError> {
         let Some(handle) = self.ctx.dns_handle() else {
-            return Err("DNS service handle not available".into());
+            return Err(DiagnosticError::Internal(
+                "DNS service handle not available".into(),
+            ));
         };
 
         match handle
@@ -44,8 +54,16 @@ impl ClientContext {
             })
             .await
         {
-            Ok(DnsResponse::Query(res)) => res,
-            _ => Err("Invalid response from DNS service".into()),
+            Ok(DnsResponse::Query(Ok(res))) => Ok(res),
+            Ok(DnsResponse::Query(Err(e)))
+                if e == "Failed to parse query question" || e == "Failed to parse query header" =>
+            {
+                Err(DiagnosticError::Rejected(e))
+            }
+            Ok(DnsResponse::Query(Err(e))) | Err(e) => Err(DiagnosticError::Internal(e)),
+            _ => Err(DiagnosticError::Internal(
+                "Invalid response from DNS service".into(),
+            )),
         }
     }
 
