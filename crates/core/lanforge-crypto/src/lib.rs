@@ -10,6 +10,8 @@
 compile_error!("lanforge-crypto: `tls` needs a crypto provider; enable `ring` or `aws-lc`");
 
 pub mod hash;
+#[cfg(any(feature = "ring", feature = "aws-lc"))]
+pub mod hmac;
 pub mod password;
 #[cfg(feature = "tls")]
 pub mod tls;

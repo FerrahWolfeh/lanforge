@@ -2,5 +2,5 @@
 # scripts/check-size.sh fails when a binary grows more than SIZE_TOLERANCE_PCT (5) % over its line.
 # A deliberate growth raises the line in the same commit; a large shrink lowers it.
 # <binary> <bytes>   (measured on branch binary-size, 2026-11-13)
-lanforged 12659720
+lanforged 12209864
 lanforge 7275184

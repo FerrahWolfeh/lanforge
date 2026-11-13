@@ -3,6 +3,7 @@
 //! Add new test files as modules here, never as new `tests/*.rs` files.
 
 mod contract;
+mod session_tokens;
 mod simulation;
 #[cfg(feature = "webui")]
 mod webui;

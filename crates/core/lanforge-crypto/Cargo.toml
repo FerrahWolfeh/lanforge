@@ -12,11 +12,13 @@ xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
 rustls = { workspace = true, optional = true }
 rustls-pki-types = { version = "1.14.1", features = ["std"], optional = true }
 thiserror = { workspace = true, optional = true }
+ring = { version = "0.17.14", optional = true }
+aws-lc-rs = { version = "1.18.1", optional = true, default-features = false, features = ["aws-lc-sys"] }
 
 [features]
 tls = ["dep:rustls", "dep:rustls-pki-types", "dep:thiserror"]
-ring = ["rustls?/ring"]
-aws-lc = ["rustls?/aws-lc-rs"]
+ring = ["dep:ring", "rustls?/ring"]
+aws-lc = ["dep:aws-lc-rs", "rustls?/aws-lc-rs"]
 
 [lints]
 workspace = true

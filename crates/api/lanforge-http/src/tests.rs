@@ -28,8 +28,7 @@ async fn test_auth_manager_token_lifecycle() {
 #[tokio::test]
 async fn test_auth_token_expiration() {
     let auth = AuthManager::new();
-    // Since we can't easily mock time in jsonwebtoken without more effort,
-    // we just verify that exp is set in the future.
+    // Expiry itself is covered in `integration_tests::session_tokens`.
     let token = auth.generate_token("admin", "admin", 0).unwrap();
 
     let claims = auth.validate_token(&token).unwrap();
