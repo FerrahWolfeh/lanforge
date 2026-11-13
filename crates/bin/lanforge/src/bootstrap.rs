@@ -13,7 +13,8 @@ use lanforge_api::config_file::log_issues;
 use lanforge_core::bus::EventBus;
 use lanforge_core::context::state::State;
 use lanforge_core::context::{ConfigPatch, LanforgeContext};
-use lanforge_db::{LanforgeDb, LogDb, LogStore, PrefixStore, UserStore};
+use lanforge_core::logging::LogLevels;
+use lanforge_db::{LanforgeDb, LogDb, LogFilterStore, LogStore, PrefixStore, UserStore};
 #[cfg(feature = "dhcp")]
 use lanforge_dhcp::v4::sanity::derive_dhcp_defaults_from_v4;
 use lanforge_discovery::refresh_interface;
@@ -161,8 +162,9 @@ pub struct BootstrapResult {
 pub struct Bootstrapper;
 
 impl Bootstrapper {
-    /// Executes the full bootstrap sequence.
-    pub async fn run() -> Result<(BootstrapResult, LanforgeContext)> {
+    /// Executes the full bootstrap sequence. `log_levels` controls the installed subscriber:
+    /// the filter saved in the database replaces `RUST_LOG` as soon as the database opens.
+    pub async fn run(log_levels: Arc<LogLevels>) -> Result<(BootstrapResult, LanforgeContext)> {
         // --- PHASE 1: Initialization ---
         let mut cfg = Config::load();
 
@@ -186,11 +188,16 @@ impl Bootstrapper {
         let db = Arc::new(db);
         let log_db = Arc::new(log_db);
         let cfg = Arc::new(cfg);
+        match db.load_log_filter() {
+            Ok(saved) => log_levels.restore(saved),
+            Err(e) => warn!("Could not read the saved log filter: {e}"),
+        }
 
         let ctx = LanforgeContext::new(Arc::clone(&bus), initial_table, Some(target_ifindex));
         if let Some(build) = BuildInfo::parse(env!("LANFORGE_BUILD")) {
             ctx.set_build(build);
         }
+        ctx.provide_shared(log_levels);
         Self::populate_context(&ctx, &cfg, &db);
         // `[hosts]` is the static hosts' only source: the table follows it.
         if let Some(hosts) = cfg.static_hosts.as_ref() {

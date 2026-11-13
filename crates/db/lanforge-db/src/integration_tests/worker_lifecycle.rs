@@ -548,3 +548,59 @@ async fn the_worker_never_writes_configuration() {
     assert_eq!(written, original, "the worker wrote the config file");
     assert_eq!(db.legacy_config_keys().unwrap(), Vec::<String>::new());
 }
+
+/// A filter saved through the API reaches redb, where the next boot reads it; saving `None`
+/// removes it.
+#[tokio::test]
+async fn the_worker_persists_the_saved_log_filter() {
+    use crate::LogFilterStore;
+    use lanforge_types::logging::LogFilter;
+
+    let (ctx, bus) = create_test_context();
+    let db = Arc::new(LanforgeDb::open_in_memory().unwrap());
+    let log_db = Arc::new(LogDb::open_in_memory());
+    let cfg = DatabaseConfig {
+        flush_interval: 60,
+        ..DatabaseConfig::default()
+    };
+    let mut worker = DbWorker::new(cfg, ctx.clone(), Arc::clone(&db), log_db);
+    worker.init(&ctx).await.unwrap();
+    let ctx_clone = ctx.clone();
+    let h = ServiceHandle::new(ServiceId::Db, ctx_clone.clone());
+    let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
+    timeout(Duration::from_secs(1), ctx.wait_for_service(ServiceId::Db))
+        .await
+        .expect("db worker must become Online")
+        .expect("wait aborted");
+
+    let debug: LogFilter = "debug,lanforge_dns=trace".parse().unwrap();
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::LogFilterSaved {
+        filter: Some(debug.clone()),
+    }));
+    timeout(Duration::from_secs(1), async {
+        while db.load_log_filter().unwrap().is_none() {
+            sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("filter saved");
+    assert_eq!(db.load_log_filter().unwrap(), Some(debug));
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::LogFilterSaved {
+        filter: None,
+    }));
+    timeout(Duration::from_secs(1), async {
+        while db.load_log_filter().unwrap().is_some() {
+            sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("filter removed");
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    timeout(Duration::from_secs(1), handle)
+        .await
+        .expect("worker shutdown timed out")
+        .expect("worker task panicked")
+        .expect("worker failed");
+}

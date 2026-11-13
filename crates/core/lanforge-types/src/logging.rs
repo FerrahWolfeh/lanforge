@@ -215,6 +215,72 @@ impl TryFrom<String> for LogFilter {
     }
 }
 
+/// Where the filter in force comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogSource {
+    /// Neither saved nor in `RUST_LOG`: `info`.
+    Default,
+    /// The daemon's `RUST_LOG`.
+    Env,
+    /// Saved through the API; kept across restarts.
+    Saved,
+    /// Set through the API for a limited time; gone at its end or on a restart.
+    Temporary,
+}
+
+/// The daemon's log filter and how it got there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LogLevelStatus {
+    /// The filter in force.
+    pub active: LogFilter,
+    pub source: LogSource,
+    /// The saved filter, if any (what a temporary one returns to).
+    pub saved: Option<LogFilter>,
+    /// The filter from `RUST_LOG` (or `info`): what is in force when nothing is saved.
+    pub boot: LogFilter,
+    /// Seconds left of a temporary filter.
+    pub expires_in_secs: Option<u64>,
+}
+
+impl LogFilter {
+    /// Shortest time limit: anything shorter is a typo.
+    pub const MIN_DURATION_SECS: u64 = 60;
+    /// Longest time limit (a week).
+    pub const MAX_DURATION_SECS: u64 = 7 * 24 * 3600;
+    /// Longest a filter with `trace` anywhere may last: it floods the journal and wears the
+    /// storage of a small board, so it is never saved and never left on for long.
+    pub const MAX_TRACE_SECS: u64 = 3600;
+
+    /// Whether this filter may be set for `duration_secs` (`None`: saved, no limit).
+    ///
+    /// # Errors
+    /// Why not, for the user: `trace` without a limit or over [`Self::MAX_TRACE_SECS`], or a
+    /// limit outside [`Self::MIN_DURATION_SECS`]..=[`Self::MAX_DURATION_SECS`].
+    pub fn check_duration(&self, duration_secs: Option<u64>) -> Result<(), String> {
+        let trace = self.max_level() == LogLevel::Trace;
+        match duration_secs {
+            None if trace => Err(format!(
+                "trace needs a time limit (at most {} minutes)",
+                Self::MAX_TRACE_SECS / 60
+            )),
+            Some(d) if d < Self::MIN_DURATION_SECS => Err(format!(
+                "a time limit is at least {} seconds",
+                Self::MIN_DURATION_SECS
+            )),
+            Some(d) if trace && d > Self::MAX_TRACE_SECS => Err(format!(
+                "trace lasts at most {} minutes",
+                Self::MAX_TRACE_SECS / 60
+            )),
+            Some(d) if d > Self::MAX_DURATION_SECS => Err(format!(
+                "a time limit is at most {} days",
+                Self::MAX_DURATION_SECS / 86_400
+            )),
+            None | Some(_) => Ok(()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{LogFilter, LogLevel};
@@ -300,6 +366,34 @@ mod tests {
             .map(|i| format!("t{i}=debug"))
             .collect();
         assert!(many.join(",").parse::<LogFilter>().is_err());
+    }
+
+    #[test]
+    fn trace_is_time_limited_and_limits_are_bounded() {
+        let debug = parse("debug");
+        assert!(debug.check_duration(None).is_ok());
+        assert!(debug.check_duration(Some(60)).is_ok());
+        assert!(
+            debug
+                .check_duration(Some(LogFilter::MAX_DURATION_SECS))
+                .is_ok()
+        );
+        assert!(debug.check_duration(Some(59)).is_err());
+        assert!(
+            debug
+                .check_duration(Some(LogFilter::MAX_DURATION_SECS + 1))
+                .is_err()
+        );
+
+        for trace in ["trace", "trace-all", "info,lanforge_dns=trace"] {
+            let f = parse(trace);
+            assert!(f.check_duration(None).is_err(), "{trace} saved");
+            assert!(f.check_duration(Some(LogFilter::MAX_TRACE_SECS)).is_ok());
+            assert!(
+                f.check_duration(Some(LogFilter::MAX_TRACE_SECS + 1))
+                    .is_err()
+            );
+        }
     }
 
     #[test]

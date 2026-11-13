@@ -5,6 +5,7 @@ pub use lanforge_types::auth::{ApiScopes, ApiTokenEntry, UserEntry, UserInfo, Us
 use lanforge_types::device::{Device, Origin};
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::logging::LogFilter;
 use lanforge_types::network::Ipv6Prefix;
 use lanforge_types::network::dns::{DnsLifetimeStats, DnsRecordType};
 use lanforge_types::network::{
@@ -255,9 +256,15 @@ impl<T: ?Sized> Debug for ConfigKey<T> {
 
 pub mod config_keys {
     use super::ConfigKey;
+    use lanforge_types::logging::LogFilter;
     use lanforge_types::network::Ipv6Prefix;
 
     pub const LAST_GUA_PREFIX: ConfigKey<Ipv6Prefix> = ConfigKey::new("last_gua_prefix");
+    /// The log filter saved through the API (a logging switch: state, not file config).
+    pub const LOG_FILTER: ConfigKey<LogFilter> = ConfigKey::new("log_filter");
+
+    /// The keys of the config table still in use; any other was left by an older binary.
+    pub const IN_USE: [&str; 2] = [LAST_GUA_PREFIX.name(), LOG_FILTER.name()];
 }
 
 pub use config_keys::*;
@@ -350,6 +357,14 @@ pub trait PrefixStore: Send + Sync {
 
     /// Saves the last active GUA prefix to state.
     fn save_last_gua_prefix(&self, prefix: Option<Ipv6Prefix>) -> Result<(), DbError>;
+}
+
+/// The log filter saved through the API, kept across restarts.
+pub trait LogFilterStore: Send + Sync {
+    fn load_log_filter(&self) -> Result<Option<LogFilter>, DbError>;
+
+    /// Saves `filter`; `None` removes it.
+    fn save_log_filter(&self, filter: Option<&LogFilter>) -> Result<(), DbError>;
 }
 
 /// Handles storage and administration of user accounts.

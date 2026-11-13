@@ -315,6 +315,7 @@ const fn event_topic_and_kind(event: &LanforgeEvent) -> (&'static str, &'static 
                 SystemEvent::ConfigUpdate { .. } => "ConfigUpdate",
                 SystemEvent::ServiceControl { .. } => "ServiceControl",
                 SystemEvent::ConfigChanged { .. } => "ConfigChanged",
+                SystemEvent::LogFilterSaved { .. } => "LogFilterSaved",
             },
         ),
         LanforgeEvent::Storage(s) => (

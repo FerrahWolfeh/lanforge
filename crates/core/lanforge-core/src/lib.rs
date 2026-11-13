@@ -55,6 +55,7 @@ use {serde_json as _, tempfile as _};
 pub mod bus;
 pub mod context;
 pub mod error;
+pub mod logging;
 pub mod macros;
 pub mod service;
 

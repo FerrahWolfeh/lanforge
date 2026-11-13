@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use std::{env, process};
 use tokio::runtime::Builder;
 use tokio::time::interval;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::util::SubscriberInitExt;
 
 #[cfg(all(feature = "jemalloc", not(feature = "hotpath-alloc")))]
@@ -60,7 +60,12 @@ async fn async_main(started: Instant) -> Result<()> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     // 1. Setup Logging
-    logging::subscriber(env::var("RUST_LOG").ok().as_deref()).init();
+    let (subscriber, log_levels, rust_log_error) =
+        logging::subscriber(env::var("RUST_LOG").ok().as_deref());
+    subscriber.init();
+    if let Some(e) = rust_log_error {
+        warn!("{e}");
+    }
 
     // 1.0.1 The PPPoE session a restart left in the fd store (before any child process could
     // inherit its descriptors).
@@ -93,7 +98,7 @@ async fn async_main(started: Instant) -> Result<()> {
     }
 
     // 2. Run Bootstrap
-    let (bootstrap, ctx) = Bootstrapper::run().await?;
+    let (bootstrap, ctx) = Bootstrapper::run(log_levels).await?;
 
     // 3. Initialize and run Daemon
     let daemon = Daemon::new(bootstrap, ctx, started.into());
