@@ -284,7 +284,7 @@ impl ClientContext {
             .iter()
             .any(|u| u.url == url)
         {
-            return Response::Error {
+            return Response::NotFound {
                 error: format!("URL '{url}' not found"),
             };
         }

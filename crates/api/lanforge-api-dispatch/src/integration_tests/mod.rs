@@ -5,6 +5,8 @@
 mod api_tests;
 mod banners;
 mod dispatch;
+#[cfg(feature = "adblock")]
+mod error_kinds_adblock;
 mod log_level;
 mod reload;
 mod stop_impact;
