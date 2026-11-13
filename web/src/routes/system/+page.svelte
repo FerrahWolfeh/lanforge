@@ -41,6 +41,7 @@
 	import type { ServerCapabilities } from "$lib/api/types";
 
 	import StopImpactDialog from "$lib/components/StopImpactDialog.svelte";
+	import LogLevelCard from "./components/LogLevelCard.svelte";
 	let stopDialog = $state<StopImpactDialog>();
 
 	// Scan, reload and service control are admin-only on the server.
@@ -412,6 +413,8 @@
 			{/if}
 		</Card.Content>
 	</Card.Root>
+
+	<LogLevelCard />
 
 	<!-- Services -->
 	<Card.Root class="md:col-span-2 xl:col-span-3">

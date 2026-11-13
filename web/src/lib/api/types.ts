@@ -43,6 +43,7 @@ export type Permission =
 	| 'dns_query'
 	| 'device_write'
 	| 'dns_write'
+	| 'diagnostics'
 	| 'upstream_write'
 	| 'config_write'
 	| 'admin';
@@ -146,6 +147,30 @@ export interface TransportSnapshot {
 export type StopOutcome = 'keeps_running' | 'degraded' | 'paused';
 
 /** D-20 dry-run: the running services that require a service about to stop. */
+/** Where the daemon's log filter comes from. Mirrors `lanforge_types::logging::LogSource`. */
+export type LogSource = 'default' | 'env' | 'saved' | 'temporary';
+
+/**
+ * The daemon's log filter. Mirrors `lanforge_types::logging::LogLevelStatus`; filters are text:
+ * `debug` (lanforge's modules), `debug-all` (libraries too), `info,lanforge_dns=debug`.
+ */
+export interface LogLevelStatus {
+	active: string;
+	source: LogSource;
+	saved: string | null;
+	/** From `RUST_LOG`, or `info`: in force when nothing is saved. */
+	boot: string;
+	expires_in_secs: number | null;
+}
+
+/** Mirrors `lanforge_api::api::SetLogLevelRequest`. */
+export interface SetLogLevelRequest {
+	/** `null` drops the saved and any temporary filter (back to `RUST_LOG`). */
+	filter: string | null;
+	/** `null` saves the filter; trace needs at most 3600. */
+	duration_secs: number | null;
+}
+
 export interface ServiceStopImpact {
 	id: string;
 	affected: { id: string; name: string; outcome: StopOutcome }[];
@@ -504,6 +529,10 @@ export function formatEventPayload(
 	}
 	if (kind === 'Shutdown') {
 		return 'System daemon shutdown initiated';
+	}
+	if (kind === 'LogFilterSaved') {
+		const filter = data?.filter as string | null | undefined;
+		return filter ? `Log filter saved: ${filter}` : 'Saved log filter removed (back to RUST_LOG)';
 	}
 	if (kind === 'SystemReady') {
 		return 'All system services initialized and ready';
