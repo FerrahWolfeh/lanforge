@@ -37,7 +37,9 @@ impl RewriteStore {
         let mut rule_indices = Vec::new();
 
         for (idx, rule) in new_rules.iter().enumerate() {
-            let domain = rule.domain.trim();
+            // Query names arrive lowercased; DNS names compare case-insensitively (RFC 4343).
+            let domain = rule.domain.trim().to_ascii_lowercase();
+            let domain = domain.as_str();
             if let Some(base) = domain.strip_prefix("*.") {
                 if let Ok(glob1) = Glob::new(domain) {
                     builder.add(glob1);
