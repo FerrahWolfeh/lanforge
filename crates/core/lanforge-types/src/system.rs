@@ -104,7 +104,6 @@ pub enum Cap {
     MdnsProbe,
     Uds,
     Http,
-    Zstd,
     #[serde(alias = "redb")]
     Storage,
     Pppoe,
