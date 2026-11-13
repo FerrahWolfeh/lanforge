@@ -288,7 +288,7 @@ impl TrafficCollector {
                 egress = Some(q.clone());
             }
             if ingress.is_none() && q.dev.starts_with("ifb") {
-                ingress = Some(q.clone());
+                ingress = Some(q);
             }
         }
 
