@@ -21,6 +21,9 @@ pub enum Permission {
     DeviceWrite,
     /// Day-to-day DNS operations: allow/block, rules, rewrites, cache.
     DnsWrite,
+    /// The daemon's log filter up to `debug`; a filter with `trace` also needs [`Self::Admin`]
+    /// (checked by the route, which sees the filter).
+    Diagnostics,
     /// DNS upstream servers and reverse resolvers.
     UpstreamWrite,
     /// Service configuration, including reads of config that holds secrets (the `PPPoE` password).
@@ -31,12 +34,13 @@ pub enum Permission {
 
 impl Permission {
     /// Every permission, in declaration order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Authenticated,
         Self::Read,
         Self::DnsQuery,
         Self::DeviceWrite,
         Self::DnsWrite,
+        Self::Diagnostics,
         Self::UpstreamWrite,
         Self::ConfigWrite,
         Self::Admin,
@@ -51,6 +55,7 @@ impl Permission {
             Self::DnsQuery => "dns_query",
             Self::DeviceWrite => "device_write",
             Self::DnsWrite => "dns_write",
+            Self::Diagnostics => "diagnostics",
             Self::UpstreamWrite => "upstream_write",
             Self::ConfigWrite => "config_write",
             Self::Admin => "admin",
@@ -99,7 +104,9 @@ fn canonical(path: &str) -> &str {
 #[must_use]
 #[allow(clippy::match_same_arms)]
 pub fn requirement(method: &Method, path: &str) -> Requirement {
-    use Permission::{Admin, Authenticated, ConfigWrite, DeviceWrite, DnsQuery, DnsWrite, Read};
+    use Permission::{
+        Admin, Authenticated, ConfigWrite, DeviceWrite, Diagnostics, DnsQuery, DnsWrite, Read,
+    };
 
     let read = matches!(*method, Method::GET | Method::HEAD);
     let p = canonical(path);
@@ -140,6 +147,8 @@ pub fn requirement(method: &Method, path: &str) -> Requirement {
 
         (true, _) => Read,
 
+        (false, ["log-level"]) => Diagnostics,
+
         (false, ["devices" | "hosts", ..]) => DeviceWrite,
         (false, ["dhcp", "leases", ..] | ["dhcp", "reconcile"]) => DeviceWrite,
 
@@ -158,12 +167,12 @@ pub fn requirement(method: &Method, path: &str) -> Requirement {
 }
 
 const fn role_grants(role: UserRole, permission: Permission) -> bool {
-    use Permission::{Authenticated, DeviceWrite, DnsQuery, DnsWrite, Read};
+    use Permission::{Authenticated, DeviceWrite, Diagnostics, DnsQuery, DnsWrite, Read};
     match role {
         UserRole::Admin => true,
         UserRole::Operator => matches!(
             permission,
-            Authenticated | Read | DnsQuery | DeviceWrite | DnsWrite
+            Authenticated | Read | DnsQuery | DeviceWrite | DnsWrite | Diagnostics
         ),
         UserRole::Viewer => matches!(permission, Authenticated | Read | DnsQuery),
     }
@@ -182,7 +191,10 @@ const fn scope_grants(scope: ApiScope, permission: Permission) -> bool {
                 ApiScope::UpstreamWrite | ApiScope::ConfigWrite,
                 Permission::UpstreamWrite
             )
-            | (ApiScope::ConfigWrite, ConfigWrite | DnsWrite)
+            | (
+                ApiScope::ConfigWrite,
+                ConfigWrite | DnsWrite | Permission::Diagnostics
+            )
     )
 }
 
@@ -310,6 +322,41 @@ mod tests {
         ] {
             assert!(!allowed(&op, &method, path), "{method} {path}");
         }
+    }
+
+    #[test]
+    fn log_level_reads_are_open_and_changes_need_diagnostics() {
+        let get = |m: Method| requirement(&m, "/api/v1/system/log-level");
+        assert_eq!(get(Method::GET), Requirement::plain(Permission::Read));
+        assert_eq!(
+            get(Method::PUT),
+            Requirement::plain(Permission::Diagnostics)
+        );
+        assert_eq!(
+            requirement(&Method::PUT, "/api/v1/log-level"),
+            Requirement::plain(Permission::Diagnostics)
+        );
+
+        for (who, can) in [
+            (session("admin"), true),
+            (session("operator"), true),
+            (session("viewer"), false),
+            (token(&[ApiScope::ConfigWrite]), true),
+            (token(&[ApiScope::Admin]), true),
+            (token(&[ApiScope::Monitoring]), false),
+            (token(&[ApiScope::DnsQuery, ApiScope::DeviceWrite]), false),
+        ] {
+            assert_eq!(
+                allowed(&who, &Method::PUT, "/api/v1/system/log-level"),
+                can,
+                "{who:?}"
+            );
+        }
+        assert!(allowed(
+            &session("viewer"),
+            &Method::GET,
+            "/api/v1/system/log-level"
+        ));
     }
 
     #[test]

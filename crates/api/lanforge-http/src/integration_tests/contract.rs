@@ -2184,6 +2184,7 @@ async fn test_me_lists_the_permissions_the_server_grants() {
             "dns_query",
             "device_write",
             "dns_write",
+            "diagnostics",
             "upstream_write",
             "config_write",
             "admin"
@@ -2491,4 +2492,168 @@ async fn every_answer_names_the_daemon_build() {
     let (status, _, headers) = locked.get_raw("/api/v1/status").await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert!(headers.contains_key(lanforge_api::BUILD_HEADER));
+}
+
+/// The log filter over HTTP: anyone signed in reads it; an operator (or a `config_write`
+/// token) raises it up to `debug`; only an admin turns on `trace`, and always with a time
+/// limit. Malformed filters are client errors.
+#[tokio::test]
+async fn test_log_level_contract() {
+    use lanforge_core::logging::LogLevels;
+    use lanforge_types::auth::{ApiScope, ApiScopes, UserRole};
+
+    let state = make_state(false).await;
+    for (name, role) in [
+        ("admin", UserRole::Admin),
+        ("operator", UserRole::Operator),
+        ("viewer", UserRole::Viewer),
+    ] {
+        state
+            .db
+            .create_user(
+                name,
+                &lanforge_crypto::hash_password(ADMIN_PASSWORD),
+                role,
+                0,
+            )
+            .unwrap();
+    }
+    state
+        .db
+        .store_api_token(
+            "lf_ak_config",
+            "admin",
+            &ApiScopes::from_slice(&[ApiScope::ConfigWrite]),
+            None,
+            0,
+        )
+        .unwrap();
+    state
+        .ctx
+        .provide_shared(Arc::new(LogLevels::new(None, |_| {})));
+    let router = build_router(state);
+    let session = |name: &'static str| {
+        let router = router.clone();
+        async move {
+            login(
+                &router,
+                json!({"username": name, "password": ADMIN_PASSWORD}),
+            )
+            .await
+            .1
+        }
+    };
+    let (admin, operator, viewer) = (
+        session("admin").await,
+        session("operator").await,
+        session("viewer").await,
+    );
+    let uri = "/api/v1/system/log-level";
+    let put = |filter: Value, duration: Value| json!({"filter": filter, "duration_secs": duration});
+
+    let (status, body) = send(&router, "GET", uri, &viewer, None, json!(null)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["active"], "info");
+    assert_eq!(body["data"]["source"], "default");
+
+    for (who, token, filter, duration, want) in [
+        (
+            "viewer",
+            &viewer,
+            json!("debug"),
+            json!(null),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "operator",
+            &operator,
+            json!("debug"),
+            json!(null),
+            StatusCode::OK,
+        ),
+        (
+            "operator",
+            &operator,
+            json!("trace"),
+            json!(600),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "operator",
+            &operator,
+            json!("info,lanforge_dns=trace"),
+            json!(600),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "token",
+            &"lf_ak_config".to_string(),
+            json!("trace-all"),
+            json!(600),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "token",
+            &"lf_ak_config".to_string(),
+            json!("debug-all"),
+            json!(600),
+            StatusCode::OK,
+        ),
+        (
+            "admin",
+            &admin,
+            json!("trace"),
+            json!(null),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "admin",
+            &admin,
+            json!("trace"),
+            json!(7200),
+            StatusCode::BAD_REQUEST,
+        ),
+        ("admin", &admin, json!("trace"), json!(600), StatusCode::OK),
+    ] {
+        let (status, body) = send(
+            &router,
+            "PUT",
+            uri,
+            token,
+            None,
+            put(filter.clone(), duration.clone()),
+        )
+        .await;
+        assert_eq!(status, want, "{who} {filter} {duration}: {body}");
+    }
+    let (_, body) = send(&router, "GET", uri, &viewer, None, json!(null)).await;
+    assert_eq!(body["data"]["active"], "trace");
+    assert_eq!(body["data"]["source"], "temporary");
+    assert_eq!(body["data"]["saved"], "debug");
+    assert_eq!(body["data"]["expires_in_secs"], 600);
+
+    // Back to RUST_LOG.
+    let (status, body) = send(
+        &router,
+        "PUT",
+        uri,
+        &operator,
+        None,
+        put(json!(null), json!(null)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["source"], "default");
+    assert_eq!(body["data"]["saved"], Value::Null);
+
+    let (status, _) = send(
+        &router,
+        "PUT",
+        uri,
+        &admin,
+        None,
+        put(json!("loud"), json!(null)),
+    )
+    .await;
+    assert!(status.is_client_error(), "{status}");
 }

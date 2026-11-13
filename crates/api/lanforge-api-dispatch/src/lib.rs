@@ -21,8 +21,8 @@ use lanforge_api::api::{
     DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse,
     DnsRewritesResponse, DnsStatsResponse, DnsUpstreamModeResponse, DnsUpstreamsResponse,
     EventKind, HostConfigEntry, HostsResponse, LeasesResponse, Response, RpcCallError,
-    ServiceBannersResponse, ServiceStopImpactResponse, SetupPayload, SetupResponse,
-    SetupStatusResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
+    ServiceBannersResponse, ServiceStopImpactResponse, SetLogLevelRequest, SetupPayload,
+    SetupResponse, SetupStatusResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
     SystemConfigImportResponse, TransientHostsResponse, UserListResponse, UserResponse,
     WhoisResponse,
 };
@@ -31,6 +31,7 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_types::auth::ApiScopes;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::logging::LogLevelStatus;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::DnsRecordType;
 use lanforge_types::network::dns::adblock::{
@@ -757,6 +758,23 @@ impl LanforgeRpc for ClientContext {
     ) -> Result<ServiceStopImpactResponse, RpcCallError> {
         match self.handle_service_stop_impact(id).await {
             Response::ServiceStopImpact(s) => Ok(s),
+            other => Err(Self::map_failure(other)),
+        }
+    }
+
+    async fn log_level(&self) -> Result<Box<LogLevelStatus>, RpcCallError> {
+        match self.handle_log_level() {
+            Response::LogLevel(s) => Ok(s),
+            other => Err(Self::map_failure(other)),
+        }
+    }
+
+    async fn set_log_level(
+        &self,
+        req: SetLogLevelRequest,
+    ) -> Result<Box<LogLevelStatus>, RpcCallError> {
+        match self.handle_set_log_level(req) {
+            Response::LogLevel(s) => Ok(s),
             other => Err(Self::map_failure(other)),
         }
     }

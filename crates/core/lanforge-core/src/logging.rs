@@ -82,10 +82,11 @@ impl LogLevels {
             source,
             saved: levels.saved.clone(),
             boot: levels.boot.clone(),
-            expires_in_secs: levels
-                .temporary
-                .as_ref()
-                .map(|t| t.until.saturating_duration_since(Instant::now()).as_secs()),
+            // Rounded up: a filter set for 600 s reads 600, not 599, right after.
+            expires_in_secs: levels.temporary.as_ref().map(|t| {
+                let left = t.until.saturating_duration_since(Instant::now());
+                left.as_secs() + u64::from(left.subsec_nanos() > 0)
+            }),
         }
     }
 

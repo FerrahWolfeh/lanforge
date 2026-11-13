@@ -3,6 +3,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use super::common::{
     Capabilities, HttpDataResponse, HttpWrappedResponse, ServerCapabilities, ServiceBanner,
 };
+use lanforge_types::logging::{LogFilter, LogLevelStatus};
 use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::firewall::{
     FirewallCommitResponse, FirewallConfig, FirewallStatus, FirewallValidationReport,
@@ -477,6 +478,28 @@ impl HttpWrappedResponse for TrafficStatusResponse {
 
 impl HttpWrappedResponse for TrafficTelemetryResponse {
     type Wrapper = HttpDataResponse<TrafficTelemetryResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+/// A change of the daemon's log filter.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetLogLevelRequest {
+    /// The new filter; `None` drops the saved and any temporary filter (back to `RUST_LOG`).
+    pub filter: Option<LogFilter>,
+    /// How long the filter lasts, in seconds; `None` saves it (kept across restarts).
+    /// Required for a filter with `trace` anywhere.
+    pub duration_secs: Option<u64>,
+}
+
+impl HttpWrappedResponse for LogLevelStatus {
+    type Wrapper = HttpDataResponse<LogLevelStatus>;
 
     fn wrap(self) -> Self::Wrapper {
         HttpDataResponse { data: self }

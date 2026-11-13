@@ -1,5 +1,5 @@
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{Path, Query, State},
     http::{
         HeaderMap, HeaderValue, StatusCode,
@@ -8,11 +8,17 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use lanforge_api::api::{HttpDataResponse, Response as ApiResponse, SystemConfigExport};
+use lanforge_api::api::{
+    HttpDataResponse, Response as ApiResponse, SetLogLevelRequest, SystemConfigExport,
+};
 use lanforge_api_dispatch::ClientContext;
+use lanforge_types::logging::LogLevel;
 use lanforge_types::system::{ServiceAction, SetupPayload};
 use serde::Deserialize;
 
+use crate::auth::AuthenticatedUser;
+use crate::authz::{self, Permission};
+use crate::error::HttpError;
 use crate::routes::auth::{REMEMBER_ME_TTL_SECS, issue_session};
 use crate::routes::create_client_ctx;
 use crate::server::AppState;
@@ -45,6 +51,10 @@ pub fn router() -> Router<AppState> {
         .route("/service_banners", get(handle_service_banners))
         .route("/service/{id}/control", post(handle_service_control))
         .route("/service/{id}/stop-impact", get(handle_service_stop_impact))
+        .route(
+            "/log-level",
+            get(handle_log_level).put(handle_set_log_level),
+        )
         .route("/reload", post(handle_reload))
         .route("/shutdown", post(handle_shutdown))
         .route("/context", get(handle_context_dump))
@@ -235,4 +245,32 @@ async fn handle_setup(
         )
             .into_response(),
     }
+}
+
+async fn handle_log_level(State(state): State<AppState>) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(ctx.handle_log_level(), LogLevel)
+}
+
+/// `trace` floods the journal and wears a small board's storage: only an admin turns it on,
+/// and the handler refuses it without a time limit. Without users (no authentication) there is
+/// no caller to judge.
+async fn handle_set_log_level(
+    State(state): State<AppState>,
+    user: Option<Extension<AuthenticatedUser>>,
+    Json(req): Json<SetLogLevelRequest>,
+) -> Response {
+    let trace = req
+        .filter
+        .as_ref()
+        .is_some_and(|f| f.max_level() == LogLevel::Trace);
+    if trace
+        && let Some(Extension(user)) = &user
+        && !authz::grants(user, Permission::Admin)
+    {
+        return HttpError::Forbidden("Only an admin can turn on trace logging".into())
+            .into_response();
+    }
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(ctx.handle_set_log_level(req), LogLevel)
 }
