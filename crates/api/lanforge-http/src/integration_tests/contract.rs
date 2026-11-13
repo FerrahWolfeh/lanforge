@@ -44,8 +44,8 @@ struct TestApp {
     elevation: Option<String>,
 }
 
-/// Build the same router the real `HttpService` builds, minus
-/// `CompressionLayer`/`CorsLayer` (not needed in tests).
+/// The `/api` routes as the real `HttpService` mounts them (`api_router`, layers included),
+/// without `/metrics`, `/boot` and the WebUI.
 fn build_router(state: AppState) -> Router {
     Router::new()
         .nest("/api", api_router(&state))

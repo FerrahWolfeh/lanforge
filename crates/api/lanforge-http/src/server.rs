@@ -42,7 +42,6 @@ use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tower_http::{
-    compression::CompressionLayer,
     cors::CorsLayer,
     services::{ServeDir, ServeFile},
     set_header::SetResponseHeaderLayer,
@@ -74,7 +73,6 @@ pub fn api_router(state: &AppState) -> Router<AppState> {
     let build = HeaderValue::from_str(&state.ctx.build().to_string())
         .unwrap_or_else(|_| HeaderValue::from_static("unknown"));
     routes::router()
-        .layer(CompressionLayer::new())
         .layer(from_fn_with_state(state.clone(), auth_middleware))
         .layer(CorsLayer::permissive())
         .layer(SetResponseHeaderLayer::overriding(
