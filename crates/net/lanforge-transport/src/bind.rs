@@ -15,8 +15,9 @@ pub(crate) fn classify(e: &io::Error) -> BindErrorKind {
     }
 }
 
-/// `e`, raised while opening `target` (an address or an interface).
-pub(crate) fn bind_error(target: String, e: io::Error) -> BindError {
+/// `e`, raised while opening `target` (an address or an interface): for sockets a library opens
+/// itself (quinn's endpoint).
+pub fn bind_error(target: String, e: io::Error) -> BindError {
     BindError::new(classify(&e), target, e)
 }
 

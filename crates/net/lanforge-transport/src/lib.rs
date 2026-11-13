@@ -21,6 +21,7 @@ pub mod udp;
 pub mod wol;
 
 pub use arp::{ArpProber, ArpReply};
+pub use bind::bind_error;
 pub use icmp::{IcmpPinger, parse_icmpv4_echo_reply, parse_icmpv6_echo_reply};
 pub use icmp6::Icmp6Transport;
 pub use inert::InertHandle;

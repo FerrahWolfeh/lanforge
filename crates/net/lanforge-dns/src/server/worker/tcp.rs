@@ -1,6 +1,5 @@
 use crate::pipeline::DnsPipelineRequest;
 use crate::server::DnsContext;
-use crate::server::transport::net::bind_tcp;
 use futures::future::join_all;
 use lanforge_dns_wire::{WireHeader, WireOptScanner, WireQuestion, WireResponseWriter};
 use lanforge_transport::DualTcpListener;
@@ -27,19 +26,17 @@ pub(crate) const MAX_STREAM_QUERY: usize = 4096;
 ///
 /// Listeners and their connections are owned by the returned task (no detached tasks), so
 /// aborting it and awaiting the handle guarantees port 53/tcp is released before a rebind.
-pub fn spawn_tcp_worker(ctx: Arc<DnsContext>) -> JoinHandle<()> {
+/// The listeners are bound by the caller, which reports the ones that failed.
+pub fn spawn_tcp_worker(
+    ctx: Arc<DnsContext>,
+    listeners: Vec<(SocketAddr, DualTcpListener)>,
+) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut listeners = Vec::new();
-        for addr in ctx.cfg.listen.addrs() {
-            match bind_tcp(addr) {
-                Ok(listener) => {
-                    info!(%addr, "TCP listening");
-                    listeners.push(serve_listener(listener, addr, Arc::clone(&ctx)));
-                }
-                Err(e) => error!("Failed to bind TCP listener on {}: {}", addr, e),
-            }
-        }
-        join_all(listeners).await;
+        let serving = listeners.into_iter().map(|(addr, listener)| {
+            info!(%addr, "TCP listening");
+            serve_listener(listener, addr, Arc::clone(&ctx))
+        });
+        join_all(serving).await;
     })
 }
 
