@@ -121,6 +121,13 @@ impl InterfaceSnapshot {
     pub fn find_by_index(&self, ifindex: u32) -> Option<&LinkInfo> {
         self.links.iter().find(|l| l.ifindex == ifindex)
     }
+
+    /// Whether a link now exists that `earlier` did not have (an interface appeared). Address
+    /// and carrier changes do not count.
+    #[must_use]
+    pub fn gained_link_since(&self, earlier: &Self) -> bool {
+        self.links.iter().any(|l| !earlier.has_link(&l.name))
+    }
 }
 
 /// Point-in-time snapshot of low-level network transport metrics.

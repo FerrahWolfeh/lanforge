@@ -10,6 +10,7 @@ use lanforge_core::service::{
     Activation, AsyncService, DegradedReason, Edge, EdgeKind, LanforgeService, LossPolicy,
     NodeStatus, ServiceCommand, ServiceHandle, ServiceSpec, StatusReport,
 };
+use lanforge_types::network::bind::BindErrorKind;
 use lanforge_types::network::snapshot::TransportSnapshot;
 use lanforge_types::system::{ServiceAction, ServiceId, ServiceState, StateDetail};
 use std::borrow::Cow;
@@ -559,6 +560,13 @@ where
     /// Publishes the failure, then waits for the backoff delay (or, once retries are
     /// exhausted, for a config change or an admin start). An admin start/restart retries now.
     async fn handle_failure(&mut self, err: CoreError, failures: u32) -> Wake {
+        // A socket on an interface that is not there yet: retry as soon as a link appears
+        // instead of sleeping through the backoff.
+        let waits_for_link = err
+            .bind_error()
+            .is_some_and(|e| e.kind == BindErrorKind::NoDevice);
+        let mut links = self.ctx.watch_interfaces();
+        let mut known = links.borrow_and_update().clone();
         let decision = calculate_backoff(&self.spec.restart, failures);
         let (last_error, delay) = match decision {
             BackoffDecision::RetryIn(delay) => {
@@ -604,6 +612,14 @@ where
                     }
                 }
                 Ok(()) = self.condition_rx.changed() => return Wake::Retry,
+                Ok(()) = links.changed(), if waits_for_link => {
+                    let now = links.borrow_and_update().clone();
+                    if now.gained_link_since(&known) {
+                        info!(service = %self.spec.id, "An interface appeared; retrying now");
+                        return Wake::Retry;
+                    }
+                    known = now;
+                }
                 Some(action) = self.control_rx.recv() => {
                     if let Some(wake) = self.apply_idle_action(action) {
                         return wake;
