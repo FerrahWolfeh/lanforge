@@ -1,6 +1,7 @@
 //! Build script shared by the daemon and the CLI (`build = "../build_id.rs"`): sets
 //! `LANFORGE_BUILD` to the build token read by `lanforge_types::build::BuildInfo`,
-//! `<version>+<commit>.<commit time>[.dirty]`, or just the version without git.
+//! `<version>+<commit>.<commit time>[.dirty]`, or just the version without git. On glibc
+//! Linux it also links the binaries with packed relative relocations (see `main`).
 
 use std::env;
 use std::path::Path;
@@ -52,4 +53,14 @@ fn main() {
         None => version,
     };
     println!("cargo:rustc-env=LANFORGE_BUILD={token}");
+
+    // Packed relative relocations (DT_RELR): the PIE daemon's `.rela.dyn` shrinks from ~720 KiB
+    // to ~10 KiB, ASLR kept. Needs glibc >= 2.36 at run time (an older loader refuses to start
+    // the binary instead of misloading it) and binutils >= 2.38 or lld to link. Here and not in
+    // `.cargo/config.toml`, where any `RUSTFLAGS` in the environment would silently drop it.
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    if target_os == "linux" && target_env == "gnu" {
+        println!("cargo:rustc-link-arg-bins=-Wl,-z,pack-relative-relocs");
+    }
 }
