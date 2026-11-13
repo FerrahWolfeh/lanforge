@@ -418,3 +418,55 @@ async fn test_traffic_stays_online_while_sqm_waits_for_wan() {
     let _ = serve_handle.await;
     service.cleanup(&ctx).await.expect("Cleanup must succeed");
 }
+
+/// A config change is never lost on a busy bus: the service follows its config section, not
+/// the `RulesetChanged` notification (a lagged receiver used to drop it, keeping the old SQM).
+#[tokio::test]
+async fn test_traffic_config_change_survives_a_lagged_bus() {
+    let (ctx, bus) = create_test_context();
+    let cfg = TrafficConfig {
+        tuning: NicTuningConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        sqm: SqmConfig {
+            enabled: true,
+            interface: "auto".into(),
+            download_mbps: 300,
+            upload_mbps: 150,
+            ingress_device: "ifb4lanforge".into(),
+            ..Default::default()
+        },
+    };
+    ctx.update_traffic_config(cfg.clone());
+
+    let mut service = TrafficService::inert(cfg);
+    let mut service_clone = service.clone();
+    let ctx_clone = ctx.clone();
+    let h = ServiceHandle::new(ServiceId::Traffic, ctx_clone.clone());
+    let serve_handle = tokio::spawn(async move { service_clone.serve(&ctx_clone, &h).await });
+    sleep(Duration::from_millis(50)).await;
+    assert_eq!(ctx.traffic_status().map(|s| s.download_mbps), Some(300));
+
+    // The change and a burst larger than the traffic topic, before the service runs again.
+    let mut new_cfg = ctx.get_traffic_config().unwrap_or_default();
+    new_cfg.sqm.download_mbps = 800;
+    ctx.update_traffic_config(new_cfg);
+    for _ in 0..300 {
+        let _ = bus.publish(LanforgeEvent::Traffic(Box::new(TrafficEvent::SqmCleared {
+            interface: "noise".into(),
+        })));
+    }
+
+    timeout(Duration::from_secs(1), async {
+        while ctx.traffic_status().map(|s| s.download_mbps) != Some(800) {
+            sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the new SQM bandwidth must be applied");
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = serve_handle.await;
+    service.cleanup(&ctx).await.expect("Cleanup must succeed");
+}

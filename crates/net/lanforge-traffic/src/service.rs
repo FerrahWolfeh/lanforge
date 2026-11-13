@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use crate::collector::get_traffic_history_snapshot;
 use crate::tuning::cpu::resolve_effective_cpu_mask;
-use lanforge_core::context::LanforgeContext;
+use lanforge_core::context::{ConfigSubscription, LanforgeContext};
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
     Activation, AsyncService, Condition, Edge, LanforgeService, LossPolicy, RestartPolicy,
@@ -351,10 +351,14 @@ impl<H: TrafficHost> TrafficService<H> {
         }
     }
 
-    async fn run_event_loop(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) {
+    async fn run_event_loop(
+        &mut self,
+        ctx: &LanforgeContext,
+        h: &ServiceHandle,
+        mut config_sub: ConfigSubscription<TrafficConfig>,
+    ) {
         let mut sys_rx = ctx.bus().subscribe_system();
         let mut pppoe_rx = ctx.bus().subscribe_pppoe();
-        let mut traffic_rx = ctx.bus().subscribe_traffic();
         let mut if_rx = ctx.watch_interfaces();
         let mut wan_rx = ctx.watch_wan();
 
@@ -405,16 +409,11 @@ impl<H: TrafficHost> TrafficService<H> {
                     ctx.set_traffic_telemetry(snapshot);
                 }
 
-                traffic_event = traffic_rx.recv() => {
-                    match traffic_event {
-                        Ok(te) => {
-                            if matches!(te.event, LanforgeEvent::Traffic(ref e) if matches!(**e, TrafficEvent::RulesetChanged)) {
-                                self.handle_traffic_config_change(ctx).await;
-                            }
-                        }
-                        Err(RecvError::Closed) => break,
-                        Err(RecvError::Lagged(_)) => {}
+                delta = config_sub.next() => {
+                    if delta.is_none() {
+                        break;
                     }
+                    self.handle_traffic_config_change(ctx).await;
                 }
 
                 timed_event = pppoe_rx.recv() => {
@@ -489,11 +488,13 @@ impl<H: TrafficHost> LanforgeService for TrafficService<H> {
 
 impl<H: TrafficHost> AsyncService for TrafficService<H> {
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
+        // Subscribed before `initialize` reads the config: a change in between is not lost.
+        let config_sub = ctx.config_subscription::<TrafficConfig>();
         if !self.initialize(ctx, h).await {
             return Ok(());
         }
 
-        self.run_event_loop(ctx, h).await;
+        self.run_event_loop(ctx, h, config_sub).await;
 
         if self.cfg.sqm.enabled {
             self.clear_sqm_internal(ctx).await;
