@@ -4,7 +4,9 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use lanforge_types::network::snapshot::{InterfaceSnapshot, TransportMetrics, WanSnapshot};
+use lanforge_types::network::snapshot::{
+    InterfaceSnapshot, TransportMetrics, TransportSnapshot, WanSnapshot,
+};
 use lanforge_types::network::traffic::TrafficTelemetryResponse;
 use lanforge_types::system::{
     Cap, PppoeStatusResponse, RaStatusResponse, ServerCapabilities, ServiceBanner, ServiceId,
@@ -116,6 +118,12 @@ impl LanforgeContext {
     /// from the serving instance. Cleared when the service stops, goes dormant or fails.
     pub fn set_service_transports(&self, id: ServiceId, transports: Vec<Arc<TransportMetrics>>) {
         self.inner.runtime.set_service_transports(id, transports);
+    }
+
+    /// The summed counters of the sockets the service holds now, if it registered any.
+    #[must_use]
+    pub fn service_transport(&self, id: ServiceId) -> Option<TransportSnapshot> {
+        self.inner.runtime.service_transport(id)
     }
 
     /// Names a registered service, so it appears in the banners, and records its dependency

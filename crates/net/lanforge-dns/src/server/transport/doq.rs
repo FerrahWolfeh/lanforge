@@ -16,22 +16,15 @@ use crate::server::worker::tcp::{
     MAX_STREAM_QUERY, MAX_TCP_CONNECTIONS, Reply, TCP_IDLE_TIMEOUT, answer_message,
 };
 use lanforge_crypto::tls::load_tls_config;
+use lanforge_transport::bind_error;
 
-/// Runs the `DoQ` endpoint (RFC 9250) on `addr`.
+/// Opens the `DoQ` endpoint on `addr` with the certificate `cert`/`key` (PEM).
 ///
-/// Connections and their streams are owned by this future (no detached tasks). It returns when
-/// `stop` fires (or its sender is dropped) after closing every connection and waiting, up to
-/// [`DRAIN_TIMEOUT`], for the endpoint to go idle: quinn's driver holds the UDP socket until
-/// then, so aborting this future instead would leave the port bound past a restart.
-pub async fn run_doq_worker(
-    addr: SocketAddr,
-    cert: &str,
-    key: &str,
-    ctx: Arc<DnsContext>,
-    mut stop: oneshot::Receiver<()>,
-) -> Result<(), CoreError> {
-    let mut tls_config = load_tls_config(cert, key)
-        .map_err(|e| CoreError::Generic(format!("Failed to load TLS config for DoQ: {e}")))?;
+/// # Errors
+/// The TLS/QUIC configuration is unusable or the address cannot be bound ([`CoreError::Bind`]).
+pub fn bind_doq(addr: SocketAddr, cert: &str, key: &str) -> Result<Endpoint, CoreError> {
+    let mut tls_config =
+        load_tls_config(cert, key).map_err(|e| CoreError::Generic(format!("TLS config: {e}")))?;
 
     tls_config.alpn_protocols = vec![b"doq".to_vec()];
 
@@ -49,9 +42,21 @@ pub async fn run_doq_worker(
     ));
     server_config.transport_config(Arc::new(transport_config));
 
-    let endpoint = Endpoint::server(server_config, addr)
-        .map_err(|e| CoreError::Generic(format!("DoQ bind error on {addr}: {e}")))?;
+    Ok(Endpoint::server(server_config, addr).map_err(|e| bind_error(addr.to_string(), e))?)
+}
 
+/// Runs the `DoQ` endpoint (RFC 9250) opened by [`bind_doq`] on `addr`.
+///
+/// Connections and their streams are owned by this future (no detached tasks). It returns when
+/// `stop` fires (or its sender is dropped) after closing every connection and waiting, up to
+/// [`DRAIN_TIMEOUT`], for the endpoint to go idle: quinn's driver holds the UDP socket until
+/// then, so aborting this future instead would leave the port bound past a restart.
+pub async fn run_doq_worker(
+    endpoint: Endpoint,
+    addr: SocketAddr,
+    ctx: Arc<DnsContext>,
+    mut stop: oneshot::Receiver<()>,
+) {
     info!("DoQ listening on quic://{addr}");
 
     let mut connections = JoinSet::new();
@@ -76,7 +81,6 @@ pub async fn run_doq_worker(
     if timeout(DRAIN_TIMEOUT, endpoint.wait_idle()).await.is_err() {
         debug!("DoQ endpoint still draining after {DRAIN_TIMEOUT:?}; port may stay bound briefly");
     }
-    Ok(())
 }
 
 /// How long a stop waits for closed connections to drain before giving up the endpoint.

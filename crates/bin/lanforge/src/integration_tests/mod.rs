@@ -15,3 +15,6 @@ mod phase4_wan_acceptance;
 mod readiness_race;
 #[cfg(all(feature = "dhcp", feature = "nft", feature = "ra", feature = "traffic"))]
 mod rootless_pipeline;
+#[cfg(feature = "nft")]
+mod service_state_model;
+mod transport_health;

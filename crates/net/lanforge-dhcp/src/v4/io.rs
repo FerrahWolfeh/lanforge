@@ -3,14 +3,12 @@ use dhcproto::error::DecodeError;
 use dhcproto::v4::Message;
 use dhcproto::{Decodable, Decoder};
 use lanforge_core::error::CoreError;
-use lanforge_transport::{TransportMetrics, TransportSnapshot, TransportStats};
+use lanforge_transport::{TransportMetrics, TransportSnapshot, TransportStats, UdpTransport};
 use lanforge_types::identifiers::MacAddr;
 use parking_lot::Mutex;
-use socket2::{Domain, Protocol, Socket, Type};
 use std::io;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
-use tokio::net::UdpSocket as TokioUdpSocket;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
 
@@ -80,7 +78,7 @@ impl Dhcpv4InertHandle {
 #[derive(Clone)]
 enum TransportBackend {
     Kernel {
-        socket: Arc<TokioUdpSocket>,
+        udp: UdpTransport,
         raw_tx: Arc<Mutex<RawSender>>,
     },
     Inert {
@@ -98,14 +96,16 @@ pub struct Dhcpv4Transport {
 impl Dhcpv4Transport {
     /// Binds the UDP socket on the specified interface and port, and initializes the raw L2 sender.
     pub fn new(iface: &str, port: u16) -> Result<Self, CoreError> {
-        let socket = bind_dhcp_socket_async(iface, port)?;
+        let udp =
+            UdpTransport::bind_device(iface, SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)))?;
         let raw_tx = RawSender::new(iface).map_err(|e| CoreError::Generic(e.to_string()))?;
         Ok(Self {
+            // L2 replies count into the UDP socket's counters: one transport for the service.
+            metrics: udp.metrics_handle(),
             backend: TransportBackend::Kernel {
-                socket: Arc::new(socket),
+                udp,
                 raw_tx: Arc::new(Mutex::new(raw_tx)),
             },
-            metrics: Arc::new(TransportMetrics::new()),
         })
     }
 
@@ -137,7 +137,8 @@ impl Dhcpv4Transport {
     /// Receives a packet asynchronously from the transport.
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
         let res = match &self.backend {
-            TransportBackend::Kernel { socket, .. } => socket.recv_from(buf).await,
+            // Counted by the UDP transport itself.
+            TransportBackend::Kernel { udp, .. } => return udp.recv(buf).await,
             TransportBackend::Inert { channels } => {
                 let mut rx = channels.in_rx.lock().await;
                 match rx.recv().await {
@@ -176,7 +177,7 @@ impl Dhcpv4Transport {
         port: u16,
     ) -> Result<(), CoreError> {
         let res = match &self.backend {
-            TransportBackend::Kernel { socket, raw_tx } => {
+            TransportBackend::Kernel { udp, raw_tx } => {
                 if giaddr == Ipv4Addr::UNSPECIFIED {
                     let (final_dst_ip, dst_mac_arr) = if broadcast {
                         (Ipv4Addr::BROADCAST, [0xff; 6])
@@ -190,13 +191,14 @@ impl Dhcpv4Transport {
                             CoreError::Generic(format!("Failed to inject L2 reply packet: {e}"))
                         })
                 } else {
+                    // Counted by the UDP transport itself.
                     let relay_addr = SocketAddrV4::new(giaddr, port);
-                    socket
-                        .try_send_to(packet, relay_addr.into())
+                    return udp
+                        .try_send(packet, &relay_addr.into())
                         .map(|_| ())
                         .map_err(|e| {
                             CoreError::Generic(format!("Failed to send to relay agent: {e}"))
-                        })
+                        });
                 }
             }
             TransportBackend::Inert { channels } => {
@@ -238,34 +240,25 @@ impl TransportStats for Dhcpv4Transport {
     }
 }
 
-fn bind_dhcp_socket_async(iface: &str, port: u16) -> Result<TokioUdpSocket, CoreError> {
-    let addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port);
-
-    let sock = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))
-        .map_err(|e| CoreError::Generic(format!("socket(AF_INET, SOCK_DGRAM): {e}")))?;
-
-    sock.set_reuse_address(true)
-        .map_err(|e| CoreError::Generic(e.to_string()))?;
-    sock.set_broadcast(true)
-        .map_err(|e| CoreError::Generic(e.to_string()))?;
-    sock.bind_device(Some(iface.as_bytes()))
-        .map_err(|e| CoreError::Generic(format!("SO_BINDTODEVICE({iface}): {e}")))?;
-    sock.set_nonblocking(true)
-        .map_err(|e| CoreError::Generic(e.to_string()))?;
-    sock.bind(&socket2::SockAddr::from(addr))
-        .map_err(|e| CoreError::Generic(format!("bind(0.0.0.0:{port}): {e}")))?;
-
-    let std_socket: UdpSocket = sock.into();
-    TokioUdpSocket::from_std(std_socket)
-        .map_err(|e| CoreError::Generic(format!("tokio UdpSocket conversion: {e}")))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_utils::Dhcpv4PacketBuilder;
     use dhcproto::v4::{DhcpOption, MessageType, OptionCode};
     use tokio::time::{Duration, timeout};
+
+    /// A LAN interface that does not exist fails the bind as `NoDevice`.
+    #[tokio::test]
+    async fn a_missing_interface_fails_as_no_device() {
+        let Err(err) = Dhcpv4Transport::new("lfnone0", 0) else {
+            panic!("bound on an interface that does not exist");
+        };
+        assert_eq!(
+            err.bind_error().map(|e| e.kind),
+            Some(lanforge_transport::BindErrorKind::NoDevice),
+            "{err}"
+        );
+    }
 
     #[test]
     fn should_initialize_inert_transport_and_report_is_inert() {

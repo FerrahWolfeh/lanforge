@@ -241,7 +241,7 @@ async fn test_traffic_eventbus_reactivity() {
     .expect("Timeout waiting for SqmApplied on ppp0");
     assert_eq!(bound_to_ppp0, (100, 50));
 
-    // 2. TrafficEvent::RulesetChanged: In-place reconfiguration with updated limits
+    // 2. A traffic config change: in-place reconfiguration with updated limits
     ctx.update_traffic_config(TrafficConfig {
         tuning: NicTuningConfig {
             enabled: true,
@@ -258,9 +258,6 @@ async fn test_traffic_eventbus_reactivity() {
             ..Default::default()
         },
     });
-    let _ = bus.publish(LanforgeEvent::Traffic(Box::new(
-        TrafficEvent::RulesetChanged,
-    )));
 
     let updated_sqm = timeout(Duration::from_millis(500), async {
         loop {

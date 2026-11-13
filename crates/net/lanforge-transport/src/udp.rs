@@ -1,6 +1,8 @@
+use crate::bind::{bind_error, dual_bind_error};
 use crate::inert::{InertHandle, InertPort};
 use crate::limiter::RateLimiter;
 use crate::metrics::{TransportMetrics, TransportStats};
+use lanforge_types::network::bind::BindError;
 use lanforge_types::network::snapshot::TransportSnapshot;
 use std::io;
 use std::net::{
@@ -45,7 +47,10 @@ impl UdpTransport {
     /// Creates a Y-shaped dual-stack transport bound to `0.0.0.0:port` and `[::]:port` (`IPV6_V6ONLY=true`).
     ///
     /// If IPv6 is not supported by the kernel, it gracefully falls back to IPv4 single-socket.
-    pub fn dual_stack(port: u16) -> io::Result<Self> {
+    ///
+    /// # Errors
+    /// Both families failed to bind.
+    pub fn dual_stack(port: u16) -> Result<Self, BindError> {
         let v4_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port);
         let v6_addr = SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, port, 0, 0);
 
@@ -56,7 +61,10 @@ impl UdpTransport {
     ///
     /// If one protocol family fails to bind (e.g. IPv6 disabled on host), it falls back
     /// to the available protocol family if possible.
-    pub fn bind_dual(v4_addr: SocketAddrV4, v6_addr: SocketAddrV6) -> io::Result<Self> {
+    ///
+    /// # Errors
+    /// Both families failed to bind.
+    pub fn bind_dual(v4_addr: SocketAddrV4, v6_addr: SocketAddrV6) -> Result<Self, BindError> {
         let v4_res = (|| -> io::Result<TokioUdpSocket> {
             let std_sock = StdUdpSocket::bind(v4_addr)?;
             std_sock.set_nonblocking(true)?;
@@ -89,40 +97,75 @@ impl UdpTransport {
                 warn!(%v4_addr, "UDP: IPv4 bind failed ({e}), falling back to IPv6 single-socket");
                 Ok(Self::from_backend(UdpBackend::KernelSingle(v6)))
             }
-            (Err(e4), Err(e6)) => Err(io::Error::new(
-                io::ErrorKind::AddrNotAvailable,
-                format!("Failed to bind both IPv4 ({e4}) and IPv6 ({e6}) UDP sockets"),
+            (Err(e4), Err(e6)) => Err(dual_bind_error(
+                format!("{v4_addr} and {v6_addr}"),
+                &e4,
+                &e6,
             )),
         }
     }
 
     /// Binds a single UDP socket to the specified address.
-    pub fn bind_single(addr: SocketAddr) -> io::Result<Self> {
-        let std_sock = StdUdpSocket::bind(addr)?;
-        std_sock.set_nonblocking(true)?;
-        let tokio_sock = TokioUdpSocket::from_std(std_sock)?;
-        Ok(Self::from_backend(UdpBackend::KernelSingle(tokio_sock)))
+    ///
+    /// # Errors
+    /// The address could not be bound.
+    pub fn bind_single(addr: SocketAddr) -> Result<Self, BindError> {
+        (|| -> io::Result<Self> {
+            let std_sock = StdUdpSocket::bind(addr)?;
+            std_sock.set_nonblocking(true)?;
+            let tokio_sock = TokioUdpSocket::from_std(std_sock)?;
+            Ok(Self::from_backend(UdpBackend::KernelSingle(tokio_sock)))
+        })()
+        .map_err(|e| bind_error(addr.to_string(), e))
     }
 
-    /// Binds a UDP socket bound to a specific network interface via `SO_BINDTODEVICE`.
-    pub fn bind_device(iface: &str, port: u16) -> io::Result<Self> {
-        let std_socket =
-            StdUdpSocket::bind(("0.0.0.0", port)).or_else(|_| StdUdpSocket::bind(("::", port)))?;
-
-        let sock = socket2::Socket::from(std_socket);
-        if let Err(e) = sock.bind_device(Some(iface.as_bytes())) {
-            warn!("UDP: SO_BINDTODEVICE({iface}): {e} (continuing anyway)");
-        }
-        sock.set_nonblocking(true)?;
-        let std_socket: StdUdpSocket = sock.into();
-        let tokio_sock = TokioUdpSocket::from_std(std_socket)?;
-        Ok(Self::from_backend(UdpBackend::KernelSingle(tokio_sock)))
+    /// Binds `addr` on `iface` only (`SO_BINDTODEVICE`, `SO_REUSEADDR`): a server that answers
+    /// one link, like DHCP. An IPv4 socket may also send to the broadcast address.
+    ///
+    /// # Errors
+    /// The interface does not exist ([`BindErrorKind::NoDevice`]) or the address could not be
+    /// bound; a socket that would listen on every interface is never returned.
+    ///
+    /// [`BindErrorKind::NoDevice`]: crate::BindErrorKind::NoDevice
+    pub fn bind_device(iface: &str, addr: SocketAddr) -> Result<Self, BindError> {
+        let open = || -> io::Result<Self> {
+            let domain = if addr.is_ipv4() {
+                socket2::Domain::IPV4
+            } else {
+                socket2::Domain::IPV6
+            };
+            let sock =
+                socket2::Socket::new(domain, socket2::Type::DGRAM, Some(socket2::Protocol::UDP))?;
+            sock.set_reuse_address(true)?;
+            if addr.is_ipv4() {
+                sock.set_broadcast(true)?;
+            } else {
+                sock.set_only_v6(true)?;
+            }
+            sock.bind_device(Some(iface.as_bytes()))?;
+            sock.set_nonblocking(true)?;
+            sock.bind(&socket2::SockAddr::from(addr))?;
+            let std_socket: StdUdpSocket = sock.into();
+            Ok(Self::from_backend(UdpBackend::KernelSingle(
+                TokioUdpSocket::from_std(std_socket)?,
+            )))
+        };
+        open().map_err(|e| bind_error(format!("{addr}%{iface}"), e))
     }
 
-    /// Wraps an existing Tokio UDP socket as a single-socket transport.
-    #[must_use]
-    pub fn from_tokio(socket: TokioUdpSocket) -> Self {
-        Self::from_backend(UdpBackend::KernelSingle(socket))
+    /// Joins the IPv6 multicast `group` on the interface `ifindex` (a server listening to a
+    /// link-scoped group, like `DHCPv6`'s `ff02::1:2`).
+    ///
+    /// # Errors
+    /// The group could not be joined: the socket would never hear the group's packets.
+    pub fn join_multicast_v6(&self, group: &Ipv6Addr, ifindex: u32) -> Result<(), BindError> {
+        let res = match &self.inner.backend {
+            UdpBackend::KernelSingle(sock) => sock.join_multicast_v6(group, ifindex),
+            UdpBackend::KernelDual { v6, .. } => v6.join_multicast_v6(group, ifindex),
+            #[cfg(any(test, feature = "inert"))]
+            UdpBackend::Inert(_) => Ok(()),
+        };
+        res.map_err(|e| bind_error(format!("{group}%{ifindex}"), e))
     }
 
     fn from_backend(backend: UdpBackend) -> Self {
@@ -171,6 +214,9 @@ impl UdpTransport {
     }
 
     /// Returns the local addresses of the bound sockets.
+    ///
+    /// # Errors
+    /// Querying `getsockname(2)` on an underlying socket fails.
     pub fn local_addrs(&self) -> io::Result<Vec<SocketAddr>> {
         match &self.inner.backend {
             UdpBackend::KernelDual { v4, v6 } => Ok(vec![v4.local_addr()?, v6.local_addr()?]),
@@ -180,44 +226,40 @@ impl UdpTransport {
         }
     }
 
-    /// Joins an IPv6 multicast group on the specified interface index.
-    pub fn join_multicast_v6(&self, multiaddr: &Ipv6Addr, ifindex: u32) -> io::Result<()> {
-        match &self.inner.backend {
-            UdpBackend::KernelDual { v6, .. } => v6.join_multicast_v6(multiaddr, ifindex),
-            UdpBackend::KernelSingle(sock) => sock.join_multicast_v6(multiaddr, ifindex),
-            #[cfg(any(test, feature = "inert"))]
-            UdpBackend::Inert(_) => Ok(()),
-        }
-    }
-
     /// Receives a datagram into the provided buffer.
     ///
     /// In dual-stack mode, fairly polls across IPv4 and IPv6 arms.
     /// Automatically applies rate-limiting and tracks packet/byte metrics.
+    ///
+    /// # Errors
+    /// Waiting for readiness or receiving from an underlying socket fails, or the inert channel is
+    /// closed (`UnexpectedEof`).
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
         loop {
             let (n, src) = match &self.inner.backend {
                 UdpBackend::KernelDual { v4, v6 } => {
                     tokio::select! {
                         res = v4.readable() => {
-                            res?;
+                            res.map_err(|e| self.counted(e))?;
                             match v4.try_recv_from(buf) {
                                 Ok(r) => r,
                                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => continue,
-                                Err(e) => return Err(e),
+                                Err(e) => return Err(self.counted(e)),
                             }
                         }
                         res = v6.readable() => {
-                            res?;
+                            res.map_err(|e| self.counted(e))?;
                             match v6.try_recv_from(buf) {
                                 Ok(r) => r,
                                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => continue,
-                                Err(e) => return Err(e),
+                                Err(e) => return Err(self.counted(e)),
                             }
                         }
                     }
                 }
-                UdpBackend::KernelSingle(sock) => sock.recv_from(buf).await?,
+                UdpBackend::KernelSingle(sock) => {
+                    sock.recv_from(buf).await.map_err(|e| self.counted(e))?
+                }
                 #[cfg(any(test, feature = "inert"))]
                 UdpBackend::Inert(port) => {
                     let mut rx = port.in_rx.lock().await;
@@ -253,6 +295,10 @@ impl UdpTransport {
     /// Sends a datagram to the specified destination address.
     ///
     /// Automatically routes to the IPv4 or IPv6 socket based on the target address family.
+    ///
+    /// # Errors
+    /// Sending on the underlying socket fails (e.g. `ENETUNREACH`, `ECONNREFUSED`, or `EMSGSIZE`),
+    /// or the inert channel is closed (`BrokenPipe`).
     pub async fn send(&self, payload: &[u8], target: &SocketAddr) -> io::Result<usize> {
         let res = match &self.inner.backend {
             UdpBackend::KernelDual { v4, v6 } => match target {
@@ -269,23 +315,36 @@ impl UdpTransport {
                 .map_err(|e| io::Error::new(io::ErrorKind::BrokenPipe, e.to_string())),
         };
 
-        if let Ok(n) = res {
-            self.inner.metrics.record_tx(n);
+        match res {
+            Ok(n) => {
+                self.inner.metrics.record_tx(n);
+                Ok(n)
+            }
+            Err(e) => Err(self.counted(e)),
         }
-        res
     }
 
     /// Sends a datagram to the specified destination address.
+    ///
+    /// # Errors
+    /// Same as [`UdpTransport::send`].
     pub async fn send_to(&self, payload: &[u8], target: SocketAddr) -> io::Result<usize> {
         self.send(payload, &target).await
     }
 
     /// Receives a datagram into the provided buffer (alias to `recv`).
+    ///
+    /// # Errors
+    /// Same as [`UdpTransport::recv`].
     pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
         self.recv(buf).await
     }
 
     /// Attempts to send a datagram immediately without awaiting.
+    ///
+    /// # Errors
+    /// Sending without blocking fails (including `WouldBlock` when the send buffer or inert
+    /// channel is full).
     pub fn try_send(&self, payload: &[u8], target: &SocketAddr) -> io::Result<usize> {
         let res = match &self.inner.backend {
             UdpBackend::KernelDual { v4, v6 } => match target {
@@ -301,10 +360,21 @@ impl UdpTransport {
                 .map_err(|e| io::Error::new(io::ErrorKind::WouldBlock, e.to_string())),
         };
 
-        if let Ok(n) = res {
-            self.inner.metrics.record_tx(n);
+        match res {
+            Ok(n) => {
+                self.inner.metrics.record_tx(n);
+                Ok(n)
+            }
+            // A full send buffer is back-pressure, not a failing socket.
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Err(e),
+            Err(e) => Err(self.counted(e)),
         }
-        res
+    }
+
+    /// Counts a socket error (the health signal the supervisor degrades on) and passes it on.
+    fn counted(&self, e: io::Error) -> io::Error {
+        self.inner.metrics.record_error();
+        e
     }
 }
 
@@ -320,6 +390,43 @@ mod tests {
     use crate::limiter::RateLimitConfig;
     use std::net::SocketAddr;
     use tokio::time::{Duration, timeout};
+
+    #[tokio::test]
+    async fn a_taken_port_is_addr_in_use() {
+        let first = UdpTransport::bind_single("127.0.0.1:0".parse().unwrap()).expect("bind");
+        let taken = first.local_addrs().unwrap()[0];
+        let Err(err) = UdpTransport::bind_single(taken) else {
+            panic!("the port is taken");
+        };
+        assert_eq!(err.kind, crate::BindErrorKind::AddrInUse);
+        assert_eq!(err.target, taken.to_string());
+    }
+
+    /// A device-bound socket on an interface that does not exist fails as `NoDevice`; it never
+    /// falls back to listening on every interface.
+    #[tokio::test]
+    async fn a_missing_interface_is_no_device() {
+        let Err(err) = UdpTransport::bind_device("lfnone0", "0.0.0.0:0".parse().unwrap()) else {
+            panic!("no such interface");
+        };
+        assert_eq!(err.kind, crate::BindErrorKind::NoDevice);
+    }
+
+    /// A send the kernel refuses is counted as an error (broadcast without `SO_BROADCAST` is
+    /// `EACCES`); a successful one is not.
+    #[tokio::test]
+    async fn should_count_kernel_send_errors() {
+        let transport =
+            UdpTransport::bind_single("127.0.0.1:0".parse().unwrap()).expect("bind loopback");
+        let target: SocketAddr = "255.255.255.255:9".parse().unwrap();
+        assert!(transport.send(b"x", &target).await.is_err());
+        assert!(transport.try_send(b"x", &target).is_err());
+        let own = transport.local_addrs().expect("bound")[0];
+        transport.send(b"x", &own).await.expect("send to itself");
+        let snap = transport.snapshot();
+        assert_eq!(snap.errors, 2);
+        assert_eq!(snap.tx_packets, 1);
+    }
 
     #[test]
     fn should_report_inert_status_and_synthetic_addresses() {

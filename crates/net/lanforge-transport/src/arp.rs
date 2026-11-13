@@ -45,6 +45,10 @@ pub struct ArpProber {
 
 impl ArpProber {
     /// Binds an `AF_PACKET` raw socket to the interface specified by `ifindex`.
+    ///
+    /// # Errors
+    /// Opening the `AF_PACKET` socket fails (`EPERM` without `CAP_NET_RAW`), `ifindex` does not exist,
+    /// or reactor registration fails.
     pub fn bind(ifindex: u32, local_mac: [u8; 6]) -> io::Result<Self> {
         let owned_fd = sys::socket(
             libc::AF_PACKET,
@@ -92,6 +96,10 @@ impl ArpProber {
     }
 
     /// Sends an ARP probe to `target` and awaits a matching reply within `timeout`.
+    ///
+    /// # Errors
+    /// Sending the ARP probe or reading from the raw socket fails (`ENETDOWN`, `ENXIO`, or `ifindex`
+    /// out of range).
     pub async fn probe(
         &self,
         target: Ipv4Addr,

@@ -1,6 +1,8 @@
+use crate::bind::bind_error;
 use crate::inert::{InertHandle, InertPort};
 use crate::metrics::{TransportMetrics, TransportStats};
 use crate::sys;
+use lanforge_types::network::bind::BindError;
 use lanforge_types::network::snapshot::TransportSnapshot;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::io;
@@ -37,7 +39,14 @@ pub struct Icmp6Transport {
 
 impl Icmp6Transport {
     /// Creates and binds a raw `ICMPv6` socket to `iface`, joining `ff02::2` and filtering for RS (133).
-    pub fn bind(iface: &str, iface_index: u32) -> io::Result<Self> {
+    ///
+    /// # Errors
+    /// The socket could not be opened on `iface`.
+    pub fn bind(iface: &str, iface_index: u32) -> Result<Self, BindError> {
+        Self::open_rs_listener(iface, iface_index).map_err(|e| bind_error(iface.to_string(), e))
+    }
+
+    fn open_rs_listener(iface: &str, iface_index: u32) -> io::Result<Self> {
         let sock = Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6))?;
 
         // Bind to LAN interface
@@ -74,7 +83,14 @@ impl Icmp6Transport {
     /// ISP's on the `PPPoE` link): only type 134 passes the kernel filter; the all-nodes group the
     /// RAs go to is joined by every IPv6 interface. Receives copies only: whoever configures
     /// the link (the kernel, networkd) still gets its own.
-    pub fn bind_ra_listener(iface: &str) -> io::Result<Self> {
+    ///
+    /// # Errors
+    /// The socket could not be opened on `iface`.
+    pub fn bind_ra_listener(iface: &str) -> Result<Self, BindError> {
+        Self::open_ra_listener(iface).map_err(|e| bind_error(iface.to_string(), e))
+    }
+
+    fn open_ra_listener(iface: &str) -> io::Result<Self> {
         let sock = Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6))?;
         sock.bind_device(Some(iface.as_bytes()))?;
         set_icmp6_filter_only(&sock, ICMPV6_TYPE_RA)?;
@@ -126,10 +142,13 @@ impl Icmp6Transport {
     }
 
     /// Receives an `ICMPv6` datagram into the provided buffer.
+    ///
+    /// # Errors
+    /// Waiting for readiness or `recvfrom(2)` fails, or the inert channel is closed (`UnexpectedEof`).
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddrV6)> {
         match &self.inner.backend {
             Icmp6Backend::Kernel(async_fd) => loop {
-                let mut guard = async_fd.readable().await?;
+                let mut guard = async_fd.readable().await.map_err(|e| self.counted(e))?;
                 match sys::recv_from_v6(guard.get_inner().as_fd(), buf) {
                     Ok((n, src)) => {
                         guard.clear_ready();
@@ -139,7 +158,7 @@ impl Icmp6Transport {
                     Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
                         guard.clear_ready();
                     }
-                    Err(err) => return Err(err),
+                    Err(err) => return Err(self.counted(err)),
                 }
             },
             #[cfg(any(test, feature = "inert"))]
@@ -162,6 +181,9 @@ impl Icmp6Transport {
     }
 
     /// Sends an `ICMPv6` packet to the specified destination address.
+    ///
+    /// # Errors
+    /// `send_to` fails on the underlying socket, or the inert channel is full or closed (`WouldBlock`).
     pub fn send(&self, payload: &[u8], target: &SocketAddrV6) -> io::Result<usize> {
         let res = match &self.inner.backend {
             Icmp6Backend::Kernel(async_fd) => {
@@ -177,10 +199,21 @@ impl Icmp6Transport {
                 .map_err(|e| io::Error::new(io::ErrorKind::WouldBlock, e.to_string())),
         };
 
-        if let Ok(n) = res {
-            self.inner.metrics.record_tx(n);
+        match res {
+            Ok(n) => {
+                self.inner.metrics.record_tx(n);
+                Ok(n)
+            }
+            // A full send buffer is back-pressure, not a failing socket.
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Err(e),
+            Err(e) => Err(self.counted(e)),
         }
-        res
+    }
+
+    /// Counts a socket error (the health signal the supervisor degrades on) and passes it on.
+    fn counted(&self, e: io::Error) -> io::Error {
+        self.inner.metrics.record_error();
+        e
     }
 }
 
@@ -231,6 +264,17 @@ mod tests {
         assert_eq!(buf[0], 134, "the NS sent first never reached the listener");
         assert_eq!(&buf[4..n], &ra[4..]);
         assert_eq!(*src.ip(), Ipv6Addr::LOCALHOST);
+    }
+
+    /// A send the kernel refuses (no route in an empty namespace) is counted as an error.
+    #[tokio::test]
+    #[ignore = "needs CAP_NET_RAW (run inside `unshare -rn`)"]
+    async fn send_errors_are_counted() {
+        let transport = Icmp6Transport::bind_ra_listener("lo").expect("bind on lo");
+        let ra = [134u8, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let unroutable: SocketAddrV6 = "[2001:db8::1]:0".parse().unwrap();
+        assert!(transport.send(&ra, &unroutable).is_err());
+        assert_eq!(transport.snapshot().errors, 1);
     }
 
     #[test]

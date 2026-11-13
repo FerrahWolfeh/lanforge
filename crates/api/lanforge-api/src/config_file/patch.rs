@@ -20,6 +20,9 @@ fn reindex_table_positions(table: &mut toml_edit::Table, next_pos: &mut isize) {
 
 /// Patches only dirty sections into the `DocumentMut`, preserving comments, ordering, and
 /// formatting of all untouched sections.
+///
+/// # Errors
+/// Serializing a dirty section or parsing its TOML representation fails.
 pub fn patch_sections(
     doc: &mut DocumentMut,
     cfg: &ConfigFile,

@@ -7,7 +7,10 @@
 //! - **Rootless Inert Testing** (`InertHandle`): In-memory synthetic datagram and reply channels for sudo-free tests.
 //! - **Transparent Metrics & Rate Limiting** (`TransportMetrics`, `RateLimiter`): Zero-overhead counters and bounded token buckets.
 
+#![warn(clippy::missing_errors_doc)]
+
 pub mod arp;
+mod bind;
 pub mod icmp;
 pub mod icmp6;
 pub mod inert;
@@ -20,9 +23,11 @@ pub mod udp;
 pub mod wol;
 
 pub use arp::{ArpProber, ArpReply};
+pub use bind::bind_error;
 pub use icmp::{IcmpPinger, parse_icmpv4_echo_reply, parse_icmpv6_echo_reply};
 pub use icmp6::Icmp6Transport;
 pub use inert::InertHandle;
+pub use lanforge_types::network::bind::{BindError, BindErrorKind};
 pub use limiter::{RateLimitConfig, RateLimiter};
 pub use metrics::{TransportMetrics, TransportSnapshot, TransportStats};
 pub use pppoe::{PppoeInertHandle, PppoeTransport};

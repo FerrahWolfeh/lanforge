@@ -82,6 +82,9 @@ pub struct ConfigFile {
 
 impl ConfigFile {
     /// Parses a TOML configuration string into a strongly-typed `ConfigFile`.
+    ///
+    /// # Errors
+    /// `content` is not valid TOML or does not match the `ConfigFile` schema.
     pub fn parse(content: &str) -> Result<Self, de::Error> {
         toml::from_str(content)
     }
@@ -90,6 +93,9 @@ impl ConfigFile {
     /// not fit its type is set aside instead of failing the whole file: it takes its default and
     /// is returned with the error. One wrong value in `[firewall]` must not take DHCP and DNS down
     /// with it. A file that is not TOML at all, or a wrong value elsewhere, is still an error.
+    ///
+    /// # Errors
+    /// `content` is not valid TOML, or a non-file-owned field fails to deserialize.
     pub fn parse_lenient(content: &str) -> Result<(Self, Vec<(Section, String)>), de::Error> {
         let first_error = match Self::parse(content) {
             Ok(cfg) => return Ok((cfg, Vec::new())),
@@ -120,6 +126,9 @@ impl ConfigFile {
     }
 
     /// Renders the complete configuration as a well-formatted TOML string.
+    ///
+    /// # Errors
+    /// Serializing `self` to TOML fails.
     pub fn render_full(&self) -> Result<String, ser::Error> {
         let mut out = String::from(
             "# Lanforge Configuration File\n# Automatically synchronized by Lanforge\n\n",
@@ -133,6 +142,10 @@ impl ConfigFile {
 /// Writes `sections` of `cfg` into the config file at `path`, keeping everything else in the
 /// file (other sections, comments, formatting). A file that cannot be read or parsed is an
 /// error, never replaced: the caller must not apply a change it could not persist.
+///
+/// # Errors
+/// Reading or parsing `path` as TOML fails, serializing a section fails, or writing the file
+/// atomically fails.
 pub fn persist_sections(
     path: &Path,
     cfg: &ConfigFile,
@@ -147,6 +160,10 @@ pub fn persist_sections(
 }
 
 /// Atomically writes content to a file using a temporary file in the same directory.
+///
+/// # Errors
+/// Creating the parent directory, writing or syncing the temporary file, or renaming it over
+/// `path` fails.
 pub fn write_toml_atomically(path: &Path, content: &str) -> Result<(), io::Error> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     if !parent.as_os_str().is_empty() && !parent.exists() {

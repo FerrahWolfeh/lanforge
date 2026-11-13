@@ -20,8 +20,8 @@ use crate::resolver::{
 #[cfg(feature = "doq")]
 use crate::server::transport::doq;
 #[cfg(feature = "dot")]
-use crate::server::transport::dot::run_dot_worker;
-use crate::server::transport::net::bind_udp;
+use crate::server::transport::dot::{bind_dot, run_dot_worker};
+use crate::server::transport::net::{bind_tcp, bind_udp};
 #[cfg(feature = "adblock")]
 use crate::server::worker::adblock_sources;
 #[cfg(feature = "adblock")]
@@ -66,6 +66,7 @@ use lanforge_types::network::dns::{
 use lanforge_types::system::{
     DegradedReason, DormantReason, PppoeSessionState, ServiceId, ServiceState,
 };
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -304,6 +305,9 @@ impl AsyncService for DnsService {
         info!(handlers = parallelism, "Starting service");
 
         let mut workers = Vec::new();
+        // Listeners that could not open (TCP, DoT, DoQ): the service still answers over UDP,
+        // degraded, for the whole run. Only the UDP sockets are fatal.
+        let mut listener_faults: Vec<String> = Vec::new();
         // The service serves the sockets it is given: an injected transport alone, or UDP and TCP
         // bound on the configured listen addresses.
         let mut tcp_worker = None;
@@ -329,8 +333,7 @@ impl AsyncService for DnsService {
             let transports = addrs
                 .iter()
                 .map(|addr| bind_udp(*addr).map(|t| (addr, t)))
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(CoreError::Io)?;
+                .collect::<Result<Vec<_>, _>>()?;
             for (addr, transport) in transports {
                 counters.push(transport.metrics_handle());
                 info!(%addr, "UDP listening");
@@ -339,7 +342,14 @@ impl AsyncService for DnsService {
                 }
             }
             ctx.set_service_transports(Self::SERVICE_ID, counters);
-            tcp_worker = Some(spawn_tcp_worker(Arc::clone(&dns_ctx)));
+            let mut tcp_listeners = Vec::with_capacity(addrs.len());
+            for addr in addrs {
+                match bind_tcp(addr) {
+                    Ok(listener) => tcp_listeners.push((addr, listener)),
+                    Err(e) => listener_faults.push(format!("tcp listener: {e}")),
+                }
+            }
+            tcp_worker = Some(spawn_tcp_worker(Arc::clone(&dns_ctx), tcp_listeners));
         }
 
         // The request queue outlives this instance: callers keep the same `DnsHandle` and wait
@@ -364,14 +374,18 @@ impl AsyncService for DnsService {
         #[cfg(feature = "dot")]
         let dot_worker = if let Some(addr) = self.cfg.dot_listen {
             if let (Some(cert), Some(key)) = (&self.cfg.tls_cert, &self.cfg.tls_key) {
-                let cert = cert.clone();
-                let key = key.clone();
-                let ctx_dot = Arc::clone(&dns_ctx);
-                Some(tokio::spawn(async move {
-                    if let Err(e) = run_dot_worker(addr, &cert, &key, ctx_dot).await {
-                        tracing::error!("DoT worker error: {e}");
+                match bind_dot(addr, cert, key) {
+                    Ok((listener, acceptor)) => Some(tokio::spawn(run_dot_worker(
+                        listener,
+                        acceptor,
+                        addr,
+                        Arc::clone(&dns_ctx),
+                    ))),
+                    Err(e) => {
+                        listener_faults.push(format!("DoT listener: {e}"));
+                        None
                     }
-                }))
+                }
             } else {
                 warn!(
                     "DoT is enabled on {addr} but tls_cert/tls_key is missing; DoT listener dormant"
@@ -387,16 +401,18 @@ impl AsyncService for DnsService {
         #[cfg(feature = "doq")]
         let doq_worker = if let Some(addr) = self.cfg.doq_listen {
             if let (Some(cert), Some(key)) = (&self.cfg.tls_cert, &self.cfg.tls_key) {
-                let cert = cert.clone();
-                let key = key.clone();
-                let ctx_doq = Arc::clone(&dns_ctx);
-                Some(tokio::spawn(async move {
-                    if let Err(e) =
-                        doq::run_doq_worker(addr, &cert, &key, ctx_doq, doq_stop_rx).await
-                    {
-                        tracing::error!("DoQ worker error: {e}");
+                match doq::bind_doq(addr, cert, key) {
+                    Ok(endpoint) => Some(tokio::spawn(doq::run_doq_worker(
+                        endpoint,
+                        addr,
+                        Arc::clone(&dns_ctx),
+                        doq_stop_rx,
+                    ))),
+                    Err(e) => {
+                        listener_faults.push(format!("DoQ listener: {e}"));
+                        None
                     }
-                }))
+                }
             } else {
                 warn!(
                     "DoQ is enabled on {addr} but tls_cert/tls_key is missing; DoQ listener dormant"
@@ -457,7 +473,19 @@ impl AsyncService for DnsService {
         let mut repeat_tick = time::interval(LOG_REPEAT_TICK);
         repeat_tick.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
 
-        h.ready();
+        // What the service reports: a listener that never opened outranks the upstream state,
+        // which the WAN flips; the WAN coming back never clears a listener fault.
+        for fault in &listener_faults {
+            warn!("{fault}; serving without it");
+        }
+        let listener_fault = (!listener_faults.is_empty())
+            .then(|| DegradedReason::Custom(Cow::Owned(listener_faults.join("; "))));
+        let report = |upstream_reachable: bool| match &listener_fault {
+            Some(why) => h.degraded(why.clone()),
+            None if upstream_reachable => h.ready(),
+            None => h.degraded(DegradedReason::UpstreamUnreachable),
+        };
+        report(true);
 
         loop {
             if !ctx.is_running() {
@@ -473,12 +501,8 @@ impl AsyncService for DnsService {
                     }
                 }
                 Ok(()) = wan_rx.changed() => {
-                    let snap = wan_rx.borrow().clone();
-                    if snap.is_up() {
-                        h.recovered();
-                    } else {
-                        h.degraded(DegradedReason::UpstreamUnreachable);
-                    }
+                    let up = wan_rx.borrow().is_up();
+                    report(up);
                 }
 
                 cmd = h.next_command() => {

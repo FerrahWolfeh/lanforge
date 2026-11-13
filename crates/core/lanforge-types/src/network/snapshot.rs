@@ -121,6 +121,13 @@ impl InterfaceSnapshot {
     pub fn find_by_index(&self, ifindex: u32) -> Option<&LinkInfo> {
         self.links.iter().find(|l| l.ifindex == ifindex)
     }
+
+    /// Whether a link now exists that `earlier` did not have (an interface appeared). Address
+    /// and carrier changes do not count.
+    #[must_use]
+    pub fn gained_link_since(&self, earlier: &Self) -> bool {
+        self.links.iter().any(|l| !earlier.has_link(&l.name))
+    }
 }
 
 /// Point-in-time snapshot of low-level network transport metrics.
@@ -137,6 +144,22 @@ pub struct TransportSnapshot {
 }
 
 impl TransportSnapshot {
+    /// Fewest socket errors in one window that can mark it failing.
+    pub const FAILING_MIN_ERRORS: u64 = 10;
+
+    /// Whether the sockets were failing between `earlier` and `self` (one sampling window): at
+    /// least [`Self::FAILING_MIN_ERRORS`] errors and more errors than packets moved, i.e. the
+    /// socket is next to unusable (interface gone, `ENETDOWN`). Rate-limited drops never count:
+    /// a flooding client is not a failing service. Counters that went backwards (new sockets)
+    /// count from zero.
+    #[must_use]
+    pub const fn failing_since(&self, earlier: &Self) -> bool {
+        let errors = self.errors.saturating_sub(earlier.errors);
+        let moved = self.rx_packets.saturating_sub(earlier.rx_packets)
+            + self.tx_packets.saturating_sub(earlier.tx_packets);
+        errors >= Self::FAILING_MIN_ERRORS && errors > moved
+    }
+
     /// Adds `other`'s counters (a service with several sockets shows their sum); the most
     /// recent error wins.
     pub fn absorb(&mut self, other: &Self) {
@@ -286,5 +309,43 @@ impl TransportMetrics {
         self.rate_limited_packets.store(0, Ordering::Relaxed);
         self.errors.store(0, Ordering::Relaxed);
         self.last_error_timestamp.store(0, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TransportSnapshot;
+
+    fn snap(rx: u64, tx: u64, errors: u64, dropped: u64) -> TransportSnapshot {
+        TransportSnapshot {
+            rx_packets: rx,
+            tx_packets: tx,
+            errors,
+            dropped,
+            ..TransportSnapshot::default()
+        }
+    }
+
+    #[test]
+    fn failing_needs_enough_errors_and_more_errors_than_traffic() {
+        let start = snap(100, 100, 5, 0);
+        // A few errors on a quiet socket are noise.
+        assert!(!snap(100, 100, 14, 0).failing_since(&start));
+        // Enough errors and nothing moved: unusable.
+        assert!(snap(100, 100, 15, 0).failing_since(&start));
+        // The same errors on a busy socket are not a failing one.
+        assert!(!snap(105, 110, 15, 0).failing_since(&start));
+        assert!(snap(105, 104, 15, 0).failing_since(&start));
+    }
+
+    #[test]
+    fn rate_limited_drops_never_fail_a_socket() {
+        assert!(!snap(0, 0, 0, 10_000).failing_since(&snap(0, 0, 0, 0)));
+    }
+
+    #[test]
+    fn counters_of_new_sockets_count_from_zero() {
+        // A restart registered fresh counters: the window starts over, nothing underflows.
+        assert!(!snap(0, 0, 3, 0).failing_since(&snap(500, 500, 40, 0)));
     }
 }

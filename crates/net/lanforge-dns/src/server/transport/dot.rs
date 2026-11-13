@@ -13,25 +13,33 @@ use crate::server::DnsContext;
 use crate::server::transport::net::bind_tcp;
 use crate::server::worker::tcp::{MAX_TCP_CONNECTIONS, TCP_IDLE_TIMEOUT, serve_stream};
 use lanforge_crypto::tls::load_tls_config;
+use lanforge_transport::DualTcpListener;
 
-/// Runs the `DoT` listener (RFC 7858) on `addr`.
+/// Opens the `DoT` listener on `addr` with the certificate `cert`/`key` (PEM).
+///
+/// # Errors
+/// The TLS configuration is unusable or the address cannot be bound ([`CoreError::Bind`]).
+pub fn bind_dot(
+    addr: SocketAddr,
+    cert: &str,
+    key: &str,
+) -> Result<(DualTcpListener, TlsAcceptor), CoreError> {
+    let tls_config =
+        load_tls_config(cert, key).map_err(|e| CoreError::Generic(format!("TLS config: {e}")))?;
+    Ok((bind_tcp(addr)?, TlsAcceptor::from(Arc::new(tls_config))))
+}
+
+/// Runs the `DoT` listener (RFC 7858) opened by [`bind_dot`].
 ///
 /// Connections are owned by this future (no detached tasks): aborting it drops every open TLS
 /// session with the listener. A silent client is closed after [`TCP_IDLE_TIMEOUT`], both during
 /// the handshake and between queries.
 pub async fn run_dot_worker(
+    listener: DualTcpListener,
+    acceptor: TlsAcceptor,
     addr: SocketAddr,
-    cert: &str,
-    key: &str,
     ctx: Arc<DnsContext>,
-) -> Result<(), CoreError> {
-    let tls_config = load_tls_config(cert, key)
-        .map_err(|e| CoreError::Generic(format!("Failed to load TLS config for DoT: {e}")))?;
-
-    let acceptor = TlsAcceptor::from(Arc::new(tls_config));
-    let listener =
-        bind_tcp(addr).map_err(|e| CoreError::Generic(format!("DoT bind error on {addr}: {e}")))?;
-
+) {
     info!("DoT listening on tls://{addr}");
 
     let mut connections = JoinSet::new();

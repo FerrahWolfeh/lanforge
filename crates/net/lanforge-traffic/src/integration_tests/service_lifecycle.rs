@@ -9,10 +9,11 @@ use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_types::events::TimedEvent;
 use lanforge_types::events::pppoe::{PppoeEvent, PppoeSessionUp};
 use lanforge_types::events::traffic::TrafficEvent;
+use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::snapshot::{InterfaceSnapshot, LinkInfo};
 use lanforge_types::network::traffic::{NicTuningConfig, SqmConfig, SqmDiffserv, TrafficConfig};
 use lanforge_types::system::{ServiceId, ServiceState};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 use tokio::time::{sleep, timeout};
 
 fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
@@ -329,6 +330,142 @@ async fn test_traffic_reacts_to_interface_ready() {
     assert!(status.tuned_interfaces.contains(&"lan1".to_string()));
 
     // Cleanup
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = serve_handle.await;
+    service.cleanup(&ctx).await.expect("Cleanup must succeed");
+}
+
+/// A running traffic service whose SQM waits for the WAN is idle, not dormant: it stays `Online`
+/// in the context, in its status and on the supervisor's node watch while the PPPoE session is
+/// down (it used to write `Inactive` into the context behind the node's back).
+#[tokio::test]
+async fn test_traffic_stays_online_while_sqm_waits_for_wan() {
+    let (ctx, bus) = create_test_context();
+    let mut traffic_sub = bus.subscribe_traffic();
+    ctx.update_pppoe_config(PppoeConfig {
+        enabled: true,
+        ..Default::default()
+    });
+
+    let cfg = TrafficConfig {
+        tuning: NicTuningConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        sqm: SqmConfig {
+            enabled: true,
+            interface: "auto".into(),
+            download_mbps: 300,
+            upload_mbps: 150,
+            ingress_device: "ifb4lanforge".into(),
+            ..Default::default()
+        },
+    };
+    ctx.update_traffic_config(cfg.clone());
+
+    let (status_tx, status_rx) = watch::channel(None);
+    let mut service = TrafficService::inert(cfg);
+    let mut service_clone = service.clone();
+    let ctx_clone = ctx.clone();
+    let h =
+        ServiceHandle::new(ServiceId::Traffic, ctx_clone.clone()).with_status_reporter(status_tx);
+    let serve_handle = tokio::spawn(async move { service_clone.serve(&ctx_clone, &h).await });
+    sleep(Duration::from_millis(50)).await;
+
+    let assert_online = |when: &str| {
+        assert_eq!(
+            ctx.get_service_state(ServiceId::Traffic),
+            ServiceState::Online,
+            "context state {when}"
+        );
+        assert_eq!(
+            status_rx.borrow().as_ref().map(|(state, _)| *state),
+            Some(ServiceState::Online),
+            "node report {when}"
+        );
+        assert_eq!(
+            ctx.traffic_status().map(|s| s.service_state),
+            Some(ServiceState::Online),
+            "traffic status {when}"
+        );
+    };
+    assert_online("at start, WAN down");
+
+    let _ = bus.publish(LanforgeEvent::Pppoe(PppoeEvent::SessionUp(Box::new(
+        PppoeSessionUp {
+            interface: "ppp0".into(),
+            ac_mac: None,
+            ac_name: None,
+            session_id: 1,
+            mru: 1492,
+            ipv4: Some("10.0.0.2".parse().unwrap()),
+            ipv4_peer: Some("10.0.0.1".parse().unwrap()),
+            dns: vec![],
+            ipv6_link_local: true,
+        },
+    ))));
+    wait_for_sqm_applied(&mut traffic_sub).await;
+    assert_online("with the session up");
+
+    let _ = bus.publish(LanforgeEvent::Pppoe(PppoeEvent::SessionDown {
+        reason: "test".into(),
+    }));
+    wait_for_sqm_cleared(&mut traffic_sub).await;
+    assert_online("after the session went down");
+    assert!(!ctx.traffic_status().is_some_and(|s| s.sqm_active));
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = serve_handle.await;
+    service.cleanup(&ctx).await.expect("Cleanup must succeed");
+}
+
+/// A config change is never lost on a busy bus: the service follows its config section, not
+/// the `RulesetChanged` notification (a lagged receiver used to drop it, keeping the old SQM).
+#[tokio::test]
+async fn test_traffic_config_change_survives_a_lagged_bus() {
+    let (ctx, bus) = create_test_context();
+    let cfg = TrafficConfig {
+        tuning: NicTuningConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        sqm: SqmConfig {
+            enabled: true,
+            interface: "auto".into(),
+            download_mbps: 300,
+            upload_mbps: 150,
+            ingress_device: "ifb4lanforge".into(),
+            ..Default::default()
+        },
+    };
+    ctx.update_traffic_config(cfg.clone());
+
+    let mut service = TrafficService::inert(cfg);
+    let mut service_clone = service.clone();
+    let ctx_clone = ctx.clone();
+    let h = ServiceHandle::new(ServiceId::Traffic, ctx_clone.clone());
+    let serve_handle = tokio::spawn(async move { service_clone.serve(&ctx_clone, &h).await });
+    sleep(Duration::from_millis(50)).await;
+    assert_eq!(ctx.traffic_status().map(|s| s.download_mbps), Some(300));
+
+    // The change and a burst larger than the traffic topic, before the service runs again.
+    let mut new_cfg = ctx.get_traffic_config().unwrap_or_default();
+    new_cfg.sqm.download_mbps = 800;
+    ctx.update_traffic_config(new_cfg);
+    for _ in 0..300 {
+        let _ = bus.publish(LanforgeEvent::Traffic(Box::new(TrafficEvent::SqmCleared {
+            interface: "noise".into(),
+        })));
+    }
+
+    timeout(Duration::from_secs(1), async {
+        while ctx.traffic_status().map(|s| s.download_mbps) != Some(800) {
+            sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the new SQM bandwidth must be applied");
+
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = serve_handle.await;
     service.cleanup(&ctx).await.expect("Cleanup must succeed");

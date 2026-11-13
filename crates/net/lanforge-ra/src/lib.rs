@@ -475,8 +475,7 @@ impl RaService {
 
         let mac = self.resolve_mac(iface_index)?;
 
-        let transport = Icmp6Transport::bind(&self.cfg.iface, iface_index)
-            .map_err(|e| CoreError::Generic(e.to_string()))?;
+        let transport = Icmp6Transport::bind(&self.cfg.iface, iface_index)?;
 
         Ok((mac, transport))
     }

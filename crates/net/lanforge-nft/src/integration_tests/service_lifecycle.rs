@@ -1,9 +1,10 @@
 use std::net::IpAddr;
 use std::process::Command;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use crate::{NftService, RecordingNft};
+use crate::{NftApplier, NftService, RecordingNft};
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
@@ -18,7 +19,9 @@ use lanforge_types::network::firewall::{
 use lanforge_types::network::snapshot::{WanSnapshot, WanState};
 use lanforge_types::system::{ServiceId, ServiceState};
 use lanforge_types::update::{DeviceUpdate, InterfaceState};
-use tokio::sync::{broadcast, mpsc};
+use nftables::helper::NftablesError;
+use nftables::schema::Nftables;
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio::time::{sleep, timeout};
 
 fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
@@ -232,6 +235,8 @@ async fn test_firewall_reacts_to_ruleset_changed_in_place() {
 
 #[tokio::test]
 async fn test_firewall_disabled_state_lifecycle_transitions() {
+    // The table follows the switch in place; the service states (Inactive/Dormant, then Online
+    // again) come from the supervisor's condition, see the daemon's `service_state_model` tests.
     let (ctx, bus) = create_test_context();
     let mut fw_sub = bus.subscribe_firewall();
 
@@ -247,41 +252,30 @@ async fn test_firewall_disabled_state_lifecycle_transitions() {
         s.serve(&ctx_clone, &h).await
     });
     sleep(Duration::from_millis(50)).await;
-
     assert_eq!(ctx.get_service_state(ServiceId::Nft), ServiceState::Online);
 
-    // 1. Disable firewall in context and notify
+    // 1. Disable firewall in context and notify: the table goes.
     let mut cfg = ctx.get_firewall_config().unwrap();
     cfg.enabled = false;
     ctx.update_firewall_config(cfg);
-
-    // Allow event to process
     sleep(Duration::from_millis(100)).await;
-
-    // Service state must transition to Inactive
-    assert_eq!(
-        ctx.get_service_state(ServiceId::Nft),
-        ServiceState::Inactive
+    assert!(
+        service.last_applied_payload().is_none(),
+        "a disabled firewall leaves no table behind"
     );
 
-    // 2. Re-enable firewall in context and notify
+    // 2. Re-enable firewall in context and notify: the ruleset is back.
     let mut cfg = ctx.get_firewall_config().unwrap();
     cfg.enabled = true;
     ctx.update_firewall_config(cfg);
-
     let _summary = wait_for_ruleset_applied(&mut fw_sub).await;
-
-    // Service state must transition back to Online
+    assert!(service.last_applied_payload().is_some());
     assert_eq!(ctx.get_service_state(ServiceId::Nft), ServiceState::Online);
 
     // Cleanup
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = serve_handle.await;
     service.cleanup(&ctx).await.expect("Cleanup must succeed");
-    assert_eq!(
-        ctx.get_service_state(ServiceId::Nft),
-        ServiceState::Inactive
-    );
 }
 
 #[tokio::test]
@@ -460,7 +454,6 @@ async fn test_firewall_service_control_stop_and_restart() {
     let mut service = NftService::inert();
     service.init(&ctx).await.expect("Init must succeed");
     let _ = wait_for_ruleset_applied(&mut fw_sub).await;
-    assert_eq!(ctx.get_service_state(ServiceId::Nft), ServiceState::Online);
 
     // Commands arrive from the supervisor, as they do for an admin `lanforge service ...`.
     let (cmd_tx, cmd_rx) = mpsc::channel(8);
@@ -489,7 +482,8 @@ async fn test_firewall_service_control_stop_and_restart() {
         "restart must reapply over the live table, never delete it"
     );
 
-    // Stop ends serve; cleanup locks the WAN down and marks the service Inactive.
+    // Stop ends serve (the supervisor then marks the service Inactive); cleanup locks the WAN
+    // down.
     cmd_tx
         .send(ServiceCommand::Stop)
         .await
@@ -500,9 +494,9 @@ async fn test_firewall_service_control_stop_and_restart() {
         .expect("join error");
     assert!(res.is_ok());
     service.cleanup(&ctx).await.expect("Cleanup must succeed");
-    assert_eq!(
-        ctx.get_service_state(ServiceId::Nft),
-        ServiceState::Inactive
+    assert!(
+        service.last_applied_payload().is_some(),
+        "stop must lock the WAN down, never delete the table"
     );
 }
 
@@ -698,10 +692,6 @@ async fn test_firewall_stop_removes_table_when_configured() {
     assert!(
         service.last_applied_payload().is_none(),
         "remove must leave no ruleset behind"
-    );
-    assert_eq!(
-        ctx.get_service_state(ServiceId::Nft),
-        ServiceState::Inactive
     );
 }
 
@@ -1080,4 +1070,118 @@ async fn kernel_applier_installs_and_removes_the_table() {
         !kernel_has_table("lanforge"),
         "on_stop = remove deletes the table"
     );
+}
+
+/// Refuses every batch while `failing` is set, like a kernel that rejects the ruleset.
+#[derive(Clone, Default)]
+struct FlakyNft {
+    failing: Arc<AtomicBool>,
+}
+
+impl NftApplier for FlakyNft {
+    fn apply(&self, _ruleset: &Nftables<'static>) -> Result<(), NftablesError> {
+        if self.failing.load(Ordering::SeqCst) {
+            return Err(NftablesError::NftFailed {
+                program: "nft".into(),
+                hint: "applying ruleset".into(),
+                stdout: String::new(),
+                stderr: "Error: Could not process rule".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// A ruleset the kernel refused leaves the firewall `Degraded` (it used to stay `Online`); the
+/// next ruleset that applies brings it back `Online`.
+#[tokio::test]
+async fn test_firewall_degraded_while_the_ruleset_is_refused() {
+    let (ctx, _bus) = create_test_context();
+    let applier = FlakyNft::default();
+    applier.failing.store(true, Ordering::SeqCst);
+
+    let (status_tx, status_rx) = watch::channel(None);
+    let mut service = NftService::with_applier(applier.clone());
+    service.init(&ctx).await.expect("Init must succeed");
+    let ctx_clone = ctx.clone();
+    let serve_handle = tokio::spawn(async move {
+        let h =
+            ServiceHandle::new(ServiceId::Nft, ctx_clone.clone()).with_status_reporter(status_tx);
+        service.serve(&ctx_clone, &h).await
+    });
+
+    let reported = |state: ServiceState| {
+        let ctx = ctx.clone();
+        let status_rx = status_rx.clone();
+        async move {
+            timeout(Duration::from_secs(1), async {
+                while ctx.get_service_state(ServiceId::Nft) != state
+                    || status_rx.borrow().as_ref().map(|(s, _)| *s) != Some(state)
+                {
+                    sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "expected {state:?}, got context {:?} / node {:?}",
+                    ctx.get_service_state(ServiceId::Nft),
+                    *status_rx.borrow()
+                )
+            });
+        }
+    };
+    reported(ServiceState::Degraded).await;
+
+    applier.failing.store(false, Ordering::SeqCst);
+    let cfg = ctx.get_firewall_config().unwrap();
+    ctx.update_firewall_config(FirewallConfig {
+        bypass_dns: !cfg.bypass_dns,
+        ..cfg
+    });
+    reported(ServiceState::Online).await;
+
+    let _ = ctx
+        .bus()
+        .publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = serve_handle.await;
+}
+
+/// A refused ruleset is retried on its own (backoff from 1 s): a transient refusal (a device a
+/// flowtable names not there yet, `nft` busy) heals without waiting for an unrelated event.
+#[tokio::test]
+async fn test_firewall_retries_a_refused_ruleset() {
+    let (ctx, _bus) = create_test_context();
+    let applier = FlakyNft::default();
+    applier.failing.store(true, Ordering::SeqCst);
+
+    let mut service = NftService::with_applier(applier.clone());
+    service.init(&ctx).await.expect("Init must succeed");
+    let ctx_clone = ctx.clone();
+    let serve_handle = tokio::spawn(async move {
+        let h = ServiceHandle::new(ServiceId::Nft, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+    timeout(Duration::from_secs(1), async {
+        while ctx.get_service_state(ServiceId::Nft) != ServiceState::Degraded {
+            sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("a refused ruleset degrades the firewall");
+
+    // The kernel accepts again; nothing else happens.
+    applier.failing.store(false, Ordering::SeqCst);
+    timeout(Duration::from_secs(3), async {
+        while ctx.get_service_state(ServiceId::Nft) != ServiceState::Online {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the firewall must retry the ruleset by itself");
+
+    let _ = ctx
+        .bus()
+        .publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = serve_handle.await;
 }
