@@ -18,6 +18,10 @@ use socket2::{SockAddr, Socket};
 use tokio::io::unix::AsyncFd;
 
 /// `libc::socket`: a new socket owned by the caller.
+///
+/// # Errors
+/// `socket(2)` failed (e.g. `EACCES`/`EPERM` without capability, `EAFNOSUPPORT`, `EMFILE`/`ENFILE`,
+/// or `EINVAL`).
 pub fn socket(domain: c_int, ty: c_int, protocol: c_int) -> io::Result<OwnedFd> {
     // SAFETY: plain syscall with integer arguments; no memory is passed.
     let fd = unsafe { libc::socket(domain, ty, protocol) };
@@ -29,6 +33,9 @@ pub fn socket(domain: c_int, ty: c_int, protocol: c_int) -> io::Result<OwnedFd> 
 }
 
 /// Registers an owned descriptor with the tokio reactor.
+///
+/// # Errors
+/// `AsyncFd::register` failed (e.g. the descriptor is not epoll-compatible, `EMFILE`, or `ENOMEM`).
 pub fn register_fd(fd: OwnedFd) -> io::Result<AsyncFd<OwnedFd>> {
     // SAFETY: `OwnedFd` keeps the descriptor open until the `AsyncFd` drops it, and its
     // `as_raw_fd()` always returns that same descriptor.
@@ -36,6 +43,9 @@ pub fn register_fd(fd: OwnedFd) -> io::Result<AsyncFd<OwnedFd>> {
 }
 
 /// Registers a `socket2::Socket` with the tokio reactor.
+///
+/// # Errors
+/// `AsyncFd::register` failed (e.g. the socket is not epoll-compatible, `EMFILE`, or `ENOMEM`).
 pub fn register_socket(sock: Socket) -> io::Result<AsyncFd<Socket>> {
     // SAFETY: `Socket` owns its descriptor (closed on drop) and `as_raw_fd()` always returns it.
     unsafe { AsyncFd::register(sock) }.map_err(Into::into)
@@ -67,6 +77,10 @@ fn sockaddr_ll(
 }
 
 /// Binds an `AF_PACKET` socket to `ifindex`, receiving only frames of `protocol` (`ETH_P_*`, host order).
+///
+/// # Errors
+/// `ifindex` exceeds `c_int::MAX` (`InvalidInput`), or `bind(2)` fails (e.g. `ENODEV`/`ENXIO` if
+/// the interface does not exist, or `EACCES`).
 pub fn bind_packet(fd: BorrowedFd<'_>, ifindex: u32, protocol: u16) -> io::Result<()> {
     let addr = sockaddr_ll(ifindex, protocol, None)?;
     // SAFETY: `addr` is a valid `sockaddr_ll` that outlives the call; the length passed is its size.
@@ -85,6 +99,10 @@ pub fn bind_packet(fd: BorrowedFd<'_>, ifindex: u32, protocol: u16) -> io::Resul
 }
 
 /// Sends `frame` (a full Ethernet frame) out of `ifindex` on an `AF_PACKET` socket.
+///
+/// # Errors
+/// `ifindex` exceeds `c_int::MAX` (`InvalidInput`), or `sendto(2)` fails (e.g. `ENETDOWN`, `ENXIO`,
+/// `EMSGSIZE`, or `EAGAIN`/`EWOULDBLOCK`).
 pub fn send_packet(
     fd: BorrowedFd<'_>,
     frame: &[u8],
@@ -109,6 +127,9 @@ pub fn send_packet(
 }
 
 /// `read(2)` into `buf`.
+///
+/// # Errors
+/// `read(2)` failed (e.g. `EAGAIN`/`EWOULDBLOCK`, `EBADF`, or `EIO`).
 pub fn read(fd: BorrowedFd<'_>, buf: &mut [u8]) -> io::Result<usize> {
     // SAFETY: `buf` is writable for `buf.len()` bytes and exclusively borrowed for the call.
     let n = unsafe {
@@ -122,6 +143,9 @@ pub fn read(fd: BorrowedFd<'_>, buf: &mut [u8]) -> io::Result<usize> {
 }
 
 /// `write(2)` of `buf`.
+///
+/// # Errors
+/// `write(2)` failed (e.g. `EAGAIN`/`EWOULDBLOCK`, `EPIPE`, `ENETDOWN`, or `EMSGSIZE`).
 pub fn write(fd: BorrowedFd<'_>, buf: &[u8]) -> io::Result<usize> {
     // SAFETY: `buf` is readable for `buf.len()` bytes for the duration of the call.
     let n = unsafe {
@@ -135,6 +159,9 @@ pub fn write(fd: BorrowedFd<'_>, buf: &[u8]) -> io::Result<usize> {
 }
 
 /// `recv_from` into an initialized buffer (socket2 only takes `MaybeUninit` slices).
+///
+/// # Errors
+/// `recvfrom(2)` on `sock` failed (e.g. `EAGAIN`/`EWOULDBLOCK`, `EBADF`, or `EINTR`).
 pub fn recv_from(sock: &Socket, buf: &mut [u8]) -> io::Result<(usize, SockAddr)> {
     // SAFETY: `[u8]` and `[MaybeUninit<u8>]` have the same layout, and recvfrom(2) only writes
     // initialized bytes, so `buf` stays fully initialized.
@@ -143,6 +170,9 @@ pub fn recv_from(sock: &Socket, buf: &mut [u8]) -> io::Result<(usize, SockAddr)>
 }
 
 /// `recvfrom(2)` on an `AF_INET6` socket, returning the IPv6 source address.
+///
+/// # Errors
+/// `recvfrom(2)` failed (e.g. `EAGAIN`/`EWOULDBLOCK`, `EBADF`, or `ECONNREFUSED`).
 pub fn recv_from_v6(fd: BorrowedFd<'_>, buf: &mut [u8]) -> io::Result<(usize, SocketAddrV6)> {
     let mut src = MaybeUninit::<libc::sockaddr_in6>::zeroed();
     let mut len = socklen_of::<libc::sockaddr_in6>();
@@ -171,6 +201,10 @@ pub fn recv_from_v6(fd: BorrowedFd<'_>, buf: &mut [u8]) -> io::Result<(usize, So
 }
 
 /// `setsockopt(2)` with a raw byte value.
+///
+/// # Errors
+/// `val.len()` exceeds `socklen_t::MAX` (`InvalidInput`), or `setsockopt(2)` failed (`EPERM`
+/// without `CAP_NET_RAW`/`CAP_NET_ADMIN`, `ENOPROTOOPT`, or `EINVAL`).
 pub fn set_sockopt_bytes(
     fd: BorrowedFd<'_>,
     level: c_int,
@@ -197,6 +231,9 @@ pub fn set_sockopt_bytes(
 }
 
 /// `setsockopt(2)` with a `c_int` value.
+///
+/// # Errors
+/// Same as [`set_sockopt_bytes`].
 pub fn set_sockopt_int(fd: BorrowedFd<'_>, level: c_int, opt: c_int, val: c_int) -> io::Result<()> {
     set_sockopt_bytes(fd, level, opt, &val.to_ne_bytes())
 }

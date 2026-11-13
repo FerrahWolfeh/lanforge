@@ -148,6 +148,10 @@ impl DualTcpListener {
     }
 
     /// Accepts the next incoming TCP connection from either the IPv4 or IPv6 arm.
+    ///
+    /// # Errors
+    /// Accepting a connection on the underlying IPv4 or IPv6 listener fails (e.g. `EMFILE`,
+    /// `ENFILE`, or `ECONNABORTED`).
     pub async fn accept(&self) -> io::Result<(TcpStream, SocketAddr)> {
         let res = match &self.inner.backend {
             TcpBackend::KernelDual { v4, v6 } => {
@@ -171,6 +175,9 @@ impl DualTcpListener {
     }
 
     /// Returns the local addresses of the bound listeners.
+    ///
+    /// # Errors
+    /// Querying `getsockname(2)` on an underlying listener fails.
     pub fn local_addrs(&self) -> io::Result<Vec<SocketAddr>> {
         match &self.inner.backend {
             TcpBackend::KernelDual { v4, v6 } => Ok(vec![v4.local_addr()?, v6.local_addr()?]),

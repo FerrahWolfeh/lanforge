@@ -214,6 +214,9 @@ impl UdpTransport {
     }
 
     /// Returns the local addresses of the bound sockets.
+    ///
+    /// # Errors
+    /// Querying `getsockname(2)` on an underlying socket fails.
     pub fn local_addrs(&self) -> io::Result<Vec<SocketAddr>> {
         match &self.inner.backend {
             UdpBackend::KernelDual { v4, v6 } => Ok(vec![v4.local_addr()?, v6.local_addr()?]),
@@ -227,6 +230,10 @@ impl UdpTransport {
     ///
     /// In dual-stack mode, fairly polls across IPv4 and IPv6 arms.
     /// Automatically applies rate-limiting and tracks packet/byte metrics.
+    ///
+    /// # Errors
+    /// Waiting for readiness or receiving from an underlying socket fails, or the inert channel is
+    /// closed (`UnexpectedEof`).
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
         loop {
             let (n, src) = match &self.inner.backend {
@@ -288,6 +295,10 @@ impl UdpTransport {
     /// Sends a datagram to the specified destination address.
     ///
     /// Automatically routes to the IPv4 or IPv6 socket based on the target address family.
+    ///
+    /// # Errors
+    /// Sending on the underlying socket fails (e.g. `ENETUNREACH`, `ECONNREFUSED`, or `EMSGSIZE`),
+    /// or the inert channel is closed (`BrokenPipe`).
     pub async fn send(&self, payload: &[u8], target: &SocketAddr) -> io::Result<usize> {
         let res = match &self.inner.backend {
             UdpBackend::KernelDual { v4, v6 } => match target {
@@ -314,16 +325,26 @@ impl UdpTransport {
     }
 
     /// Sends a datagram to the specified destination address.
+    ///
+    /// # Errors
+    /// Same as [`UdpTransport::send`].
     pub async fn send_to(&self, payload: &[u8], target: SocketAddr) -> io::Result<usize> {
         self.send(payload, &target).await
     }
 
     /// Receives a datagram into the provided buffer (alias to `recv`).
+    ///
+    /// # Errors
+    /// Same as [`UdpTransport::recv`].
     pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
         self.recv(buf).await
     }
 
     /// Attempts to send a datagram immediately without awaiting.
+    ///
+    /// # Errors
+    /// Sending without blocking fails (including `WouldBlock` when the send buffer or inert
+    /// channel is full).
     pub fn try_send(&self, payload: &[u8], target: &SocketAddr) -> io::Result<usize> {
         let res = match &self.inner.backend {
             UdpBackend::KernelDual { v4, v6 } => match target {

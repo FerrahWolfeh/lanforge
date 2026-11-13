@@ -45,6 +45,10 @@ pub struct IcmpPinger {
 impl IcmpPinger {
     /// Creates and initializes a new `IcmpPinger`, binding raw ICMPv4/v6 sockets and
     /// spawning the background reader loop.
+    ///
+    /// # Errors
+    /// Neither raw `ICMPv4` nor `ICMPv6` socket could be opened (e.g. `EPERM` without `CAP_NET_RAW`),
+    /// or reactor registration fails.
     pub fn new() -> io::Result<Self> {
         let socket_v4 = match Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::ICMPV4)) {
             Ok(s) => {
@@ -259,11 +263,18 @@ impl IcmpPinger {
     }
 
     /// Sends a targeted ICMP Echo Request and waits for an Echo Reply with a 1-second timeout.
+    ///
+    /// # Errors
+    /// Same as [`IcmpPinger::ping_timeout`].
     pub async fn ping(&self, ip: IpAddr, seq: u16) -> io::Result<bool> {
         self.ping_timeout(ip, seq, Duration::from_secs(1)).await
     }
 
     /// Sends a targeted ICMP Echo Request and waits for an Echo Reply with the specified timeout.
+    ///
+    /// # Errors
+    /// The socket for `ip`'s address family is unavailable, `send_to` fails, or the inert channel
+    /// is full or closed.
     pub async fn ping_timeout(&self, ip: IpAddr, seq: u16, timeout: Duration) -> io::Result<bool> {
         const PAYLOAD: &[u8] = b"LanforgeProberPingPayload";
         const PACKET_LEN: usize = 8 + PAYLOAD.len();

@@ -38,6 +38,9 @@ pub fn build_magic_packet(mac: MacAddr) -> [u8; 102] {
 /// * `interface` — network interface name (e.g., `"eth0"`) for socket binding
 /// * `directed_broadcast` — optional directed broadcast address (e.g., `192.168.1.255`)
 /// * `unicast_ip` — optional fallback unicast IP (device's last known address)
+///
+/// # Errors
+/// Creating the UDP socket, enabling `SO_BROADCAST`, or binding the local address fails.
 pub fn send_wol_magic_packet(
     mac: MacAddr,
     interface: &str,

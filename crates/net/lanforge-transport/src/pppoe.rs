@@ -166,6 +166,10 @@ impl PppoeTransport {
     }
 
     /// Connects the `PPPoE` session data path using `AF_PPPOX`.
+    ///
+    /// # Errors
+    /// Opening the `AF_PPPOX` socket fails, `ifname` is 16+ bytes or contains a NUL byte
+    /// (`InvalidInput`), `connect(2)` fails (e.g. `ENODEV`), or reactor registration fails.
     pub fn connect_session(
         &self,
         ifname: &str,
@@ -232,6 +236,9 @@ impl PppoeTransport {
     /// the PPP generic channel rather than the raw `AF_PPPOX` socket. This method redirects
     /// session reads and writes to the channel descriptor while keeping the `AF_PPPOX` socket
     /// alive so the kernel does not unbind the `PPPoE` channel.
+    ///
+    /// # Errors
+    /// Duplicating the existing `AF_PPPOX` descriptor or registering `chan_fd` with the reactor fails.
     pub fn attach_kernel_channel(&self, chan_fd: OwnedFd) -> io::Result<()> {
         let is_inert = self.is_inert();
         if is_inert {
@@ -265,6 +272,9 @@ impl PppoeTransport {
     /// Takes over a session already handed to the kernel by a previous process: `pppox_fd` is its
     /// connected `AF_PPPOX` socket (kept open so the kernel keeps the channel), `chan_fd` the
     /// `/dev/ppp` channel its control frames now travel on. In inert mode, this is a no-op.
+    ///
+    /// # Errors
+    /// Registering `chan_fd` with the reactor fails.
     pub fn adopt_session(&self, pppox_fd: OwnedFd, chan_fd: OwnedFd) -> io::Result<()> {
         if self.is_inert() {
             return Ok(());
@@ -287,6 +297,10 @@ impl PppoeTransport {
     }
 
     /// Sends a discovery frame (e.g. PADI, PADR, PADT) through the transport.
+    ///
+    /// # Errors
+    /// The discovery socket is not bound (`NotConnected`), waiting for writability or `write(2)`
+    /// fails, or the inert channel is closed (`BrokenPipe`).
     pub async fn send_discovery(&self, frame: &[u8]) -> io::Result<usize> {
         let backend = { self.inner.discovery.read().clone() };
         let backend = backend.ok_or_else(|| {
@@ -318,6 +332,10 @@ impl PppoeTransport {
     }
 
     /// Receives a discovery frame through the transport.
+    ///
+    /// # Errors
+    /// The discovery socket is not bound (`NotConnected`), waiting for readability or `read(2)`
+    /// fails, or the inert channel is closed (`UnexpectedEof`).
     pub async fn recv_discovery(&self, buf: &mut [u8]) -> io::Result<usize> {
         let backend = { self.inner.discovery.read().clone() };
         let backend = backend.ok_or_else(|| {
@@ -367,6 +385,10 @@ impl PppoeTransport {
     }
 
     /// Sends a PPP session frame (e.g. LCP, PAP/CHAP, IPCP, Echo-Req) through the transport.
+    ///
+    /// # Errors
+    /// The session is not connected (`NotConnected`), waiting for writability or `write(2)` fails,
+    /// or the inert channel is closed (`BrokenPipe`).
     pub async fn send_session(&self, frame: &[u8]) -> io::Result<usize> {
         let backend = { self.inner.session.read().clone() };
         let backend = backend.ok_or_else(|| {
@@ -398,6 +420,10 @@ impl PppoeTransport {
     }
 
     /// Receives a PPP session frame through the transport.
+    ///
+    /// # Errors
+    /// The session is not connected (`NotConnected`), waiting for readability or `read(2)` fails,
+    /// or the inert channel is closed (`UnexpectedEof`).
     pub async fn recv_session(&self, buf: &mut [u8]) -> io::Result<usize> {
         let backend = { self.inner.session.read().clone() };
         let backend = backend.ok_or_else(|| {
@@ -469,6 +495,9 @@ impl PppoeTransport {
     }
 
     /// Clones the owned file descriptor of the connected session socket (if in kernel mode).
+    ///
+    /// # Errors
+    /// Duplicating the underlying session file descriptor (`dup(2)`) fails (e.g. `EMFILE`).
     pub fn try_clone_session_fd(&self) -> io::Result<Option<OwnedFd>> {
         let sess = self.inner.session.read();
         match sess.as_ref() {

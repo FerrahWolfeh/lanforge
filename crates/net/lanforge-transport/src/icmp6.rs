@@ -142,6 +142,9 @@ impl Icmp6Transport {
     }
 
     /// Receives an `ICMPv6` datagram into the provided buffer.
+    ///
+    /// # Errors
+    /// Waiting for readiness or `recvfrom(2)` fails, or the inert channel is closed (`UnexpectedEof`).
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddrV6)> {
         match &self.inner.backend {
             Icmp6Backend::Kernel(async_fd) => loop {
@@ -178,6 +181,9 @@ impl Icmp6Transport {
     }
 
     /// Sends an `ICMPv6` packet to the specified destination address.
+    ///
+    /// # Errors
+    /// `send_to` fails on the underlying socket, or the inert channel is full or closed (`WouldBlock`).
     pub fn send(&self, payload: &[u8], target: &SocketAddrV6) -> io::Result<usize> {
         let res = match &self.inner.backend {
             Icmp6Backend::Kernel(async_fd) => {
