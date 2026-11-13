@@ -230,7 +230,7 @@ parking_lot = { workspace = true }
 
 [dev-dependencies]
 lanforge-dns-wire = { workspace = true }
-tokio = { workspace = true, features = ["full", "io-util"] }
+tokio = { workspace = true, features = ["full", "io-util", "test-util"] }
 tempfile = "3.10.1"
 serde_json = { workspace = true }
 lanforge-api-dispatch = { workspace = true }

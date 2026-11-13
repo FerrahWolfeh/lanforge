@@ -355,6 +355,15 @@ impl ServiceRuntime {
             .map_or(0, ServiceSlot::uptime_secs)
     }
 
+    /// The summed counters of the sockets the service holds now, if it registered any.
+    #[must_use]
+    pub fn service_transport(&self, id: ServiceId) -> Option<TransportSnapshot> {
+        self.services
+            .read()
+            .get(&id)
+            .and_then(ServiceSlot::transport)
+    }
+
     /// Sets the traffic counters of the sockets a service holds now (on every (re)bind).
     pub fn set_service_transports(&self, id: ServiceId, transports: Vec<Arc<TransportMetrics>>) {
         self.services

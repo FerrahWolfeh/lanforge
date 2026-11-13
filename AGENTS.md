@@ -48,6 +48,10 @@ Background daemons (DHCP, RA, DNS, PPPoE, Firewall, etc.) implement the `AsyncSe
   `h.next_command()` and must **not** react to `ServiceControl` on the bus. `Restart` may be handled in place
   (PPPoE, firewall) or by returning after `h.request_restart()`. A service that ignores `Stop` is cancelled after
   `shutdown_timeout`.
+- **Socket health**: services register their sockets' counters with `ctx.set_service_transports` and do not
+  degrade themselves on socket errors. The runner samples them every 10 s and imposes
+  `Degraded(TransportErrors)` on a service reporting `Online` after two windows where errors outnumber the
+  traffic (`TransportSnapshot::failing_since`); one healthy window clears it. Rate-limited drops never count.
 - **Live config**: services consume config only through `ctx.config_subscription::<T>()`; the legacy
   `Config*Changed` bus events are notifications for UI/CLI observers.
 - Uses **topic-isolated** subscriptions: the supervisor listens exclusively to `ctx.bus().subscribe_system()`.

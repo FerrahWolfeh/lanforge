@@ -17,3 +17,4 @@ mod readiness_race;
 mod rootless_pipeline;
 #[cfg(feature = "nft")]
 mod service_state_model;
+mod transport_health;

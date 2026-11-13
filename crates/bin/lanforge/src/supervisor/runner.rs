@@ -10,14 +10,51 @@ use lanforge_core::service::{
     Activation, AsyncService, DegradedReason, Edge, EdgeKind, LanforgeService, LossPolicy,
     NodeStatus, ServiceCommand, ServiceHandle, ServiceSpec, StatusReport,
 };
+use lanforge_types::network::snapshot::TransportSnapshot;
 use lanforge_types::system::{ServiceAction, ServiceId, ServiceState, StateDetail};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::future;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{mpsc, watch};
-use tokio::time::{Instant, sleep, sleep_until};
+use tokio::time::{Instant, MissedTickBehavior, interval, sleep, sleep_until};
 use tracing::{debug, error, info, warn};
+
+/// How often the supervisor samples a service's socket counters.
+const HEALTH_WINDOW: Duration = Duration::from_secs(10);
+/// Consecutive failing windows before the service shows `Degraded(TransportErrors)`; one
+/// healthy window clears it.
+const HEALTH_BAD_WINDOWS: u8 = 2;
+
+/// Socket health of the running service, from its transport counters
+/// ([`TransportSnapshot::failing_since`]).
+#[derive(Default)]
+struct SocketHealth {
+    last: Option<TransportSnapshot>,
+    bad_windows: u8,
+    failing: bool,
+}
+
+impl SocketHealth {
+    /// Takes one sample; returns whether `failing` changed.
+    const fn sample(&mut self, now: Option<TransportSnapshot>) -> bool {
+        let window_failing = match (&self.last, &now) {
+            (Some(last), Some(now)) => now.failing_since(last),
+            _ => false,
+        };
+        self.last = now;
+        self.bad_windows = if window_failing {
+            self.bad_windows.saturating_add(1)
+        } else {
+            0
+        };
+        let failing = self.bad_windows >= HEALTH_BAD_WINDOWS;
+        let changed = failing != self.failing;
+        self.failing = failing;
+        changed
+    }
+}
 
 /// Outcome of a wait that can be interrupted by shutdown or an admin request.
 enum Wake {
@@ -162,7 +199,12 @@ where
             let mut serve_fut = Box::pin(service.serve(&self.ctx, &handle));
 
             let mut lost_deps: Vec<(ServiceId, LossPolicy)> = Vec::new();
-            let mut loss_overridden = false;
+            // The status the supervisor imposes over the service's own report (a lost
+            // dependency, failing sockets), if any.
+            let mut overridden: Option<(ServiceState, Option<StateDetail>)> = None;
+            let mut sockets = SocketHealth::default();
+            let mut health_tick = interval(HEALTH_WINDOW);
+            health_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
             // Last state the service reported; restored when a dependency loss clears.
             let mut reported: (ServiceState, Option<StateDetail>) = (ServiceState::Online, None);
             let mut stop_cause: Option<StopCause> = None;
@@ -225,9 +267,19 @@ where
                         let report = status_rx.borrow_and_update().clone();
                         if let Some(status) = report {
                             reported = status;
-                            if !loss_overridden {
-                                self.node.set_status(&self.ctx, reported.0, reported.1.clone());
+                            self.refresh_status(&lost_deps, sockets.failing, &mut overridden, &reported, true);
+                        }
+                    }
+
+                    // Sockets the kernel keeps refusing degrade a service that says it is fine.
+                    _ = health_tick.tick() => {
+                        if sockets.sample(self.ctx.service_transport(self.spec.id)) {
+                            if sockets.failing {
+                                warn!(service = %self.spec.id, "Socket errors outnumber the traffic; marking the service degraded");
+                            } else {
+                                info!(service = %self.spec.id, "Socket errors stopped; service no longer degraded by its transport");
                             }
+                            self.refresh_status(&lost_deps, sockets.failing, &mut overridden, &reported, false);
                         }
                     }
 
@@ -249,7 +301,7 @@ where
                             lost_deps.retain(|&(id, _)| id != target);
                             ServiceCommand::DependencyRestored { id: target }
                         };
-                        self.apply_loss_status(&lost_deps, &mut loss_overridden, &reported);
+                        self.refresh_status(&lost_deps, sockets.failing, &mut overridden, &reported, false);
                         let _ = cmd_tx.send(cmd).await;
                     }
 
@@ -459,15 +511,17 @@ where
         }
     }
 
-    /// Recomputes this node's published status from the set of currently lost dependencies.
-    ///
-    /// `overridden` tracks whether the supervisor (not the service) set the current status, so
-    /// clearing the last loss only restores `Online` when the supervisor caused the downgrade.
-    fn apply_loss_status(
+    /// Publishes what the node shows: the status the supervisor imposes (a paused or degraded
+    /// dependency, then failing sockets on a service that reports `Online`) or the service's own
+    /// report. Publishes only on a change (`report_changed`: the service sent a new report), so
+    /// dependents are not woken by every health sample.
+    fn refresh_status(
         &self,
         lost_deps: &[(ServiceId, LossPolicy)],
-        overridden: &mut bool,
+        sockets_failing: bool,
+        overridden: &mut Option<(ServiceState, Option<StateDetail>)>,
         reported: &(ServiceState, Option<StateDetail>),
+        report_changed: bool,
     ) {
         let detail = lost_deps.iter().find_map(|&(target, policy)| match policy {
             LossPolicy::Pause => Some(StateDetail::Paused(target)),
@@ -480,16 +534,23 @@ where
                 })
             })
         });
+        let detail = detail.or_else(|| {
+            (sockets_failing && reported.0 == ServiceState::Online)
+                .then_some(StateDetail::Degraded(DegradedReason::TransportErrors))
+        });
         match detail {
             Some(detail) => {
-                self.node
-                    .set_status(&self.ctx, ServiceState::Degraded, Some(detail));
-                *overridden = true;
+                let imposed = (ServiceState::Degraded, Some(detail));
+                if overridden.as_ref() != Some(&imposed) {
+                    self.node
+                        .set_status(&self.ctx, imposed.0, imposed.1.clone());
+                    *overridden = Some(imposed);
+                }
             }
-            None if *overridden => {
+            None if overridden.is_some() || report_changed => {
                 self.node
                     .set_status(&self.ctx, reported.0, reported.1.clone());
-                *overridden = false;
+                *overridden = None;
             }
             None => {}
         }
