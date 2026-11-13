@@ -112,6 +112,7 @@ hotpath = [
 ]
 
 [dev-dependencies]
+flate2 = "1.1.9"
 tower = { version = "0.5.2", features = ["util"] }
 http-body-util = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }

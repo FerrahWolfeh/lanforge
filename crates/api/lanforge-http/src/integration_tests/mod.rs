@@ -4,3 +4,5 @@
 
 mod contract;
 mod simulation;
+#[cfg(feature = "webui")]
+mod webui;

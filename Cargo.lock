@@ -1296,7 +1296,7 @@ dependencies = [
  "curve25519-dalek",
  "ed25519",
  "serde",
- "sha2 0.10.9",
+ "sha2",
  "subtle",
  "zeroize",
 ]
@@ -2320,7 +2320,7 @@ dependencies = [
  "rsa",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2",
  "signature",
  "simple_asn1",
  "zeroize",
@@ -2646,6 +2646,7 @@ dependencies = [
  "axum-server",
  "base64 0.23.1",
  "bytes",
+ "flate2",
  "futures",
  "http-body-util",
  "hyper",
@@ -2834,8 +2835,7 @@ dependencies = [
 name = "lanforge-webui"
 version = "0.52.1"
 dependencies = [
- "mime_guess",
- "rust-embed",
+ "flate2",
 ]
 
 [[package]]
@@ -3331,7 +3331,7 @@ dependencies = [
  "ecdsa",
  "elliptic-curve",
  "primeorder",
- "sha2 0.10.9",
+ "sha2",
 ]
 
 [[package]]
@@ -3343,7 +3343,7 @@ dependencies = [
  "ecdsa",
  "elliptic-curve",
  "primeorder",
- "sha2 0.10.9",
+ "sha2",
 ]
 
 [[package]]
@@ -3484,7 +3484,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "89815c69d36021a140146f26659a81d6c2afa33d216d736dd4be5381a7362220"
 dependencies = [
  "pest",
- "sha2 0.10.9",
+ "sha2",
 ]
 
 [[package]]
@@ -4305,41 +4305,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust-embed"
-version = "8.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9e7760e252aaba7b09f4be00e36476cf585bdb68a53552ac954cdf504ab4bc9"
-dependencies = [
- "rust-embed-impl",
- "rust-embed-utils",
- "walkdir",
-]
-
-[[package]]
-name = "rust-embed-impl"
-version = "8.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3bcfc4d6f53af43755f7a723e4b6b8794fcce052a178dd8c6c1dadc5f5343097"
-dependencies = [
- "mime_guess",
- "proc-macro2",
- "quote",
- "rust-embed-utils",
- "syn 2.0.117",
- "walkdir",
-]
-
-[[package]]
-name = "rust-embed-utils"
-version = "8.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42ffa149f6aa81b58a5b3011d01a857c4ed12c7a732d2c51947a4c7c692185f0"
-dependencies = [
- "sha2 0.11.0",
- "walkdir",
-]
-
-[[package]]
 name = "rust_decimal"
 version = "1.42.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4617,17 +4582,6 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.2.17",
  "digest 0.10.7",
-]
-
-[[package]]
-name = "sha2"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
-dependencies = [
- "cfg-if",
- "cpufeatures 0.3.0",
- "digest 0.11.3",
 ]
 
 [[package]]
@@ -4955,7 +4909,7 @@ dependencies = [
  "pest",
  "pest_derive",
  "phf",
- "sha2 0.10.9",
+ "sha2",
  "signal-hook",
  "siphasher",
  "terminfo",
@@ -5653,7 +5607,7 @@ checksum = "692daff6d93d94e29e4114544ef6d5c942a7ed998b37abdc19b17136ea428eb7"
 dependencies = [
  "getrandom 0.3.4",
  "mac_address",
- "sha2 0.10.9",
+ "sha2",
  "thiserror 1.0.69",
  "uuid",
 ]

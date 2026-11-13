@@ -1,15 +1,13 @@
 use std::io;
 use std::net::{SocketAddr, TcpListener as StdTcpListener};
 use std::path::Path;
-#[cfg(feature = "webui")]
-use std::str;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "webui")]
-use axum::handler::Handler;
-#[cfg(feature = "webui")]
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH};
+use axum::http::header::{
+    ACCEPT_ENCODING, CACHE_CONTROL, CONTENT_ENCODING, CONTENT_TYPE, ETAG, IF_NONE_MATCH, VARY,
+};
 #[cfg(feature = "webui")]
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::{
@@ -38,7 +36,7 @@ use lanforge_db_core::{DatabaseStore, LogStore};
 use lanforge_types::config::ConfigDomain;
 use lanforge_types::system::{DormantReason, ServiceId};
 #[cfg(feature = "webui")]
-use lanforge_webui::WebUiAssets;
+use lanforge_webui::Asset;
 use rustls::ServerConfig;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use tokio::net::TcpListener;
@@ -139,7 +137,7 @@ impl HttpService {
         }
     }
 
-    fn build_router(state: AppState, cfg: &HttpConfig) -> Router {
+    pub(crate) fn build_router(state: AppState, cfg: &HttpConfig) -> Router {
         let mut app = Router::new()
             .nest("/api", api_router(&state))
             .route("/metrics", get(handle_metrics));
@@ -158,7 +156,7 @@ impl HttpService {
             #[cfg(feature = "webui")]
             {
                 info!("Serving WebUI from embedded assets");
-                app = app.fallback(handle_embedded_webui.layer(CompressionLayer::new()));
+                app = app.fallback(handle_embedded_webui);
             }
         }
 
@@ -484,47 +482,97 @@ async fn handle_metrics(State(state): State<AppState>) -> HttpResult<impl IntoRe
         .map_err(|e| HttpError::Internal(format!("Failed to build metrics response: {e}")))
 }
 
+/// Serves the embedded web UI. Files are stored gzip-compressed (the `lanforge-webui` build
+/// script): sent as stored to a client that takes gzip, decompressed for one that does not. The
+/// two forms are distinct representations, so they carry distinct `ETag`s (RFC 9110 §8.8.3).
 #[cfg(feature = "webui")]
-const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
-
-#[cfg(feature = "webui")]
-async fn handle_embedded_webui(headers: HeaderMap, uri: Uri) -> impl IntoResponse {
+async fn handle_embedded_webui(headers: HeaderMap, uri: Uri) -> AxumResponse {
     let path = uri.path();
-    match WebUiAssets::get_file_or_fallback(path) {
-        Some((mime, content)) => {
-            let hash = content.metadata.sha256_hash();
-            let mut etag_bytes = [0u8; 66];
-            etag_bytes[0] = b'"';
-            for (i, &b) in hash.iter().enumerate() {
-                etag_bytes[1 + i * 2] = HEX_DIGITS[(b >> 4) as usize];
-                etag_bytes[2 + i * 2] = HEX_DIGITS[(b & 0x0f) as usize];
-            }
-            etag_bytes[65] = b'"';
-            let etag = str::from_utf8(&etag_bytes).unwrap_or("");
-
-            if let Some(if_none_match) = headers.get(IF_NONE_MATCH).and_then(|v| v.to_str().ok())
-                && if_none_match == etag
-            {
-                return StatusCode::NOT_MODIFIED.into_response();
-            }
-
-            let cache_control =
-                if path.starts_with("/_app/immutable/") || path.starts_with("/assets/") {
-                    "public, max-age=31536000, immutable"
-                } else {
-                    "public, max-age=0, must-revalidate"
-                };
-
-            (
-                [
-                    (CONTENT_TYPE, mime.as_ref()),
-                    (ETAG, etag),
-                    (CACHE_CONTROL, cache_control),
-                ],
-                content.data,
-            )
-                .into_response()
+    let Some(asset) = Asset::get_or_index(path) else {
+        return (StatusCode::NOT_FOUND, "WebUI index.html not found").into_response();
+    };
+    let send_gzip = asset.gzip
+        && headers
+            .get(ACCEPT_ENCODING)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(accepts_gzip);
+    let identity_etag;
+    let etag = if asset.gzip && !send_gzip {
+        identity_etag = format!("{}-identity\"", asset.etag.trim_end_matches('"'));
+        identity_etag.as_str()
+    } else {
+        asset.etag
+    };
+    let cache_control = if path.starts_with("/_app/immutable/") || path.starts_with("/assets/") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "public, max-age=0, must-revalidate"
+    };
+    if headers
+        .get(IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v == etag)
+    {
+        let mut resp = (
+            StatusCode::NOT_MODIFIED,
+            [(ETAG, etag), (CACHE_CONTROL, cache_control)],
+        )
+            .into_response();
+        if asset.gzip {
+            resp.headers_mut()
+                .insert(VARY, HeaderValue::from_static("Accept-Encoding"));
         }
-        None => (StatusCode::NOT_FOUND, "WebUI index.html not found").into_response(),
+        return resp;
     }
+    let mut resp = if send_gzip {
+        (
+            [
+                (CONTENT_TYPE, asset.mime),
+                (CONTENT_ENCODING, "gzip"),
+                (ETAG, etag),
+                (CACHE_CONTROL, cache_control),
+            ],
+            asset.data,
+        )
+            .into_response()
+    } else {
+        (
+            [
+                (CONTENT_TYPE, asset.mime),
+                (ETAG, etag),
+                (CACHE_CONTROL, cache_control),
+            ],
+            asset.identity(),
+        )
+            .into_response()
+    };
+    if asset.gzip {
+        resp.headers_mut()
+            .insert(VARY, HeaderValue::from_static("Accept-Encoding"));
+    }
+    resp
+}
+
+/// Whether an `Accept-Encoding` value takes gzip (RFC 9110 §12.5.3): `gzip` (or `x-gzip`)
+/// listed with a non-zero weight, or `*` with one while gzip is not listed. No header at all
+/// gets the plain file: such clients (`curl` without `--compressed`) rarely decode.
+#[cfg(feature = "webui")]
+fn accepts_gzip(value: &str) -> bool {
+    let mut star = false;
+    for item in value.split(',') {
+        let mut parts = item.split(';');
+        let coding = parts.next().unwrap_or_default().trim();
+        let refused = parts.any(|param| {
+            let param = param.trim();
+            param.get(..2).is_some_and(|k| k.eq_ignore_ascii_case("q="))
+                && param[2..].trim().parse::<f32>().is_ok_and(|q| q <= 0.0)
+        });
+        if coding.eq_ignore_ascii_case("gzip") || coding.eq_ignore_ascii_case("x-gzip") {
+            return !refused;
+        }
+        if coding == "*" {
+            star = !refused;
+        }
+    }
+    star
 }

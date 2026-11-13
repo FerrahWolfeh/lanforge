@@ -52,7 +52,7 @@ fn build_router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn make_state(with_auth: bool) -> AppState {
+pub(super) async fn make_state(with_auth: bool) -> AppState {
     let bus = Arc::new(EventBus::new());
     let table = CoreState::new();
     let db = Arc::new(
