@@ -36,3 +36,5 @@ mod tcp_rebind;
 mod upstream_accounting;
 mod upstream_mode;
 mod upstream_names;
+#[cfg(any(feature = "dot", feature = "doq"))]
+mod upstream_tls_name;

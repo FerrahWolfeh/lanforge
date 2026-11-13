@@ -476,10 +476,14 @@ impl UpstreamManager {
     async fn dot_connect(&self, target: &UpstreamTarget) -> Result<TlsStream<TcpStream>, DnsError> {
         use rustls_pki_types::ServerName;
 
-        let hostname = target.hostname.as_deref().unwrap_or("dns.google");
-        let server_name = ServerName::try_from(hostname)
-            .map_err(|e| DnsError::Tls(format!("Invalid upstream hostname: {e}")))?
-            .to_owned();
+        // Without a TLS name the certificate is checked against the address (an IP SAN, as
+        // public resolvers carry; RFC 8310 §8.2), and no SNI is sent (RFC 6066 §3).
+        let server_name = match target.hostname.as_deref() {
+            Some(name) => ServerName::try_from(name)
+                .map_err(|e| DnsError::Tls(format!("Invalid upstream hostname: {e}")))?
+                .to_owned(),
+            None => ServerName::from(self.addr.ip()),
+        };
 
         let connector = self
             .tls_connector
@@ -556,7 +560,15 @@ impl UpstreamManager {
 
     #[cfg(feature = "doq")]
     async fn doq_connect(&self, target: &UpstreamTarget) -> Result<quinn::Connection, DnsError> {
-        let hostname = target.hostname.as_deref().unwrap_or("dns.google");
+        // Without a TLS name the certificate is checked against the address (see `dot_connect`).
+        let ip_name;
+        let hostname = match target.hostname.as_deref() {
+            Some(name) => name,
+            None => {
+                ip_name = self.addr.ip().to_string();
+                &ip_name
+            }
+        };
         let endpoint = self
             .quic_endpoint
             .as_ref()
