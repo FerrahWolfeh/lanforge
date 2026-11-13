@@ -35,7 +35,7 @@ use lanforge_types::network::firewall::{
     ForwardTarget,
 };
 use lanforge_types::network::pppoe::PppoeConfig;
-use lanforge_types::system::{DormantReason, ServiceId, ServiceState};
+use lanforge_types::system::{DegradedReason, DormantReason, ServiceId};
 use nftables::batch::Batch;
 use nftables::helper::NftablesError;
 use nftables::schema::{NfListObject, Table};
@@ -61,6 +61,9 @@ pub struct NftService<A: NftApplier = KernelNft> {
     compiled: Option<FirewallConfig>,
     /// The addresses `dev:` port forwards resolved to in the last ruleset.
     compiled_addrs: HashMap<DeviceIdentifier, ForwardAddrs>,
+    /// The kernel refused the last ruleset (it keeps the previous one): the service is degraded
+    /// until a ruleset applies.
+    apply_failed: bool,
 }
 
 impl NftService<KernelNft> {
@@ -102,6 +105,7 @@ impl<A: NftApplier> NftService<A> {
             active_wan: None,
             applier,
             applied: false,
+            apply_failed: false,
             compiled: None,
             compiled_addrs: HashMap::new(),
         }
@@ -272,8 +276,9 @@ impl<A: NftApplier> NftService<A> {
         reason: &'static str,
     ) {
         if !cfg.enabled || cfg.mode == FirewallMode::Disabled {
+            // The supervisor stops the service on the same change (its condition is dormant).
             info!(reason, table = %cfg.table_name, "Firewall disabled; removing nftables table");
-            ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
+            self.apply_failed = false;
             self.remove_table(&cfg.table_name).await;
             ctx.set_firewall_left(Some(FirewallStopAction::Remove));
             return;
@@ -319,6 +324,7 @@ impl<A: NftApplier> NftService<A> {
             Err(e) => {
                 let err_msg = format!("Firewall task panicked: {e}");
                 error!(reason, error = %err_msg, "Firewall worker panicked");
+                self.apply_failed = true;
                 let _ = ctx
                     .bus()
                     .publish(LanforgeEvent::Firewall(FirewallEvent::ApplyFailed {
@@ -331,8 +337,8 @@ impl<A: NftApplier> NftService<A> {
         match result {
             Ok(()) => {
                 self.applied = true;
+                self.apply_failed = false;
                 ctx.set_firewall_left(None);
-                ctx.set_service_state(Self::SERVICE_ID, ServiceState::Online);
                 Self::publish_ruleset_applied(
                     ctx,
                     reason,
@@ -354,6 +360,7 @@ impl<A: NftApplier> NftService<A> {
                     error = %err_msg,
                     "Firewall ruleset application failed"
                 );
+                self.apply_failed = true;
                 let _ = ctx
                     .bus()
                     .publish(LanforgeEvent::Firewall(FirewallEvent::ApplyFailed {
@@ -422,12 +429,14 @@ impl<A: NftApplier> LanforgeService for NftService<A> {
             deps: FIREWALL_DEPS,
             condition: Condition {
                 sections: &[ConfigDomain::Firewall],
-                eval: |ctx| {
-                    if ctx.get_firewall_config().is_none_or(|c| c.enabled) {
-                        Activation::Active
-                    } else {
+                eval: |ctx| match ctx.get_firewall_config() {
+                    Some(c) if !c.enabled => {
                         Activation::Dormant(DormantReason::disabled("firewall.enabled"))
                     }
+                    Some(c) if c.mode == FirewallMode::Disabled => {
+                        Activation::Dormant(DormantReason::disabled("firewall.mode"))
+                    }
+                    _ => Activation::Active,
                 },
             },
         }
@@ -476,8 +485,12 @@ impl<A: NftApplier> AsyncService for NftService<A> {
 
         async move {
             let fw_cfg = ctx.get_firewall_config().unwrap_or_default();
-            if !fw_cfg.enabled || fw_cfg.mode == FirewallMode::Disabled {
+            if !fw_cfg.enabled {
                 h.dormant(DormantReason::disabled("firewall.enabled"));
+                return Ok(());
+            }
+            if fw_cfg.mode == FirewallMode::Disabled {
+                h.dormant(DormantReason::disabled("firewall.mode"));
                 return Ok(());
             }
 
@@ -492,9 +505,18 @@ impl<A: NftApplier> AsyncService for NftService<A> {
                 // SQM or the PPPoE dataplane may have changed since `init` compiled.
                 self.reapply_if_changed(&ctx, "config_changed").await;
             }
-            h.ready();
 
+            let mut reported_failed = None;
             loop {
+                // Every arm ends here (`continue` included): report what the last apply left.
+                if reported_failed != Some(self.apply_failed) {
+                    reported_failed = Some(self.apply_failed);
+                    if self.apply_failed {
+                        h.degraded(DegradedReason::custom("ruleset refused by the kernel"));
+                    } else {
+                        h.ready();
+                    }
+                }
                 tokio::select! {
                     cmd = h.next_command() => {
                         match cmd {
@@ -505,7 +527,6 @@ impl<A: NftApplier> AsyncService for NftService<A> {
                             ServiceCommand::Start | ServiceCommand::Restart => {
                                 info!("Firewall service received Start/Restart command");
                                 self.reapply(&ctx, "service_control").await;
-                                h.ready();
                             }
                             _ => {}
                         }
@@ -662,7 +683,6 @@ impl<A: NftApplier> AsyncService for NftService<A> {
     ) -> impl Future<Output = Result<(), CoreError>> + Send {
         let ctx = ctx.clone();
         async move {
-            ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
             self.stop_firewall(&ctx).await;
             Ok(())
         }
