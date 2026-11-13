@@ -16,6 +16,8 @@
 
 use std::io;
 
+use lanforge_types::network::bind::BindError;
+
 use thiserror::Error;
 
 /// Central error type for the `lanforge-core` crate.
@@ -41,6 +43,10 @@ pub enum CoreError {
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
 
+    /// A socket could not be opened; the supervisor acts on its kind.
+    #[error(transparent)]
+    Bind(#[from] BindError),
+
     /// Indicates an internal invariant was violated.
     #[error("Internal error: {0}")]
     Internal(String),
@@ -56,4 +62,19 @@ pub enum CoreError {
     /// Graceful shutdown was requested; operations should halt.
     #[error("Shutdown requested")]
     Shutdown,
+}
+
+impl CoreError {
+    /// The socket that could not be opened, whether it came as a [`CoreError::Bind`] or inside
+    /// an `io::Error` from a caller that speaks io.
+    #[must_use]
+    pub fn bind_error(&self) -> Option<&BindError> {
+        match self {
+            Self::Bind(e) => Some(e),
+            Self::Io(e) => e
+                .get_ref()
+                .and_then(|inner| inner.downcast_ref::<BindError>()),
+            _ => None,
+        }
+    }
 }

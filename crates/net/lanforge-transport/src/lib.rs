@@ -8,6 +8,7 @@
 //! - **Transparent Metrics & Rate Limiting** (`TransportMetrics`, `RateLimiter`): Zero-overhead counters and bounded token buckets.
 
 pub mod arp;
+mod bind;
 pub mod icmp;
 pub mod icmp6;
 pub mod inert;
@@ -23,6 +24,7 @@ pub use arp::{ArpProber, ArpReply};
 pub use icmp::{IcmpPinger, parse_icmpv4_echo_reply, parse_icmpv6_echo_reply};
 pub use icmp6::Icmp6Transport;
 pub use inert::InertHandle;
+pub use lanforge_types::network::bind::{BindError, BindErrorKind};
 pub use limiter::{RateLimitConfig, RateLimiter};
 pub use metrics::{TransportMetrics, TransportSnapshot, TransportStats};
 pub use pppoe::{PppoeInertHandle, PppoeTransport};

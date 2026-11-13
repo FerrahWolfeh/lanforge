@@ -167,9 +167,9 @@ impl AsyncService for TftpService {
             for addr in addrs {
                 let transport = match addr {
                     SocketAddr::V6(v6) if v6.ip().is_unspecified() => {
-                        UdpTransport::dual_stack(v6.port()).map_err(CoreError::Io)?
+                        UdpTransport::dual_stack(v6.port())?
                     }
-                    _ => UdpTransport::bind_single(addr).map_err(CoreError::Io)?,
+                    _ => UdpTransport::bind_single(addr)?,
                 };
                 for local_addr in transport.local_addrs().map_err(CoreError::Io)? {
                     actual_bound.push(local_addr.to_string());
@@ -438,7 +438,7 @@ fn bind_session_transport(src: SocketAddr) -> Result<UdpTransport, TftpError> {
         SocketAddr::V6(_) => SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 0], 0)),
         SocketAddr::V4(_) => SocketAddr::from(([0, 0, 0, 0], 0)),
     };
-    UdpTransport::bind_single(bind_addr).map_err(TftpError::Io)
+    UdpTransport::bind_single(bind_addr).map_err(|e| TftpError::Io(e.into()))
 }
 
 async fn send_block_with_retries(

@@ -1,6 +1,8 @@
+use crate::bind::bind_error;
 use crate::inert::{InertHandle, InertPort};
 use crate::metrics::{TransportMetrics, TransportStats};
 use crate::sys;
+use lanforge_types::network::bind::BindError;
 use lanforge_types::network::snapshot::TransportSnapshot;
 use std::io;
 use std::mem::size_of;
@@ -97,8 +99,12 @@ pub struct PppoeTransport {
 
 impl PppoeTransport {
     /// Binds an `AF_PACKET` raw socket to `ifindex` for `PPPoE` Active Discovery (`ETH_P_PPP_DISC`).
-    pub fn bind(ifindex: u32) -> io::Result<Self> {
-        let async_fd = Self::open_discovery_socket(ifindex)?;
+    ///
+    /// # Errors
+    /// The socket could not be opened on the interface.
+    pub fn bind(ifindex: u32) -> Result<Self, BindError> {
+        let async_fd = Self::open_discovery_socket(ifindex)
+            .map_err(|e| bind_error(format!("ifindex {ifindex}"), e))?;
 
         Ok(Self {
             inner: Arc::new(PppoeTransportInner {
@@ -113,11 +119,15 @@ impl PppoeTransport {
 
     /// Rebinds the `AF_PACKET` discovery socket to `ifindex` while preserving transport metrics.
     /// In inert mode, this is a no-op.
-    pub fn bind_discovery(&self, ifindex: u32) -> io::Result<()> {
+    ///
+    /// # Errors
+    /// The socket could not be opened on the interface.
+    pub fn bind_discovery(&self, ifindex: u32) -> Result<(), BindError> {
         if self.is_inert() {
             return Ok(());
         }
-        let async_fd = Self::open_discovery_socket(ifindex)?;
+        let async_fd = Self::open_discovery_socket(ifindex)
+            .map_err(|e| bind_error(format!("ifindex {ifindex}"), e))?;
         *self.inner.discovery.write() = Some(PppoeDiscoveryBackend::Kernel(Arc::new(async_fd)));
         Ok(())
     }

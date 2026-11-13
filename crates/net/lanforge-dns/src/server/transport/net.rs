@@ -1,5 +1,4 @@
-use lanforge_transport::{DualTcpListener, UdpTransport};
-use std::io;
+use lanforge_transport::{BindError, DualTcpListener, UdpTransport};
 use std::net::SocketAddr;
 
 /// Binds a UDP transport with native dual-stack Y-transport support.
@@ -8,7 +7,7 @@ use std::net::SocketAddr;
 /// dual-socket Y-transport binding both `0.0.0.0:port` and `[::]:port` concurrently
 /// with `IPV6_V6ONLY = true`. If IPv6 is unsupported on the host, it gracefully falls
 /// back to IPv4 single-socket.
-pub fn bind_udp(addr: SocketAddr) -> io::Result<UdpTransport> {
+pub fn bind_udp(addr: SocketAddr) -> Result<UdpTransport, BindError> {
     match addr {
         SocketAddr::V6(v6) if v6.ip().is_unspecified() => UdpTransport::dual_stack(v6.port()),
         _ => UdpTransport::bind_single(addr),
@@ -21,7 +20,7 @@ pub fn bind_udp(addr: SocketAddr) -> io::Result<UdpTransport> {
 /// dual-socket Y-listener binding both `0.0.0.0:port` and `[::]:port` concurrently
 /// with `IPV6_V6ONLY = true`. If IPv6 is unsupported on the host, it gracefully falls
 /// back to IPv4 single-listener.
-pub fn bind_tcp(addr: SocketAddr) -> io::Result<DualTcpListener> {
+pub fn bind_tcp(addr: SocketAddr) -> Result<DualTcpListener, BindError> {
     match addr {
         SocketAddr::V6(v6) if v6.ip().is_unspecified() => {
             DualTcpListener::bind_dual_stack(v6.port())

@@ -1,6 +1,8 @@
+use crate::bind::bind_error;
 use crate::inert::{InertHandle, InertPort};
 use crate::metrics::{TransportMetrics, TransportStats};
 use crate::sys;
+use lanforge_types::network::bind::BindError;
 use lanforge_types::network::snapshot::TransportSnapshot;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::io;
@@ -37,7 +39,14 @@ pub struct Icmp6Transport {
 
 impl Icmp6Transport {
     /// Creates and binds a raw `ICMPv6` socket to `iface`, joining `ff02::2` and filtering for RS (133).
-    pub fn bind(iface: &str, iface_index: u32) -> io::Result<Self> {
+    ///
+    /// # Errors
+    /// The socket could not be opened on `iface`.
+    pub fn bind(iface: &str, iface_index: u32) -> Result<Self, BindError> {
+        Self::open_rs_listener(iface, iface_index).map_err(|e| bind_error(iface.to_string(), e))
+    }
+
+    fn open_rs_listener(iface: &str, iface_index: u32) -> io::Result<Self> {
         let sock = Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6))?;
 
         // Bind to LAN interface
@@ -74,7 +83,14 @@ impl Icmp6Transport {
     /// ISP's on the `PPPoE` link): only type 134 passes the kernel filter; the all-nodes group the
     /// RAs go to is joined by every IPv6 interface. Receives copies only: whoever configures
     /// the link (the kernel, networkd) still gets its own.
-    pub fn bind_ra_listener(iface: &str) -> io::Result<Self> {
+    ///
+    /// # Errors
+    /// The socket could not be opened on `iface`.
+    pub fn bind_ra_listener(iface: &str) -> Result<Self, BindError> {
+        Self::open_ra_listener(iface).map_err(|e| bind_error(iface.to_string(), e))
+    }
+
+    fn open_ra_listener(iface: &str) -> io::Result<Self> {
         let sock = Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6))?;
         sock.bind_device(Some(iface.as_bytes()))?;
         set_icmp6_filter_only(&sock, ICMPV6_TYPE_RA)?;

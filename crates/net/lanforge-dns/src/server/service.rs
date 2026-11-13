@@ -329,8 +329,7 @@ impl AsyncService for DnsService {
             let transports = addrs
                 .iter()
                 .map(|addr| bind_udp(*addr).map(|t| (addr, t)))
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(CoreError::Io)?;
+                .collect::<Result<Vec<_>, _>>()?;
             for (addr, transport) in transports {
                 counters.push(transport.metrics_handle());
                 info!(%addr, "UDP listening");

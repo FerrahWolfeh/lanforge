@@ -1,4 +1,6 @@
+use crate::bind::{bind_error, dual_bind_error};
 use crate::metrics::{TransportMetrics, TransportStats};
+use lanforge_types::network::bind::BindError;
 use lanforge_types::network::snapshot::TransportSnapshot;
 use std::io;
 use std::net::{
@@ -34,7 +36,10 @@ impl DualTcpListener {
     /// Binds a dual-stack TCP listener to `0.0.0.0:port` and `[::]:port` (`IPV6_V6ONLY=true`).
     ///
     /// If IPv6 is unsupported on the host, it gracefully falls back to IPv4 single-listener.
-    pub fn bind_dual_stack(port: u16) -> io::Result<Self> {
+    ///
+    /// # Errors
+    /// Both families failed to bind.
+    pub fn bind_dual_stack(port: u16) -> Result<Self, BindError> {
         let v4_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port);
         let v6_addr = SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, port, 0, 0);
 
@@ -42,7 +47,10 @@ impl DualTcpListener {
     }
 
     /// Binds specific IPv4 and IPv6 addresses into a dual-listener.
-    pub fn bind_dual(v4_addr: SocketAddrV4, v6_addr: SocketAddrV6) -> io::Result<Self> {
+    ///
+    /// # Errors
+    /// Both families failed to bind.
+    pub fn bind_dual(v4_addr: SocketAddrV4, v6_addr: SocketAddrV6) -> Result<Self, BindError> {
         let v4_res = (|| -> io::Result<TokioTcpListener> {
             let s = socket2::Socket::new(
                 socket2::Domain::IPV4,
@@ -100,24 +108,31 @@ impl DualTcpListener {
                     }),
                 })
             }
-            (Err(e4), Err(e6)) => Err(io::Error::new(
-                io::ErrorKind::AddrNotAvailable,
-                format!("Failed to bind both IPv4 ({e4}) and IPv6 ({e6}) TCP listeners"),
+            (Err(e4), Err(e6)) => Err(dual_bind_error(
+                format!("{v4_addr} and {v6_addr}"),
+                &e4,
+                &e6,
             )),
         }
     }
 
     /// Binds a single TCP listener to the specified address.
-    pub fn bind_single(addr: SocketAddr) -> io::Result<Self> {
-        let std_listener = StdTcpListener::bind(addr)?;
-        std_listener.set_nonblocking(true)?;
-        let tokio_listener = TokioTcpListener::from_std(std_listener)?;
-        Ok(Self {
-            inner: Arc::new(TcpInner {
-                backend: TcpBackend::KernelSingle(tokio_listener),
-                metrics: Arc::new(TransportMetrics::new()),
-            }),
-        })
+    ///
+    /// # Errors
+    /// The address could not be bound.
+    pub fn bind_single(addr: SocketAddr) -> Result<Self, BindError> {
+        (|| -> io::Result<Self> {
+            let std_listener = StdTcpListener::bind(addr)?;
+            std_listener.set_nonblocking(true)?;
+            let tokio_listener = TokioTcpListener::from_std(std_listener)?;
+            Ok(Self {
+                inner: Arc::new(TcpInner {
+                    backend: TcpBackend::KernelSingle(tokio_listener),
+                    metrics: Arc::new(TransportMetrics::new()),
+                }),
+            })
+        })()
+        .map_err(|e| bind_error(addr.to_string(), e))
     }
 
     /// Accesses transparent traffic metrics.
