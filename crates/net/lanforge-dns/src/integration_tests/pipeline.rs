@@ -1,5 +1,5 @@
 use super::common::*;
-use crate::resolver::recursive::cache::CacheKey;
+use crate::resolver::recursive::cache::{CacheEntryKind, CacheKey};
 use lanforge_dns_wire::{WireEncoder, WireResponseScanner};
 use lanforge_types::device::TransientOrigin;
 use lanforge_types::network::dns::upstream::{UpstreamAddr, UpstreamProtocol, UpstreamTarget};
@@ -220,7 +220,7 @@ async fn pipeline_transient_ip_reverse_dns_cached() {
     let key = CacheKey::from_question(&question);
     dns_ctx
         .cache
-        .insert(key, resp_bytes, offsets, min_ttl, false);
+        .insert(key, resp_bytes, offsets, min_ttl, CacheEntryKind::Answer);
 
     // 3. Send a dummy query with source IP = 100.64.0.5
     let client_ip = "100.64.0.5".parse::<IpAddr>().unwrap();

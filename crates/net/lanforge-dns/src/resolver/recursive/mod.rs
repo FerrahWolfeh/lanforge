@@ -377,8 +377,13 @@ impl UpstreamManager {
         if let Some(resp_header) = WireHeader::parse(&final_bytes) {
             let rcode = resp_header.rcode();
             if rcode == 0 || rcode == 3 {
-                self.cache
-                    .insert(key, final_bytes.clone(), offsets, min_ttl, false);
+                self.cache.insert(
+                    key,
+                    final_bytes.clone(),
+                    offsets,
+                    min_ttl,
+                    cache::CacheEntryKind::Answer,
+                );
             }
         }
         Ok((final_bytes, false, false))
