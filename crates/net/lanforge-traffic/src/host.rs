@@ -9,7 +9,7 @@ use lanforge_types::network::traffic::TrafficTelemetryResponse;
 use lanforge_types::network::{NicTuningConfig, SqmConfig};
 
 use crate::collector::collect_traffic_telemetry;
-use crate::sqm::{apply_sqm, clear_sqm};
+use crate::sqm::{WanFraming, apply_sqm, clear_sqm};
 use crate::tuning::apply_tuning;
 
 /// The host side of NIC tuning and SQM.
@@ -26,7 +26,7 @@ pub trait TrafficHost: Clone + Send + Sync + 'static {
         &self,
         wan: &str,
         cfg: &SqmConfig,
-        is_pppoe: bool,
+        framing: WanFraming,
     ) -> impl Future<Output = Option<String>> + Send;
 
     /// Removes the queues from `wan` and its ingress device.
@@ -49,8 +49,8 @@ impl TrafficHost for KernelTraffic {
         apply_tuning(cfg, ifaces).await
     }
 
-    async fn apply_sqm(&self, wan: &str, cfg: &SqmConfig, is_pppoe: bool) -> Option<String> {
-        apply_sqm(wan, cfg, is_pppoe).await
+    async fn apply_sqm(&self, wan: &str, cfg: &SqmConfig, framing: WanFraming) -> Option<String> {
+        apply_sqm(wan, cfg, framing).await
     }
 
     async fn clear_sqm(&self, wan: &str, ingress_device: &str) {
@@ -82,7 +82,7 @@ impl TrafficHost for InertTraffic {
         &self,
         _wan: &str,
         cfg: &SqmConfig,
-        _is_pppoe: bool,
+        _framing: WanFraming,
     ) -> impl Future<Output = Option<String>> + Send {
         let dev = cfg.ingress_device.trim();
         ready(Some(

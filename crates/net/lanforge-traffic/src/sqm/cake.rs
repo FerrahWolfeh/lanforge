@@ -1,12 +1,30 @@
 use lanforge_types::network::{SqmConfig, SqmDiffserv, SqmOverhead};
 
+/// Traffic direction for CAKE qdisc argument generation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SqmDirection {
+    /// Download direction (applied on the IFB mirror, adds `wash ingress`).
+    Ingress,
+    /// Upload direction (applied directly on the WAN interface).
+    Egress,
+}
+
+/// WAN link framing used to resolve `SqmOverhead::Auto`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WanFraming {
+    /// Plain Ethernet WAN (`ethernet`).
+    Ethernet,
+    /// `PPPoE` session link (`overhead 46 mpu 84 noatm`).
+    Pppoe,
+}
+
 /// Generates arguments for the CAKE qdisc.
 #[must_use]
 pub fn build_cake_args(
     cfg: &SqmConfig,
     bandwidth_mbps: u32,
-    is_ingress: bool,
-    is_pppoe: bool,
+    direction: SqmDirection,
+    framing: WanFraming,
 ) -> Vec<String> {
     let mut args = Vec::new();
 
@@ -31,7 +49,7 @@ pub fn build_cake_args(
     }
 
     // Wash untrusted DSCP markings on ingress
-    if is_ingress {
+    if direction == SqmDirection::Ingress {
         args.push("wash".to_string());
         args.push("ingress".to_string());
     }
@@ -44,13 +62,10 @@ pub fn build_cake_args(
 
     // Overhead compensation
     let effective_overhead = match cfg.overhead {
-        SqmOverhead::Auto => {
-            if is_pppoe {
-                SqmOverhead::Pppoe
-            } else {
-                SqmOverhead::Ethernet
-            }
-        }
+        SqmOverhead::Auto => match framing {
+            WanFraming::Pppoe => SqmOverhead::Pppoe,
+            WanFraming::Ethernet => SqmOverhead::Ethernet,
+        },
         other => other,
     };
 
@@ -101,7 +116,12 @@ mod tests {
             raw_cake_args: None,
         };
 
-        let args = build_cake_args(&cfg, cfg.upload_mbps, false, true);
+        let args = build_cake_args(
+            &cfg,
+            cfg.upload_mbps,
+            SqmDirection::Egress,
+            WanFraming::Pppoe,
+        );
         assert_eq!(
             args,
             vec![
@@ -133,7 +153,12 @@ mod tests {
             raw_cake_args: None,
         };
 
-        let args = build_cake_args(&cfg, cfg.download_mbps, true, false);
+        let args = build_cake_args(
+            &cfg,
+            cfg.download_mbps,
+            SqmDirection::Ingress,
+            WanFraming::Ethernet,
+        );
         assert!(args.contains(&"wash".to_string()));
         assert!(args.contains(&"ingress".to_string()));
         assert!(args.contains(&"rtt".to_string()));

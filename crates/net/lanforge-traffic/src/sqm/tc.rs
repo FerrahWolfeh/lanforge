@@ -1,4 +1,4 @@
-use super::cake::build_cake_args;
+use super::cake::{SqmDirection, WanFraming, build_cake_args};
 use super::ifb::{resolve_ifb_name, setup_ifb, teardown_ifb};
 use lanforge_types::network::SqmConfig;
 use std::io::ErrorKind;
@@ -50,7 +50,7 @@ async fn run_tc(args: &[&str]) -> bool {
 }
 
 /// Applies SQM (CAKE) on the specified WAN interface and an associated IFB device.
-pub async fn apply_sqm(wan_iface: &str, cfg: &SqmConfig, is_pppoe: bool) -> Option<String> {
+pub async fn apply_sqm(wan_iface: &str, cfg: &SqmConfig, framing: WanFraming) -> Option<String> {
     if !cfg.enabled {
         return None;
     }
@@ -59,12 +59,12 @@ pub async fn apply_sqm(wan_iface: &str, cfg: &SqmConfig, is_pppoe: bool) -> Opti
         wan = %wan_iface,
         download_mbps = cfg.download_mbps,
         upload_mbps = cfg.upload_mbps,
-        is_pppoe = is_pppoe,
+        framing = ?framing,
         "Applying SQM (CAKE) traffic shaper"
     );
 
     // 1. Egress Shaping on WAN interface
-    let egress_cake_args = build_cake_args(cfg, cfg.upload_mbps, false, is_pppoe);
+    let egress_cake_args = build_cake_args(cfg, cfg.upload_mbps, SqmDirection::Egress, framing);
     let mut egress_cmd = Vec::with_capacity(6 + egress_cake_args.len());
     egress_cmd.extend_from_slice(&["qdisc", "replace", "dev", wan_iface, "root", "cake"]);
     for arg in &egress_cake_args {
@@ -79,7 +79,7 @@ pub async fn apply_sqm(wan_iface: &str, cfg: &SqmConfig, is_pppoe: bool) -> Opti
 
     // 2. Ingress Shaping via IFB device
     let ifb_name = resolve_ifb_name(wan_iface, &cfg.ingress_device);
-    if setup_ifb(&ifb_name).await {
+    if setup_ifb(&ifb_name).await.is_ok() {
         // Clear any old ingress qdisc on WAN
         let _ = run_tc(&["qdisc", "del", "dev", wan_iface, "ingress"]).await;
 
@@ -98,7 +98,8 @@ pub async fn apply_sqm(wan_iface: &str, cfg: &SqmConfig, is_pppoe: bool) -> Opti
 
             if run_tc(&filter_args).await {
                 // Attach CAKE to IFB root
-                let ingress_cake_args = build_cake_args(cfg, cfg.download_mbps, true, is_pppoe);
+                let ingress_cake_args =
+                    build_cake_args(cfg, cfg.download_mbps, SqmDirection::Ingress, framing);
                 let mut ingress_cmd = Vec::with_capacity(6 + ingress_cake_args.len());
                 ingress_cmd
                     .extend_from_slice(&["qdisc", "replace", "dev", &ifb_name, "root", "cake"]);
