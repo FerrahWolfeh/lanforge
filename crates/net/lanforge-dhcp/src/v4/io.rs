@@ -37,6 +37,27 @@ impl Dhcpv4InertReply {
 
 pub type Dhcpv4InertInRx = Arc<TokioMutex<Receiver<(Vec<u8>, SocketAddr)>>>;
 
+/// Delivery mode for a `DHCPv4` reply when sending directly on L2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplyMode {
+    /// Send directly to the client's IP and MAC address.
+    Unicast,
+    /// Broadcast to `255.255.255.255` and `ff:ff:ff:ff:ff:ff`.
+    Broadcast,
+}
+
+impl ReplyMode {
+    /// Constructs a `ReplyMode` from a broadcast boolean flag.
+    #[must_use]
+    pub const fn from_broadcast(broadcast: bool) -> Self {
+        if broadcast {
+            Self::Broadcast
+        } else {
+            Self::Unicast
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Dhcpv4InertChannels {
     pub in_rx: Dhcpv4InertInRx,
@@ -170,7 +191,7 @@ impl Dhcpv4Transport {
         &self,
         packet: &[u8],
         server_id: Ipv4Addr,
-        broadcast: bool,
+        mode: ReplyMode,
         dest_ip: Ipv4Addr,
         giaddr: Ipv4Addr,
         mac: MacAddr,
@@ -179,10 +200,9 @@ impl Dhcpv4Transport {
         let res = match &self.backend {
             TransportBackend::Kernel { udp, raw_tx } => {
                 if giaddr == Ipv4Addr::UNSPECIFIED {
-                    let (final_dst_ip, dst_mac_arr) = if broadcast {
-                        (Ipv4Addr::BROADCAST, [0xff; 6])
-                    } else {
-                        (dest_ip, *mac.as_ref())
+                    let (final_dst_ip, dst_mac_arr) = match mode {
+                        ReplyMode::Broadcast => (Ipv4Addr::BROADCAST, [0xff; 6]),
+                        ReplyMode::Unicast => (dest_ip, *mac.as_ref()),
                     };
                     raw_tx
                         .lock()
@@ -205,7 +225,7 @@ impl Dhcpv4Transport {
                 let reply = Dhcpv4InertReply {
                     packet: packet.to_vec(),
                     server_id,
-                    broadcast,
+                    broadcast: mode == ReplyMode::Broadcast,
                     dest_ip,
                     giaddr,
                     mac,
@@ -301,7 +321,7 @@ mod tests {
             .send_reply(
                 &offer_packet,
                 server_id,
-                true,
+                ReplyMode::Broadcast,
                 offered_ip,
                 Ipv4Addr::UNSPECIFIED,
                 mac,

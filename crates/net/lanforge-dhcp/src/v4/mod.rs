@@ -36,6 +36,7 @@ pub(crate) mod system_dns;
 
 use dhcproto::v4::{DhcpOption, Message, MessageType, Opcode, OptionCode};
 use dhcproto::{Decodable, Decoder};
+use io::ReplyMode;
 use lanforge_core::bus::{
     AdminChange, DeviceEvent, DhcpV4MessageType, LanforgeEvent, NetworkChange, NetworkEvent,
     PppoeEvent,
@@ -539,7 +540,7 @@ impl Dhcpv4Service {
         if let Err(e) = transport.send_reply(
             packet,
             self.cfg.server_id,
-            broadcast,
+            ReplyMode::from_broadcast(broadcast),
             dest_ip,
             giaddr,
             mac,
@@ -666,7 +667,7 @@ impl Dhcpv4Service {
                         if let Err(e) = transport.send_reply(
                             &packet,
                             self.cfg.server_id,
-                            false,
+                            ReplyMode::Unicast,
                             ip,
                             Ipv4Addr::UNSPECIFIED,
                             *mac,
@@ -697,7 +698,7 @@ impl Dhcpv4Service {
                     if let Err(e) = transport.send_reply(
                         &packet,
                         self.cfg.server_id,
-                        false,
+                        ReplyMode::Unicast,
                         ip,
                         Ipv4Addr::UNSPECIFIED,
                         *mac,
@@ -800,7 +801,7 @@ impl Dhcpv4Service {
                 if let Err(e) = transport.send_reply(
                     &packet,
                     cfg.server_id,
-                    false,
+                    ReplyMode::Unicast,
                     ip,
                     Ipv4Addr::UNSPECIFIED,
                     mac,
