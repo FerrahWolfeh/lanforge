@@ -124,17 +124,13 @@ impl LanforgeContext {
     }
 
     /// Sets an auto-rollback deadline for the active staged transaction.
-    #[must_use]
-    pub fn set_firewall_transaction_rollback(&self, tx_id: &str, deadline: Instant) -> bool {
+    pub fn set_firewall_transaction_rollback(&self, tx_id: &str, deadline: Instant) {
         let mut tx_lock = self.inner.runtime.firewall_tx.write();
         if let Some(ref mut tx) = *tx_lock
             && tx.tx_id == tx_id
         {
             tx.auto_rollback_deadline = Some(deadline);
-            return true;
         }
-        drop(tx_lock);
-        false
     }
 
     /// Clears the staged firewall transaction.

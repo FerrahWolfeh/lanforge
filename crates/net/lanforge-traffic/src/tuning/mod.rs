@@ -39,7 +39,9 @@ pub async fn apply_tuning(cfg: &NicTuningConfig, default_ifaces: &[String]) -> V
         ethtool::apply_ring_buffers(iface, &cfg.rx_ring, &cfg.tx_ring).await;
 
         // Apply RPS / RFS / XPS steering
-        if sysfs::apply_interface_steering(iface, &cpu_mask, cfg.rps_flow_cnt).await {
+        if sysfs::apply_interface_steering(iface, &cpu_mask, cfg.rps_flow_cnt).await
+            == sysfs::SteeringOutcome::Applied
+        {
             tuned.push(iface.to_string());
         }
 

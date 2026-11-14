@@ -267,8 +267,7 @@ impl ClientContext {
                 .publish(LanforgeEvent::Firewall(FirewallEvent::RulesetChanged));
 
             let deadline = Instant::now() + Duration::from_secs(u64::from(rollback_secs));
-            let _ = self
-                .ctx
+            self.ctx
                 .set_firewall_transaction_rollback(&req.tx_id, deadline);
 
             // Spawn background auto-rollback worker

@@ -37,12 +37,25 @@ pub async fn apply_global_sysctls(rps_sock_flow_entries: u32) {
     }
 }
 
+/// Result of applying RPS/RFS/XPS steering on a network interface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SteeringOutcome {
+    /// At least one sysfs queue attribute was updated.
+    Applied,
+    /// No sysfs queue attributes could be updated (e.g. missing queues dir or unsupported).
+    Skipped,
+}
+
 /// Applies RPS, RFS, and XPS settings on a network interface via sysfs in a single directory pass.
-pub async fn apply_interface_steering(iface: &str, cpu_mask: &str, rps_flow_cnt: u32) -> bool {
+pub async fn apply_interface_steering(
+    iface: &str,
+    cpu_mask: &str,
+    rps_flow_cnt: u32,
+) -> SteeringOutcome {
     let queues_dir = PathBuf::from(format!("/sys/class/net/{iface}/queues"));
     let Ok(mut dir) = fs::read_dir(&queues_dir).await else {
         debug!(iface = %iface, "Interface queues directory does not exist, skipping steering tuning");
-        return false;
+        return SteeringOutcome::Skipped;
     };
 
     let mask_str = format!("{cpu_mask}\n");
@@ -102,7 +115,8 @@ pub async fn apply_interface_steering(iface: &str, cpu_mask: &str, rps_flow_cnt:
             cpu_mask = %cpu_mask,
             "Applied RPS/RFS packet steering optimizations"
         );
+        SteeringOutcome::Applied
+    } else {
+        SteeringOutcome::Skipped
     }
-
-    tuned_any
 }

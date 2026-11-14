@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use crate::collector::get_traffic_history_snapshot;
+use crate::sqm::WanFraming;
 use crate::tuning::cpu::resolve_effective_cpu_mask;
 use lanforge_core::context::{ConfigSubscription, LanforgeContext};
 use lanforge_core::error::CoreError;
@@ -34,7 +35,8 @@ pub struct TrafficService<H: TrafficHost = KernelTraffic> {
     cfg: TrafficConfig,
     active_wan: Option<String>,
     active_ifb: Option<String>,
-    is_pppoe_active: bool,
+    /// Framing of the current WAN link; drives `SqmOverhead::Auto` on a configured interface.
+    wan_framing: WanFraming,
     tuned_interfaces: Vec<String>,
     effective_cpu_mask: String,
     /// NIC tuning, `tc` queues and counters: the kernel, or nothing in rootless tests.
@@ -70,7 +72,7 @@ impl<H: TrafficHost> TrafficService<H> {
             cfg,
             active_wan: None,
             active_ifb: None,
-            is_pppoe_active: false,
+            wan_framing: WanFraming::Ethernet,
             tuned_interfaces: Vec::new(),
             effective_cpu_mask: cpu_mask,
             host,
@@ -111,15 +113,15 @@ impl<H: TrafficHost> TrafficService<H> {
     }
 
     /// Resolves target WAN interface for SQM based on auto-detection or config.
-    fn resolve_wan_interface(&self, ctx: &LanforgeContext) -> Option<(String, bool)> {
+    fn resolve_wan_interface(&self, ctx: &LanforgeContext) -> Option<(String, WanFraming)> {
         let configured = self.cfg.sqm.interface.trim();
         if !configured.is_empty() && !configured.eq_ignore_ascii_case("auto") {
-            return Some((configured.to_string(), self.is_pppoe_active));
+            return Some((configured.to_string(), self.wan_framing));
         }
 
         // If PPPoE is active, prefer PPPoE interface
         if let Some(ref ppp_iface) = self.active_wan {
-            return Some((ppp_iface.clone(), true));
+            return Some((ppp_iface.clone(), WanFraming::Pppoe));
         }
 
         // Check if PPPoE config exists in context
@@ -129,16 +131,22 @@ impl<H: TrafficHost> TrafficService<H> {
                 return None;
             }
             if !pppoe_cfg.wan_iface.is_empty() {
-                return Some((pppoe_cfg.wan_iface, false));
+                return Some((pppoe_cfg.wan_iface, WanFraming::Ethernet));
             }
         }
 
         // Fallback to primary host interface if configured
-        ctx.target_interface_name().map(|name| (name, false))
+        ctx.target_interface_name()
+            .map(|name| (name, WanFraming::Ethernet))
     }
 
     /// Applies SQM on the resolved interface.
-    async fn apply_sqm_internal(&mut self, ctx: &LanforgeContext, iface: &str, is_pppoe: bool) {
+    async fn apply_sqm_internal(
+        &mut self,
+        ctx: &LanforgeContext,
+        iface: &str,
+        framing: WanFraming,
+    ) {
         if !self.cfg.sqm.enabled {
             return;
         }
@@ -151,7 +159,7 @@ impl<H: TrafficHost> TrafficService<H> {
                 .clear_sqm(current, &self.cfg.sqm.ingress_device)
                 .await;
         }
-        let ifb = self.host.apply_sqm(iface, &self.cfg.sqm, is_pppoe).await;
+        let ifb = self.host.apply_sqm(iface, &self.cfg.sqm, framing).await;
 
         self.active_wan = Some(iface.to_string());
         self.active_ifb.clone_from(&ifb);
@@ -214,8 +222,8 @@ impl<H: TrafficHost> TrafficService<H> {
         }
 
         if is_sqm_enabled {
-            if let Some((wan_iface, is_pppoe)) = self.resolve_wan_interface(ctx) {
-                self.apply_sqm_internal(ctx, &wan_iface, is_pppoe).await;
+            if let Some((wan_iface, framing)) = self.resolve_wan_interface(ctx) {
+                self.apply_sqm_internal(ctx, &wan_iface, framing).await;
             } else {
                 debug!("Waiting for active WAN interface / PPPoE session before attaching SQM");
             }
@@ -259,9 +267,9 @@ impl<H: TrafficHost> TrafficService<H> {
         if sqm_changed {
             self.cfg.sqm = new_cfg.sqm.clone();
             if new_cfg.sqm.enabled {
-                if let Some((wan_iface, is_pppoe)) = self.resolve_wan_interface(ctx) {
+                if let Some((wan_iface, framing)) = self.resolve_wan_interface(ctx) {
                     info!(wan = %wan_iface, "Reapplying SQM parameters in-place");
-                    self.apply_sqm_internal(ctx, &wan_iface, is_pppoe).await;
+                    self.apply_sqm_internal(ctx, &wan_iface, framing).await;
                 }
             } else if self.active_wan.is_some() {
                 info!("SQM disabled, clearing queues");
@@ -276,8 +284,7 @@ impl<H: TrafficHost> TrafficService<H> {
     async fn handle_wan_snapshot(&mut self, ctx: &LanforgeContext, snap: &WanSnapshot) {
         if snap.is_up() {
             if let Some(ref ifname) = snap.ifname {
-                let is_pppoe = ifname.starts_with("ppp");
-                self.is_pppoe_active = is_pppoe;
+                self.wan_framing = WanFraming::of_interface(ifname);
                 if self.active_wan.as_deref() != Some(ifname.as_str()) {
                     info!(
                         interface = %ifname,
@@ -286,7 +293,7 @@ impl<H: TrafficHost> TrafficService<H> {
                     );
                     self.active_wan = Some(ifname.clone());
                     if self.cfg.sqm.enabled {
-                        self.apply_sqm_internal(ctx, ifname, is_pppoe).await;
+                        self.apply_sqm_internal(ctx, ifname, self.wan_framing).await;
                     }
                     self.publish_status(ctx, ServiceState::Online);
                 }
@@ -294,7 +301,7 @@ impl<H: TrafficHost> TrafficService<H> {
         } else if self.active_wan.is_some() {
             info!(generation = snap.generation, "WAN Down, pausing SQM queues");
             self.active_wan = None;
-            self.is_pppoe_active = false;
+            self.wan_framing = WanFraming::Ethernet;
             self.clear_sqm_internal(ctx).await;
             self.publish_status(ctx, ServiceState::Online);
         }
@@ -307,16 +314,17 @@ impl<H: TrafficHost> TrafficService<H> {
                     interface = %session.interface,
                     "Detected PPPoE SessionUp, updating SQM binding"
                 );
-                self.is_pppoe_active = true;
+                self.wan_framing = WanFraming::Pppoe;
                 self.active_wan = Some(session.interface.clone());
                 if self.cfg.sqm.enabled {
-                    self.apply_sqm_internal(ctx, &session.interface, true).await;
+                    self.apply_sqm_internal(ctx, &session.interface, WanFraming::Pppoe)
+                        .await;
                 }
                 self.publish_status(ctx, ServiceState::Online);
             }
             PppoeEvent::SessionDown { reason } => {
                 info!(reason = %reason, "PPPoE SessionDown, removing session SQM queues");
-                self.is_pppoe_active = false;
+                self.wan_framing = WanFraming::Ethernet;
                 self.clear_sqm_internal(ctx).await;
                 self.publish_status(ctx, ServiceState::Online);
             }
@@ -341,9 +349,9 @@ impl<H: TrafficHost> TrafficService<H> {
         }
         if self.cfg.sqm.enabled
             && self.active_wan.is_none()
-            && let Some((wan_iface, is_pppoe)) = self.resolve_wan_interface(ctx)
+            && let Some((wan_iface, framing)) = self.resolve_wan_interface(ctx)
         {
-            self.apply_sqm_internal(ctx, &wan_iface, is_pppoe).await;
+            self.apply_sqm_internal(ctx, &wan_iface, framing).await;
             changed = true;
         }
         if changed {

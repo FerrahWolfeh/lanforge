@@ -9,8 +9,8 @@ use crate::bus::{
 use crate::context::state::cache::DiscoveryStore;
 use crate::context::state::{CliHostUpdate, DeviceClass, InterfaceState, LeaseTarget, State};
 use lanforge_types::device::{
-    DeviceStatus, Hostname, HostnameOrigin, IPv4State, IPv6State, IpClassification, Origin,
-    TransientHost, TransientOrigin, V6ObservationOrigin, classify_ipv6,
+    DeviceStatus, Hostname, HostnameOrigin, IPv4State, IPv6State, IpClassification,
+    ObservationState, Origin, TransientHost, TransientOrigin, V6ObservationOrigin, classify_ipv6,
 };
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::network::{Ipv6AddrOrSuffix, Ipv6Prefix};
@@ -18,7 +18,7 @@ use lanforge_types::update::V6LeaseUpdate;
 
 type ProcessedNeighbor = (
     IpAddr,
-    bool,
+    ObservationState,
     V6ObservationOrigin,
     Option<(Duid, u32, SystemTime)>,
 );
@@ -92,7 +92,11 @@ impl State {
         is_active: bool,
     ) -> EventVec {
         self.mutate_device(mac, |dev| {
-            dev.apply_v6_observation(addr, is_active, V6ObservationOrigin::SlaacTracker)
+            dev.apply_v6_observation(
+                addr,
+                ObservationState::from_active(is_active),
+                V6ObservationOrigin::SlaacTracker,
+            )
         })
     }
 
@@ -144,7 +148,9 @@ impl State {
                 None
             };
 
-            if let Some(c) = dev.apply_v6_observation(ip, is_active, origin) {
+            if let Some(c) =
+                dev.apply_v6_observation(ip, ObservationState::from_active(is_active), origin)
+            {
                 // If it's Link-Local and we are already worthy, don't trigger a dirty update.
                 // This keeps NdpSeen events quiet for background traffic.
                 if classify_ipv6(&ip) == IpClassification::LinkLocal && dev.is_worthy() {
@@ -180,7 +186,9 @@ impl State {
         ip: Ipv4Addr,
         is_active: bool,
     ) -> EventVec {
-        let mut events = self.mutate_device(mac, |dev| dev.apply_arp_observation(ip, is_active));
+        let mut events = self.mutate_device(mac, |dev| {
+            dev.apply_arp_observation(ip, ObservationState::from_active(is_active))
+        });
         let transient_name = self
             .transient_hosts
             .get(&IpAddr::V4(ip))
@@ -448,16 +456,19 @@ impl State {
         if entries.iter().all(|(mac, _, _)| *mac == first_mac) {
             let processed_entries: Vec<ProcessedNeighbor> = entries
                 .iter()
-                .map(|(_, ip, active)| match ip {
-                    IpAddr::V4(_) => (*ip, *active, V6ObservationOrigin::NdpMonitor, None),
-                    IpAddr::V6(v6) => {
-                        let origin = if self.is_managed_slaac_prefix(v6) {
-                            V6ObservationOrigin::SlaacTracker
-                        } else {
-                            V6ObservationOrigin::NdpMonitor
-                        };
-                        let orphaned = discovery.remove_orphan(v6);
-                        (*ip, *active, origin, orphaned)
+                .map(|(_, ip, active)| {
+                    let state = ObservationState::from_active(*active);
+                    match ip {
+                        IpAddr::V4(_) => (*ip, state, V6ObservationOrigin::NdpMonitor, None),
+                        IpAddr::V6(v6) => {
+                            let origin = if self.is_managed_slaac_prefix(v6) {
+                                V6ObservationOrigin::SlaacTracker
+                            } else {
+                                V6ObservationOrigin::NdpMonitor
+                            };
+                            let orphaned = discovery.remove_orphan(v6);
+                            (*ip, state, origin, orphaned)
+                        }
                     }
                 })
                 .collect();
@@ -529,10 +540,12 @@ impl State {
                     (origin, orphaned)
                 }
             };
-            grouped_updates
-                .entry(mac)
-                .or_default()
-                .push((ip, active, origin, orphaned));
+            grouped_updates.entry(mac).or_default().push((
+                ip,
+                ObservationState::from_active(active),
+                origin,
+                orphaned,
+            ));
         }
 
         let mut events = EventVec::new();

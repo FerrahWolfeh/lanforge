@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime};
 use crate::device::identity::DeviceIdentity;
 
 use crate::device::state::{
-    IPv4State, IPv6State, V4Lease, V6Lease, V6ObservationOrigin, V6PrefixLease,
+    IPv4State, IPv6State, ObservationState, V4Lease, V6Lease, V6ObservationOrigin, V6PrefixLease,
     system_time_to_epoch_u32,
 };
 
@@ -343,9 +343,10 @@ impl Device {
     pub fn apply_v6_observation(
         &mut self,
         addr: Ipv6Addr,
-        is_active: bool,
+        state: ObservationState,
         origin: V6ObservationOrigin,
     ) -> Option<NetworkChange> {
+        let is_active = state == ObservationState::Active;
         let now = SystemTime::now();
         let classification = classify_ipv6(&addr);
         let is_slaac = matches!(
@@ -432,11 +433,11 @@ impl Device {
     pub fn apply_arp_observation(
         &mut self,
         ip: Ipv4Addr,
-        is_active: bool,
+        state: ObservationState,
     ) -> Option<NetworkChange> {
         let now = SystemTime::now();
 
-        if !is_active {
+        if state == ObservationState::Inactive {
             if matches!(self.v4, IPv4State::None) {
                 self.v4 = IPv4State::Discovery(ip, SystemTime::UNIX_EPOCH);
                 self.last_seen = self.calculate_last_seen();

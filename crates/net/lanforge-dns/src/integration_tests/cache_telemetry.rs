@@ -1,5 +1,5 @@
 use super::common::*;
-use crate::resolver::recursive::cache::{CacheKey, DnsCache};
+use crate::resolver::recursive::cache::{CacheEntryKind, CacheKey, DnsCache};
 use crate::telemetry::DnsStats;
 use lanforge_dns_wire::{WireEncoder, WireQuestion};
 use lanforge_types::network::dns::{
@@ -43,7 +43,7 @@ fn cache_hit_and_ttl_scrubbing() {
         resp_data.clone(),
         vec![ttl_offset],
         original_ttl,
-        false,
+        CacheEntryKind::Answer,
     );
 
     let (hit, _is_block) = cache
@@ -134,7 +134,7 @@ fn cache_expiration() {
     let key = CacheKey::new(b"\x04test\x00", 1, 1);
 
     // Insert with very short TTL
-    cache.insert(key.clone(), vec![0; 64], vec![], 1, false);
+    cache.insert(key.clone(), vec![0; 64], vec![], 1, CacheEntryKind::Answer);
 
     // Manually expire it
     {
@@ -162,7 +162,7 @@ fn cache_eviction_tracking() {
     // Insert 3 unique entries. Since capacity is 2, inserting the 3rd one should trigger an eviction.
     for i in 1..=3 {
         let key = CacheKey::new(format!("\x05test{i}\x00").into_bytes(), 1, 1);
-        cache.insert(key, vec![0; 64], vec![], 30, false);
+        cache.insert(key, vec![0; 64], vec![], 30, CacheEntryKind::Answer);
     }
 
     let evictions = stats.cache_evictions.load(Ordering::Relaxed);

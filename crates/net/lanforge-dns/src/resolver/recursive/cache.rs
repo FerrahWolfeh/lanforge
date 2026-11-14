@@ -47,6 +47,15 @@ impl CacheKey {
     }
 }
 
+/// Whether a cached DNS response represents a normal upstream answer or a synthetic block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheEntryKind {
+    /// Normal upstream response.
+    Answer,
+    /// Synthetic block response (e.g. adblock).
+    Block,
+}
+
 #[derive(Clone)]
 pub struct CachedResponse {
     pub data: Bytes,
@@ -141,7 +150,7 @@ impl DnsCache {
         response_data: Vec<u8>,
         ttl_offsets: impl Into<SmallVec<[usize; 8]>>,
         min_ttl_found: u32,
-        is_block: bool,
+        kind: CacheEntryKind,
     ) {
         let ttl_offsets = ttl_offsets.into();
         key.qname.make_ascii_lowercase();
@@ -197,7 +206,7 @@ impl DnsCache {
             created_at: now,
             expires_at: now + Duration::from_secs(ttl_secs),
             ttl_offsets,
-            is_block,
+            is_block: kind == CacheEntryKind::Block,
         };
         self.cache.insert(key, cached_response);
         #[cfg(feature = "hotpath")]

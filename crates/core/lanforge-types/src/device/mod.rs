@@ -7,7 +7,8 @@ pub mod transient;
 pub use core::{Device, DeviceClass, DeviceStatus, LearningMethod, Origin};
 pub use identity::DeviceIdentity;
 pub use state::{
-    IPv4State, IPv6State, LeaseKind, V4Lease, V6Kind, V6Lease, V6ObservationOrigin, V6PrefixLease,
+    IPv4State, IPv6State, LeaseKind, ObservationState, V4Lease, V6Kind, V6Lease,
+    V6ObservationOrigin, V6PrefixLease,
 };
 pub use static_host::StaticHost;
 pub use transient::{TransientHost, TransientOrigin};
