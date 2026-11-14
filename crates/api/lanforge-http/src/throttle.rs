@@ -105,6 +105,15 @@ struct Ledger {
     global: Strikes,
 }
 
+/// Outcome of an authentication attempt recorded by [`LoginThrottle`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthOutcome {
+    /// Credentials matched; clears the client's strike history.
+    Success,
+    /// Authentication failed; counts toward global and per-source lockouts.
+    Failure,
+}
+
 /// Throttles password checks; shared by every clone of the `AuthManager`.
 #[derive(Debug)]
 pub struct LoginThrottle {
@@ -140,10 +149,10 @@ impl LoginThrottle {
     }
 
     /// Records the outcome of an admitted attempt: a success clears the client's failures.
-    pub fn record(&self, client: ClientIp, ok: bool) {
+    pub fn record(&self, client: ClientIp, outcome: AuthOutcome) {
         let now = Instant::now();
         let mut ledger = self.ledger.lock();
-        if ok {
+        if outcome == AuthOutcome::Success {
             ledger.sources.remove(&client);
             return;
         }
@@ -188,8 +197,10 @@ impl LoginThrottle {
         self.admit(client)?;
         let result = attempt.await;
         match &result {
-            Ok(_) => self.record(client, true),
-            Err(HttpError::Auth(_) | HttpError::Forbidden(_)) => self.record(client, false),
+            Ok(_) => self.record(client, AuthOutcome::Success),
+            Err(HttpError::Auth(_) | HttpError::Forbidden(_)) => {
+                self.record(client, AuthOutcome::Failure);
+            }
             Err(_) => {}
         }
         result
@@ -209,10 +220,10 @@ mod tests {
         let t = LoginThrottle::default();
         for _ in 0..SOURCE_FREE {
             assert!(t.admit(ip(1)).is_ok());
-            t.record(ip(1), false);
+            t.record(ip(1), AuthOutcome::Failure);
         }
         assert!(t.admit(ip(1)).is_ok(), "the free failures are free");
-        t.record(ip(1), false);
+        t.record(ip(1), AuthOutcome::Failure);
         assert!(matches!(t.admit(ip(1)), Err(HttpError::TooManyRequests(s)) if s >= 29));
         assert!(t.admit(ip(2)).is_ok());
     }
@@ -221,11 +232,11 @@ mod tests {
     fn a_success_clears_the_client() {
         let t = LoginThrottle::default();
         for _ in 0..SOURCE_FREE {
-            t.record(ip(1), false);
+            t.record(ip(1), AuthOutcome::Failure);
         }
-        t.record(ip(1), true);
+        t.record(ip(1), AuthOutcome::Success);
         for _ in 0..SOURCE_FREE {
-            t.record(ip(1), false);
+            t.record(ip(1), AuthOutcome::Failure);
         }
         assert!(t.admit(ip(1)).is_ok());
     }
@@ -234,7 +245,7 @@ mod tests {
     fn rotating_addresses_hits_the_global_lockout() {
         let t = LoginThrottle::default();
         for n in 0..=GLOBAL_FREE {
-            t.record(ip(u8::try_from(n).unwrap()), false);
+            t.record(ip(u8::try_from(n).unwrap()), AuthOutcome::Failure);
         }
         assert!(matches!(
             t.admit(ip(200)),
@@ -263,7 +274,7 @@ mod tests {
         let t = LoginThrottle::default();
         for n in 0..MAX_SOURCES + 50 {
             let addr = IpAddr::V6(Ipv6Addr::from(u128::try_from(n).unwrap()));
-            t.record(ClientIp(Some(addr)), false);
+            t.record(ClientIp(Some(addr)), AuthOutcome::Failure);
         }
         assert!(t.ledger.lock().sources.len() <= MAX_SOURCES);
     }
