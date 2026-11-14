@@ -162,6 +162,7 @@ pub async fn apply_ring_buffers(iface: &str, rx_ring: &str, tx_ring: &str) {
     }
 }
 
+/// Sets the NIC ring sizes; returns `true` when the driver accepted them.
 async fn run_ethtool_ring(iface: &str, rx: u32, tx: u32) -> bool {
     let ethtool_bin = resolve_ethtool_binary();
     let res = Command::new(ethtool_bin)

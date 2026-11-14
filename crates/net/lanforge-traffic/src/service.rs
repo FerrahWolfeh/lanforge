@@ -35,7 +35,8 @@ pub struct TrafficService<H: TrafficHost = KernelTraffic> {
     cfg: TrafficConfig,
     active_wan: Option<String>,
     active_ifb: Option<String>,
-    is_pppoe_active: bool,
+    /// Framing of the current WAN link; drives `SqmOverhead::Auto` on a configured interface.
+    wan_framing: WanFraming,
     tuned_interfaces: Vec<String>,
     effective_cpu_mask: String,
     /// NIC tuning, `tc` queues and counters: the kernel, or nothing in rootless tests.
@@ -71,7 +72,7 @@ impl<H: TrafficHost> TrafficService<H> {
             cfg,
             active_wan: None,
             active_ifb: None,
-            is_pppoe_active: false,
+            wan_framing: WanFraming::Ethernet,
             tuned_interfaces: Vec::new(),
             effective_cpu_mask: cpu_mask,
             host,
@@ -115,12 +116,7 @@ impl<H: TrafficHost> TrafficService<H> {
     fn resolve_wan_interface(&self, ctx: &LanforgeContext) -> Option<(String, WanFraming)> {
         let configured = self.cfg.sqm.interface.trim();
         if !configured.is_empty() && !configured.eq_ignore_ascii_case("auto") {
-            let framing = if self.is_pppoe_active {
-                WanFraming::Pppoe
-            } else {
-                WanFraming::Ethernet
-            };
-            return Some((configured.to_string(), framing));
+            return Some((configured.to_string(), self.wan_framing));
         }
 
         // If PPPoE is active, prefer PPPoE interface
@@ -288,8 +284,7 @@ impl<H: TrafficHost> TrafficService<H> {
     async fn handle_wan_snapshot(&mut self, ctx: &LanforgeContext, snap: &WanSnapshot) {
         if snap.is_up() {
             if let Some(ref ifname) = snap.ifname {
-                let is_pppoe = ifname.starts_with("ppp");
-                self.is_pppoe_active = is_pppoe;
+                self.wan_framing = WanFraming::of_interface(ifname);
                 if self.active_wan.as_deref() != Some(ifname.as_str()) {
                     info!(
                         interface = %ifname,
@@ -298,12 +293,7 @@ impl<H: TrafficHost> TrafficService<H> {
                     );
                     self.active_wan = Some(ifname.clone());
                     if self.cfg.sqm.enabled {
-                        let framing = if is_pppoe {
-                            WanFraming::Pppoe
-                        } else {
-                            WanFraming::Ethernet
-                        };
-                        self.apply_sqm_internal(ctx, ifname, framing).await;
+                        self.apply_sqm_internal(ctx, ifname, self.wan_framing).await;
                     }
                     self.publish_status(ctx, ServiceState::Online);
                 }
@@ -311,7 +301,7 @@ impl<H: TrafficHost> TrafficService<H> {
         } else if self.active_wan.is_some() {
             info!(generation = snap.generation, "WAN Down, pausing SQM queues");
             self.active_wan = None;
-            self.is_pppoe_active = false;
+            self.wan_framing = WanFraming::Ethernet;
             self.clear_sqm_internal(ctx).await;
             self.publish_status(ctx, ServiceState::Online);
         }
@@ -324,7 +314,7 @@ impl<H: TrafficHost> TrafficService<H> {
                     interface = %session.interface,
                     "Detected PPPoE SessionUp, updating SQM binding"
                 );
-                self.is_pppoe_active = true;
+                self.wan_framing = WanFraming::Pppoe;
                 self.active_wan = Some(session.interface.clone());
                 if self.cfg.sqm.enabled {
                     self.apply_sqm_internal(ctx, &session.interface, WanFraming::Pppoe)
@@ -334,7 +324,7 @@ impl<H: TrafficHost> TrafficService<H> {
             }
             PppoeEvent::SessionDown { reason } => {
                 info!(reason = %reason, "PPPoE SessionDown, removing session SQM queues");
-                self.is_pppoe_active = false;
+                self.wan_framing = WanFraming::Ethernet;
                 self.clear_sqm_internal(ctx).await;
                 self.publish_status(ctx, ServiceState::Online);
             }

@@ -20,7 +20,7 @@ pub fn resolve_tc_binary() -> &'static str {
     })
 }
 
-/// Helper to execute a `tc` command and check the result.
+/// Runs `tc` with `args`; returns `true` when it exits successfully (failures are logged here).
 async fn run_tc(args: &[&str]) -> bool {
     let tc_bin = resolve_tc_binary();
     let res = Command::new(tc_bin).args(args).output().await;
@@ -79,7 +79,7 @@ pub async fn apply_sqm(wan_iface: &str, cfg: &SqmConfig, framing: WanFraming) ->
 
     // 2. Ingress Shaping via IFB device
     let ifb_name = resolve_ifb_name(wan_iface, &cfg.ingress_device);
-    if setup_ifb(&ifb_name).await.is_ok() {
+    if setup_ifb(&ifb_name).await {
         // Clear any old ingress qdisc on WAN
         let _ = run_tc(&["qdisc", "del", "dev", wan_iface, "ingress"]).await;
 

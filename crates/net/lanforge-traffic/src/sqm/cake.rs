@@ -18,6 +18,18 @@ pub enum WanFraming {
     Pppoe,
 }
 
+impl WanFraming {
+    /// Framing of a WAN link by interface name: kernel PPP links (`ppp*`) carry `PPPoE`.
+    #[must_use]
+    pub fn of_interface(ifname: &str) -> Self {
+        if ifname.starts_with("ppp") {
+            Self::Pppoe
+        } else {
+            Self::Ethernet
+        }
+    }
+}
+
 /// Generates arguments for the CAKE qdisc.
 #[must_use]
 pub fn build_cake_args(
@@ -168,5 +180,12 @@ mod tests {
             !args.contains(&"overhead".to_string()),
             "`overhead N ethernet` adds the two: {args:?}"
         );
+    }
+
+    #[test]
+    fn framing_follows_the_interface_name() {
+        assert_eq!(WanFraming::of_interface("ppp0"), WanFraming::Pppoe);
+        assert_eq!(WanFraming::of_interface("wan0"), WanFraming::Ethernet);
+        assert_eq!(WanFraming::of_interface("enp1s0"), WanFraming::Ethernet);
     }
 }

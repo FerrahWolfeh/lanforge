@@ -50,7 +50,9 @@ pub fn resolve_ifb_name(iface: &str, configured: &str) -> String {
 }
 
 /// Prepares and activates an IFB interface for ingress queue redirection.
-pub async fn setup_ifb(ifb_name: &str) -> Result<(), String> {
+///
+/// Returns `true` once the device is up; failures are logged here.
+pub async fn setup_ifb(ifb_name: &str) -> bool {
     let modprobe_bin = resolve_modprobe_binary();
     let ip_bin = resolve_ip_binary();
 
@@ -88,16 +90,19 @@ pub async fn setup_ifb(ifb_name: &str) -> Result<(), String> {
     match up_res {
         Ok(out) if out.status.success() => {
             debug!(ifb = %ifb_name, "IFB device is UP");
-            Ok(())
+            true
         }
         Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            warn!(ifb = %ifb_name, stderr = %stderr, "Failed to bring IFB device UP");
-            Err(stderr)
+            warn!(
+                ifb = %ifb_name,
+                stderr = %String::from_utf8_lossy(&out.stderr).trim(),
+                "Failed to bring IFB device UP"
+            );
+            false
         }
         Err(e) => {
             warn!(ifb = %ifb_name, error = %e, "Could not execute ip command to raise IFB");
-            Err(e.to_string())
+            false
         }
     }
 }
