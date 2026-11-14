@@ -122,9 +122,11 @@ pub fn build_ra_packet(
                 &mut p,
                 &addr,
                 pc.prefix_len,
-                pc.on_link,
-                pc.autonomous,
-                pc.router_addr,
+                PrefixOptionFlags {
+                    on_link: pc.on_link,
+                    autonomous: pc.autonomous,
+                    router_addr: pc.router_addr,
+                },
                 valid_lt,
                 pref_lt,
             );
@@ -133,7 +135,14 @@ pub fn build_ra_packet(
 
     // ── Deprecated Prefixes (RFC 4861 §6.2.4 / §6.2.6) ───────────────────
     for &(addr, remaining_valid) in deprecated_prefixes {
-        push_prefix_option_raw(&mut p, &addr, 64, true, true, true, remaining_valid, 0);
+        push_prefix_option_raw(
+            &mut p,
+            &addr,
+            64,
+            PrefixOptionFlags::ALL,
+            remaining_valid,
+            0,
+        );
     }
 
     // ── Option 25: RDNSS (RFC 8106 §3.1) ─────────────────────────────────
@@ -203,30 +212,45 @@ pub fn mask_ipv6_address(addr: &Ipv6Addr, prefix_len: u8) -> Ipv6Addr {
     Ipv6Addr::from(ip_val & mask)
 }
 
+/// RFC 4861 §4.6.2 / RFC 3775 Prefix Information Option flags (L, A, R).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrefixOptionFlags {
+    /// On-link flag (L, bit 7).
+    pub on_link: bool,
+    /// Autonomous address-configuration flag (A, bit 6).
+    pub autonomous: bool,
+    /// Router address flag (R, bit 5, RFC 3775).
+    pub router_addr: bool,
+}
+
+impl PrefixOptionFlags {
+    /// All three PIO flags enabled (`L | A | R`).
+    pub const ALL: Self = Self {
+        on_link: true,
+        autonomous: true,
+        router_addr: true,
+    };
+
+    fn to_byte(self) -> u8 {
+        (u8::from(self.on_link) << 7)
+            | (u8::from(self.autonomous) << 6)
+            | (u8::from(self.router_addr) << 5)
+    }
+}
+
 /// Pushes a Prefix Information Option (type 3) onto the RA packet using scalar attributes.
-#[allow(clippy::too_many_arguments)]
 pub fn push_prefix_option_raw(
     p: &mut Vec<u8>,
     addr: &Ipv6Addr,
     prefix_len: u8,
-    on_link: bool,
-    autonomous: bool,
-    router_addr: bool,
+    flags: PrefixOptionFlags,
     valid_lifetime: u32,
     preferred_lifetime: u32,
 ) {
     p.push(3u8); // type
     p.push(4u8); // length = 4 × 8 = 32 bytes
     p.push(prefix_len);
-
-    // Flags:
-    //   bit 7 (L): on-link
-    //   bit 6 (A): autonomous (SLAAC)
-    //   bit 5 (R): router address (RFC 3775)
-    let flags: u8 = if on_link { 0x80 } else { 0 }
-        | if autonomous { 0x40 } else { 0 }
-        | if router_addr { 0x20 } else { 0 };
-    p.push(flags);
+    p.push(flags.to_byte());
 
     p.extend(valid_lifetime.to_be_bytes());
     p.extend(preferred_lifetime.to_be_bytes());
@@ -246,9 +270,11 @@ pub fn push_prefix_option(p: &mut Vec<u8>, addr: &Ipv6Addr, cfg: &RAPrefix) {
         p,
         addr,
         cfg.prefix_len,
-        cfg.on_link,
-        cfg.autonomous,
-        cfg.router_addr,
+        PrefixOptionFlags {
+            on_link: cfg.on_link,
+            autonomous: cfg.autonomous,
+            router_addr: cfg.router_addr,
+        },
         cfg.valid_lifetime.as_u32(),
         cfg.preferred_lifetime.as_u32(),
     );
