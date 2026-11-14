@@ -295,6 +295,27 @@ pub enum V6ObservationOrigin {
     NdpMonitor,
 }
 
+/// Reachability state reported by an ARP or NDP neighbor observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObservationState {
+    /// Neighbor is actively reachable/seen now.
+    Active,
+    /// Neighbor is stale/inactive (records existence without refreshing activity).
+    Inactive,
+}
+
+impl ObservationState {
+    /// Constructs an `ObservationState` from a boolean activity flag.
+    #[must_use]
+    pub const fn from_active(is_active: bool) -> Self {
+        if is_active {
+            Self::Active
+        } else {
+            Self::Inactive
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Transition adapters / compatibility models
 // ---------------------------------------------------------------------------

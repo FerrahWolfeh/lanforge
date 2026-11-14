@@ -285,7 +285,12 @@ async fn test_firewall_transaction_lifecycle() {
 
     // Set rollback deadline
     let deadline = Instant::now() + Duration::from_secs(60);
-    assert!(ctx.set_firewall_transaction_rollback(&tx_id, deadline));
+    ctx.set_firewall_transaction_rollback(&tx_id, deadline);
+    assert_eq!(
+        ctx.get_staged_firewall_transaction()
+            .and_then(|tx| tx.auto_rollback_deadline),
+        Some(deadline)
+    );
 
     // Clear transaction
     let cleared = ctx.clear_staged_firewall_transaction(Some(&tx_id));
