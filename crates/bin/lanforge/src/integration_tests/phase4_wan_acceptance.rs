@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use crate::registry::ServiceRegistry;
+use crate::synthetic::WanService;
 use lanforge_core::bus::EventBus;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
@@ -14,8 +15,11 @@ use lanforge_core::service::{
     AsyncService, Condition, Edge, LanforgeService, LossPolicy, RestartPolicy, RuntimeClass,
     ServiceHandle, ServiceSpec,
 };
+use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::snapshot::{InterfaceSnapshot, LinkInfo, WanSnapshot, WanState};
-use lanforge_types::system::{DegradedReason, ServiceId, ServiceState};
+use lanforge_types::system::{
+    DegradedReason, PppoeSessionState, PppoeStatusResponse, ServiceId, ServiceState,
+};
 use smallvec::smallvec;
 use tokio::time::{sleep, timeout};
 
@@ -507,4 +511,49 @@ async fn test_boot_without_db() {
     assert_eq!(ctx.get_service_state(ServiceId::Dns), ServiceState::Online);
 
     sup.shutdown(&ctx, Duration::from_millis(200)).await;
+}
+
+// ---------------------------------------------------------------------------
+// WAN node started after the PPPoE session is already up
+// ---------------------------------------------------------------------------
+
+/// The WAN node reports a PPPoE session that came up before it started (spawn order, a
+/// supervisor restart of the node, a session taken over within milliseconds of a daemon
+/// restart). It used to assume `Down` and only react to later `SessionUp` events, so the WAN
+/// stayed down for as long as the session lasted.
+#[tokio::test]
+async fn test_wan_node_sees_a_session_already_up() {
+    let ctx = init_test_ctx();
+    ctx.update_pppoe_config(PppoeConfig {
+        enabled: true,
+        wan_iface: "wan0".into(),
+        ..Default::default()
+    });
+    ctx.set_pppoe_status(Some(PppoeStatusResponse {
+        enabled: true,
+        state: PppoeSessionState::Connected,
+        interface: Some("ppp0".into()),
+        local_ip: Some(Ipv4Addr::new(100, 76, 63, 229)),
+        ..Default::default()
+    }));
+
+    let mut wan = WanService::new();
+    let h = ServiceHandle::new(ServiceId::Wan, ctx.clone());
+    let task = {
+        let ctx = ctx.clone();
+        tokio::spawn(async move { wan.serve(&ctx, &h).await })
+    };
+
+    timeout(Duration::from_secs(1), async {
+        while !ctx.wan_snapshot().is_up() {
+            sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the WAN must be up while the PPPoE session is");
+    let snap = ctx.wan_snapshot();
+    assert_eq!(snap.ifname.as_deref(), Some("ppp0"));
+    assert_eq!(snap.v4, Some((Ipv4Addr::new(100, 76, 63, 229), 32)));
+
+    task.abort();
 }

@@ -41,3 +41,4 @@ mod upstream_names;
 #[cfg(any(feature = "dot", feature = "doq"))]
 mod upstream_tls_name;
 mod upstream_udp_spoofing;
+mod wan_status;

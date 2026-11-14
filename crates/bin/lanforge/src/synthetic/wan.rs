@@ -9,7 +9,7 @@ use lanforge_core::service::{
     ServiceHandle, ServiceSpec,
 };
 use lanforge_types::network::snapshot::{InterfaceSnapshot, Ipv6Net, WanSnapshot, WanState};
-use lanforge_types::system::ServiceId;
+use lanforge_types::system::{PppoeSessionState, ServiceId};
 use pnet::datalink;
 use smallvec::SmallVec;
 use tracing::{debug, info};
@@ -31,6 +31,26 @@ impl WanService {
     #[must_use]
     pub const fn new() -> Self {
         Self
+    }
+
+    /// The WAN while a `PPPoE` session is up on `iface`.
+    fn session_snapshot(
+        iface: &str,
+        v4: Option<Ipv4Addr>,
+        v6_prefixes: SmallVec<[Ipv6Net; 2]>,
+        generation: u64,
+    ) -> WanSnapshot {
+        WanSnapshot {
+            state: WanState::Up,
+            ifindex: datalink::interfaces()
+                .into_iter()
+                .find(|i| i.name == iface)
+                .map(|i| i.index),
+            ifname: Some(iface.to_string()),
+            v4: v4.map(|ip| (ip, 32)),
+            v6_prefixes,
+            generation,
+        }
     }
 
     /// Evaluates WAN state for an OS-managed WAN interface without `PPPoE`.
@@ -115,15 +135,33 @@ impl AsyncService for WanService {
         let mut generation = 1u64;
         let pppoe_enabled = ctx.get_pppoe_config().is_some_and(|p| p.enabled);
 
+        // Subscribe before reading the current state: a session that comes up in between is
+        // then seen as an event, and one already up is read from the status (PPPoE writes it
+        // before publishing `SessionUp`).
+        let mut pppoe_rx = ctx.bus().subscribe_pppoe();
+        let mut net_rx = ctx.bus().subscribe_network();
+        let mut if_rx = ctx.watch_interfaces();
+
         let mut current_snapshot = if pppoe_enabled {
-            WanSnapshot {
-                state: WanState::Down,
-                ifindex: None,
-                ifname: None,
-                v4: None,
-                v6_prefixes: SmallVec::new(),
-                generation,
-            }
+            ctx.pppoe_status()
+                .filter(|s| s.state == PppoeSessionState::Connected)
+                .and_then(|s| {
+                    let iface = s.interface.as_deref()?;
+                    Some(Self::session_snapshot(
+                        iface,
+                        s.local_ip,
+                        SmallVec::new(),
+                        generation,
+                    ))
+                })
+                .unwrap_or(WanSnapshot {
+                    state: WanState::Down,
+                    ifindex: None,
+                    ifname: None,
+                    v4: None,
+                    v6_prefixes: SmallVec::new(),
+                    generation,
+                })
         } else {
             let if_snap = ctx.interfaces_snapshot();
             let wan_iface = ctx.effective_wan_iface();
@@ -137,10 +175,6 @@ impl AsyncService for WanService {
             "Initial state evaluated"
         );
         h.ready();
-
-        let mut pppoe_rx = ctx.bus().subscribe_pppoe();
-        let mut net_rx = ctx.bus().subscribe_network();
-        let mut if_rx = ctx.watch_interfaces();
 
         loop {
             tokio::select! {
@@ -159,22 +193,15 @@ impl AsyncService for WanService {
                         match timed_event.event {
                             LanforgeEvent::Pppoe(PppoeEvent::SessionUp(up)) => {
                                 generation += 1;
-                                let ifindex = datalink::interfaces()
-                                    .into_iter()
-                                    .find(|i| i.name == up.interface)
-                                    .map(|i| i.index);
-
-                                current_snapshot = WanSnapshot {
-                                    state: WanState::Up,
-                                    ifindex,
-                                    ifname: Some(up.interface.clone()),
-                                    v4: up.ipv4.map(|ip| (ip, 32)),
-                                    v6_prefixes: current_snapshot.v6_prefixes.clone(),
+                                current_snapshot = Self::session_snapshot(
+                                    &up.interface,
+                                    up.ipv4,
+                                    current_snapshot.v6_prefixes.clone(),
                                     generation,
-                                };
+                                );
                                 ctx.set_wan_snapshot(current_snapshot.clone());
                                 info!(
-                                    ifindex = ?ifindex,
+                                    ifindex = ?current_snapshot.ifindex,
                                     iface = %up.interface,
                                     v4 = ?up.ipv4,
                                     generation,

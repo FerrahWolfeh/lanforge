@@ -61,7 +61,8 @@ impl<'a, S: BuildHasher + Clone> ReadinessTracker<'a, S> {
     fn reconcile_settled(&mut self) {
         for s in &self.expected_services {
             let st = self.ctx.get_service_state(*s);
-            // Dormant waiting for the WAN link: not online yet, keep READY=1 (deadline-bound).
+            // No WAN yet (link down, upstreams unreachable): not online, keep READY=1
+            // (deadline-bound).
             let held = self
                 .ctx
                 .get_service_detail(*s)

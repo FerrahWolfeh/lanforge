@@ -396,11 +396,16 @@ pub enum StateDetail {
 }
 
 impl StateDetail {
-    /// Whether this keeps the daemon from being ready: only waiting for the WAN link does (the
-    /// host is not online without it); every other reason is a settled state.
+    /// Whether this keeps the daemon from being ready: only a missing WAN does (the host is not
+    /// online without it), as the WAN link still down or upstreams unreachable without it;
+    /// every other reason is a settled state.
     #[must_use]
     pub const fn holds_readiness(&self) -> bool {
-        matches!(self, Self::Dormant(DormantReason::WaitingForWan(_)))
+        matches!(
+            self,
+            Self::Dormant(DormantReason::WaitingForWan(_))
+                | Self::Degraded(DegradedReason::UpstreamUnreachable)
+        )
     }
 }
 
