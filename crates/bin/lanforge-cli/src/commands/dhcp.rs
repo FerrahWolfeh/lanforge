@@ -263,7 +263,7 @@ impl DhcpArgs {
 async fn show_status(client: &LanforgeClient, printer: &Printer) -> Result<()> {
     let pools = client.dhcp_pools().await?;
     let options = client.dhcp_options().await?;
-    let leases = client.leases(true).await?;
+    let leases = client.leases().await?;
 
     if printer.json {
         return printer.print_json(&serde_json::json!({
@@ -430,7 +430,7 @@ struct MergedLease {
 }
 
 async fn list_leases(client: &LanforgeClient, printer: &Printer, args: LeasesArgs) -> Result<()> {
-    let resp = client.leases(false).await?;
+    let resp = client.leases().await?;
 
     if printer.json {
         return printer.print_json(&resp);
@@ -587,7 +587,7 @@ async fn resolve_or_prompt_mac(
         if let Ok(mac) = MacAddr::from_str(&t) {
             return Ok(mac);
         }
-        let leases = client.leases(false).await?;
+        let leases = client.leases().await?;
         let needle = t.to_lowercase();
         if let Some(found) = leases
             .leases
@@ -600,7 +600,7 @@ async fn resolve_or_prompt_mac(
     }
 
     if io::stdout().is_terminal() && !printer.yes {
-        let leases = client.leases(false).await?;
+        let leases = client.leases().await?;
         if leases.leases.is_empty() {
             bail!("No active DHCP leases found.");
         }

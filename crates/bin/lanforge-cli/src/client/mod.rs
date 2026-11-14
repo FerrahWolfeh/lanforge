@@ -1670,13 +1670,13 @@ impl LanforgeClient {
         rpc.dhcp_pools().await.map_err(|e| eyre!("{e}"))
     }
 
-    pub async fn leases(&self, count: bool) -> Result<LeasesResponse> {
+    pub async fn leases(&self) -> Result<LeasesResponse> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
-            return self.http_get(&format!("/dhcp/leases?count={count}")).await;
+            return self.http_get("/dhcp/leases").await;
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.leases(count).await.map_err(|e| eyre!("{e}"))
+        rpc.leases().await.map_err(|e| eyre!("{e}"))
     }
 
     pub async fn dhcp_options(&self) -> Result<Box<DhcpOptionsResponse>> {

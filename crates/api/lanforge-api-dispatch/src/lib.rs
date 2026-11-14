@@ -682,17 +682,6 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn context_dump(
-        &self,
-        only_devices: bool,
-        only_orphans: bool,
-    ) -> Result<Box<serde_json::Value>, RpcCallError> {
-        match self.handle_context_dump(only_devices, only_orphans).await {
-            Response::ContextDump(s) => Ok(s),
-            other => Err(Self::map_failure(other)),
-        }
-    }
-
     async fn db_reset(&self) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_db_reset().await {
             Response::Success(s) => Ok(s),
@@ -700,8 +689,8 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn leases(&self, count: bool) -> Result<LeasesResponse, RpcCallError> {
-        match self.handle_leases(count).await {
+    async fn leases(&self) -> Result<LeasesResponse, RpcCallError> {
+        match self.handle_leases().await {
             Response::Leases(r) => Ok(r),
             other => Err(Self::map_failure(other)),
         }

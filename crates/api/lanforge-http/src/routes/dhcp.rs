@@ -1,6 +1,6 @@
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{Path, State},
     response::IntoResponse,
     routing::{get, post},
 };
@@ -11,12 +11,6 @@ use serde::Deserialize;
 
 use crate::routes::create_client_ctx;
 use crate::server::AppState;
-
-#[derive(Debug, Deserialize)]
-pub struct LeasesQuery {
-    #[serde(default)]
-    pub count: bool,
-}
 
 #[derive(Debug, Deserialize)]
 pub struct LeaseActionRequest {
@@ -77,12 +71,9 @@ async fn handle_update_options(
     crate::http_response!(ctx.handle_update_dhcp_options(payload).await, Success => NoContent)
 }
 
-async fn handle_leases(
-    State(state): State<AppState>,
-    Query(params): Query<LeasesQuery>,
-) -> impl IntoResponse {
+async fn handle_leases(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_leases(params.count).await, Leases)
+    crate::http_response!(ctx.handle_leases().await, Leases)
 }
 
 async fn handle_renew(

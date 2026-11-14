@@ -14,7 +14,6 @@ use lanforge_types::{
     system::{PppoeStatusResponse, RaStatusResponse, TrafficStatusResponse},
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 pub mod auth;
 pub mod common;
@@ -80,8 +79,6 @@ pub enum Response {
     DhcpPools(DhcpPoolsResponse),
     /// Response for DNS cache dump.
     DnsCache(DnsCacheResponse),
-    /// Response for a full context dump.
-    ContextDump(Box<Value>),
     /// List of active DHCP leases.
     Leases(LeasesResponse),
     /// List of DNS rewrite rules.

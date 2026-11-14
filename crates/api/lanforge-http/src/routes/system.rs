@@ -24,14 +24,6 @@ use crate::routes::create_client_ctx;
 use crate::server::AppState;
 
 #[derive(Debug, Deserialize)]
-pub struct ContextDumpQuery {
-    #[serde(default)]
-    pub only_devices: bool,
-    #[serde(default)]
-    pub only_orphans: bool,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct ServiceControlPayload {
     pub action: ServiceAction,
 }
@@ -57,7 +49,6 @@ pub fn router() -> Router<AppState> {
         )
         .route("/reload", post(handle_reload))
         .route("/shutdown", post(handle_shutdown))
-        .route("/context", get(handle_context_dump))
         .route(
             "/config",
             get(handle_export_config).post(handle_import_config),
@@ -93,18 +84,6 @@ async fn handle_reload(State(state): State<AppState>) -> impl IntoResponse {
 async fn handle_shutdown(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(ctx.handle_shutdown().await, Success => NoContent)
-}
-
-async fn handle_context_dump(
-    State(state): State<AppState>,
-    Query(params): Query<ContextDumpQuery>,
-) -> impl IntoResponse {
-    let ctx = create_client_ctx(&state);
-    crate::http_response!(
-        ctx.handle_context_dump(params.only_devices, params.only_orphans)
-            .await,
-        ContextDump
-    )
 }
 
 async fn handle_export_config(
