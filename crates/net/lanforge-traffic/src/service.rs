@@ -369,6 +369,12 @@ impl<H: TrafficHost> TrafficService<H> {
         let mut pppoe_rx = ctx.bus().subscribe_pppoe();
         let mut if_rx = ctx.watch_interfaces();
         let mut wan_rx = ctx.watch_wan();
+        // `changed()` only reports later updates: a WAN already up when we subscribe (a PPPoE
+        // session taken over across a restart is up within milliseconds) must be handled here.
+        let initial_wan = wan_rx.borrow_and_update().clone();
+        if initial_wan.is_up() {
+            self.handle_wan_snapshot(ctx, &initial_wan).await;
+        }
 
         let mut telemetry_tick = interval(Duration::from_millis(2500));
         telemetry_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);

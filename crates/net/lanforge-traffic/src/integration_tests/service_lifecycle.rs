@@ -10,7 +10,7 @@ use lanforge_types::events::TimedEvent;
 use lanforge_types::events::pppoe::{PppoeEvent, PppoeSessionUp};
 use lanforge_types::events::traffic::TrafficEvent;
 use lanforge_types::network::pppoe::PppoeConfig;
-use lanforge_types::network::snapshot::{InterfaceSnapshot, LinkInfo};
+use lanforge_types::network::snapshot::{InterfaceSnapshot, LinkInfo, WanSnapshot, WanState};
 use lanforge_types::network::traffic::{NicTuningConfig, SqmConfig, SqmDiffserv, TrafficConfig};
 use lanforge_types::system::{ServiceId, ServiceState};
 use tokio::sync::{broadcast, watch};
@@ -465,6 +465,56 @@ async fn test_traffic_config_change_survives_a_lagged_bus() {
     })
     .await
     .expect("the new SQM bandwidth must be applied");
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = serve_handle.await;
+    service.cleanup(&ctx).await.expect("Cleanup must succeed");
+}
+
+/// A WAN that is already up when the service starts gets its SQM. A PPPoE session taken over
+/// across a daemon restart is up within milliseconds, before the service subscribes to the WAN
+/// watch; the service only reacted to later changes and kept waiting for the WAN forever.
+#[tokio::test]
+async fn test_traffic_applies_sqm_to_a_wan_already_up_at_start() {
+    let (ctx, bus) = create_test_context();
+    let mut traffic_sub = bus.subscribe_traffic();
+    ctx.update_pppoe_config(PppoeConfig {
+        enabled: true,
+        ..Default::default()
+    });
+    ctx.set_wan_snapshot(WanSnapshot {
+        state: WanState::Up,
+        ifname: Some("ppp0".into()),
+        generation: 2,
+        ..Default::default()
+    });
+
+    let cfg = TrafficConfig {
+        tuning: NicTuningConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        sqm: SqmConfig {
+            enabled: true,
+            interface: "auto".into(),
+            download_mbps: 300,
+            upload_mbps: 150,
+            ingress_device: "ifb4lanforge".into(),
+            ..Default::default()
+        },
+    };
+    ctx.update_traffic_config(cfg.clone());
+
+    let mut service = TrafficService::inert(cfg);
+    let mut service_clone = service.clone();
+    let ctx_clone = ctx.clone();
+    let h = ServiceHandle::new(ServiceId::Traffic, ctx_clone.clone());
+    let serve_handle = tokio::spawn(async move { service_clone.serve(&ctx_clone, &h).await });
+
+    wait_for_sqm_applied(&mut traffic_sub).await;
+    let status = ctx.traffic_status().expect("status published");
+    assert!(status.sqm_active);
+    assert_eq!(status.wan_interface.as_deref(), Some("ppp0"));
 
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = serve_handle.await;
