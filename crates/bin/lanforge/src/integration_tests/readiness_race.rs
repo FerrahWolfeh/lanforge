@@ -221,3 +221,36 @@ async fn test_only_the_wan_link_wait_holds_readiness() {
         Ok(LanforgeEvent::System(SystemEvent::SystemReady))
     ));
 }
+
+/// A DNS without a WAN (upstreams unreachable) holds `SystemReady` until the WAN comes up, like
+/// the WAN link wait; any other degraded reason is settled.
+#[tokio::test]
+async fn test_unreachable_upstreams_hold_readiness() {
+    use lanforge_types::system::{DegradedReason, StateDetail};
+
+    let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
+    for (id, reason) in [
+        (ServiceId::Dns, DegradedReason::UpstreamUnreachable),
+        (ServiceId::Dhcp4, DegradedReason::TransportErrors),
+    ] {
+        ctx.set_service_state(id, ServiceState::Degraded);
+        ctx.set_service_detail(id, Some(StateDetail::Degraded(reason)));
+    }
+    let mut sys_listener = ctx.bus().subscribe_system();
+    let start = Instant::now();
+    let mut tracker = ReadinessTracker::new(
+        &ctx,
+        HashSet::from([ServiceId::Dns, ServiceId::Dhcp4]),
+        start,
+    );
+    tracker.check_pending_at(start + Duration::from_secs(1));
+    assert!(sys_listener.try_recv().is_err(), "DNS waits for the WAN");
+
+    ctx.set_service_state(ServiceId::Dns, ServiceState::Online);
+    ctx.set_service_detail(ServiceId::Dns, None);
+    tracker.check_pending_at(start + Duration::from_secs(2));
+    assert!(matches!(
+        sys_listener.try_recv().map(|e| e.event),
+        Ok(LanforgeEvent::System(SystemEvent::SystemReady))
+    ));
+}

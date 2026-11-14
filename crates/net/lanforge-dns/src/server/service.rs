@@ -63,6 +63,7 @@ use lanforge_types::network::dns::{
 use lanforge_types::network::dns::{
     AdblockSourceMatch, AdblockSourceStatus, FilterMatch, FilterOrigin,
 };
+use lanforge_types::network::snapshot::WanSnapshot;
 use lanforge_types::system::{
     DegradedReason, DormantReason, PppoeSessionState, ServiceId, ServiceState,
 };
@@ -485,7 +486,12 @@ impl AsyncService for DnsService {
             None if upstream_reachable => h.ready(),
             None => h.degraded(DegradedReason::UpstreamUnreachable),
         };
-        report(true);
+        // Upstreams are reached through the WAN (whatever brings it up: PPPoE or the OS); with no
+        // WAN configured lanforge cannot judge them. Read the WAN now: `changed()` only reports
+        // later updates, and a DNS started without internet is not healthy.
+        let upstream_reachable =
+            |wan: &WanSnapshot| wan.is_up() || ctx.effective_wan_iface().is_none();
+        report(upstream_reachable(&wan_rx.borrow_and_update()));
 
         loop {
             if !ctx.is_running() {
@@ -501,8 +507,8 @@ impl AsyncService for DnsService {
                     }
                 }
                 Ok(()) = wan_rx.changed() => {
-                    let up = wan_rx.borrow().is_up();
-                    report(up);
+                    let reachable = upstream_reachable(&wan_rx.borrow());
+                    report(reachable);
                 }
 
                 cmd = h.next_command() => {
