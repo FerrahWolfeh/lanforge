@@ -65,6 +65,10 @@ Background daemons (DHCP, RA, DNS, PPPoE, Firewall, etc.) implement the `AsyncSe
   `abort()` **and await** the handle before rebinding.
 - A closed broadcast channel (`RecvError::Closed`) must end the loop, never `continue`; only `Lagged` is skipped.
 - `Notify::notify_waiters` stores no permit: use a `watch` epoch when a wake-up must not be lost.
+- Subscribe first, then read the current state: `watch::Receiver::changed()` and bus topics only
+  report *later* updates. A service that starts after the WAN/PPPoE session is up (spawn order,
+  supervisor restart, PPPoE handoff) must handle `borrow_and_update()` / the `ctx` status before
+  its loop, or it waits forever (traffic SQM, WAN node and DNS status all had this bug).
 
 ## 2. Global State & Context
 `LanforgeContext` is the central Arc-wrapped handle passed to all services.
