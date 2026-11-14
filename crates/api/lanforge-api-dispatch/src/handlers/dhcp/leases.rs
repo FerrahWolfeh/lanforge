@@ -75,7 +75,7 @@ impl ClientContext {
         Response::DhcpPools(DhcpPoolsResponse { v4_pools, v6_pools })
     }
 
-    pub async fn handle_leases(&self, _count: bool) -> Response {
+    pub async fn handle_leases(&self) -> Response {
         let now = SystemTime::now();
         let now_epoch = system_time_to_epoch_u32(now);
         let leases = self.ctx.with_state(|state| {

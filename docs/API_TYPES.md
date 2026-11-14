@@ -107,7 +107,6 @@ classDiagram
 | `shutdown` | None | `SimpleSuccess` | Gracefully shuts down the daemon. |
 | `log_level` | None | `LogLevelStatus` | The log filter in force, its `source` (`default`, `env`, `saved`, `temporary`), the saved one, the `RUST_LOG` one, and the seconds left of a temporary one. |
 | `set_log_level` | `SetLogLevelRequest { filter: Option<LogFilter>, duration_secs: Option<u64> }` | `LogLevelStatus` | Saves the filter (no duration; persisted in redb), sets it for 60 s – 7 days (memory only), or with `filter: None` returns to `RUST_LOG`. `trace` anywhere needs a duration of at most 3600 s. `LogFilter` is text: `debug` (lanforge's modules), `debug-all` (libraries too), `info,lanforge_dns=debug`. |
-| `context_dump` | `only_devices: bool`, `only_orphans: bool` | `JSON Value` | Internal diagnostic endpoint. Dumps the entire state for simulation and debugging. |
 
 ### 2. Device & Host Management
 
@@ -129,7 +128,7 @@ classDiagram
 
 | Method | Parameters | Return Type | Notes |
 | :--- | :--- | :--- | :--- |
-| `leases` | `count: bool` | `LeasesResponse` | Returns all active DHCP leases. |
+| `leases` | — | `LeasesResponse` | Returns all active DHCP leases. |
 | `dhcp_pools` | None | `DhcpPoolsResponse` | Shows utilization for all configured DHCP pools. |
 | `lease_renew` | `mac: String`, `target: Option<LeaseTarget>` | `SimpleSuccess` | Extends an existing lease. `LeaseTarget`: `V4`, `V6`, or `Both`. |
 | `lease_release` | `mac: String`, `target: Option<LeaseTarget>` | `SimpleSuccess` | Releases an active lease. `LeaseTarget`: `V4`, `V6`, or `Both`. |

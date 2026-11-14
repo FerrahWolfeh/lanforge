@@ -29,7 +29,6 @@ Endpoints supporting event streaming implement the **HybridStream** contract:
 | `system_setup` | `payload: SetupPayload` | `SetupResponse` | Completes initial first-run router provisioning. |
 | `system_config_export` | None | `SystemConfigExport` | Exports entire database configuration (hosts, DNS, tokens, pools). |
 | `system_config_import` | `config: SystemConfigExport` | `SystemConfigImportResponse` | Bulk imports system configuration into the database. |
-| `context_dump` | `only_devices: bool`, `only_orphans: bool` | `serde_json::Value` | Diagnostic state inspection dump. |
 
 ---
 
@@ -61,7 +60,7 @@ Endpoints supporting event streaming implement the **HybridStream** contract:
 
 | Method | Parameters | Return Type | Description |
 |:-------|:-----------|:------------|:------------|
-| `leases` | `count: bool` | `LeasesResponse` | Returns active DHCPv4 and DHCPv6 leases with lease expiration timestamps. |
+| `leases` | — | `LeasesResponse` | Returns active DHCPv4 and DHCPv6 leases with lease expiration timestamps. |
 | `dhcp_pools` | None | `DhcpPoolsResponse` | Returns utilization metrics for all configured dynamic pools. |
 | `dhcp_options` | None | `DhcpOptionsResponse` | Inspects global DHCP options (PXE boot, DNS, NTP, custom codes). |
 | `update_dhcp_options` | `options: DhcpOptionsConfig` | `SimpleSuccess` | Updates global DHCP options in-place. |

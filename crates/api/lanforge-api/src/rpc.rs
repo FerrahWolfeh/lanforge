@@ -304,16 +304,8 @@ pub trait LanforgeRpc {
         leave: Vec<String>,
         bypass: Option<bool>,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
-    fn context_dump(
-        &self,
-        only_devices: bool,
-        only_orphans: bool,
-    ) -> impl Future<Output = Result<Box<serde_json::Value>, RpcCallError>> + Send;
     fn db_reset(&self) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
-    fn leases(
-        &self,
-        count: bool,
-    ) -> impl Future<Output = Result<LeasesResponse, RpcCallError>> + Send;
+    fn leases(&self) -> impl Future<Output = Result<LeasesResponse, RpcCallError>> + Send;
     fn ak_generate(
         &self,
         name: String,
