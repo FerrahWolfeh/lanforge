@@ -8,19 +8,28 @@ fn protocols_overlap(a: L4Protocol, b: L4Protocol) -> bool {
     a == L4Protocol::Both || b == L4Protocol::Both || a == b
 }
 
+/// The router's interfaces the ruleset binds by itself: the active WAN (to `external`) and the
+/// primary LAN (to `internal`). `None` when not known (no WAN up, no LAN configured).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ActiveInterfaces<'a> {
+    pub wan: Option<&'a str>,
+    pub lan: Option<&'a str>,
+}
+
 /// Runs comprehensive pre-flight sanity and conflict checks on a candidate firewall configuration.
 #[must_use]
 pub fn validate_firewall_candidate(
     candidate: &FirewallConfig,
     current: &FirewallConfig,
     dynamic_ports: &[DynamicPortRequest],
+    active: ActiveInterfaces<'_>,
     tx_id_generator: impl FnOnce() -> String,
 ) -> FirewallValidationReport {
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
     let mut diff_summary = Vec::new();
 
-    let zone_names = validate_zones(&candidate.zones, &mut errors);
+    let zone_names = validate_zones(&candidate.zones, active, &mut errors);
     validate_forwardings(&candidate.forwardings, &zone_names, &mut errors);
     validate_port_forwards(
         &candidate.port_forwards,
@@ -46,9 +55,15 @@ pub fn validate_firewall_candidate(
     }
 }
 
-fn validate_zones<'a>(zones: &'a [FirewallZone], errors: &mut Vec<String>) -> HashSet<&'a str> {
+fn validate_zones<'a>(
+    zones: &'a [FirewallZone],
+    active: ActiveInterfaces<'_>,
+    errors: &mut Vec<String>,
+) -> HashSet<&'a str> {
     let mut zone_names = HashSet::new();
-    let mut assigned_interfaces: HashMap<&str, &str> = HashMap::new();
+    // Patterns already seen, with their zone: `ppp*` in one zone and `ppp0` in another take the
+    // same interface just as two `ppp0` do.
+    let mut assigned: Vec<(&str, &str)> = Vec::new();
 
     for zone in zones {
         if !zone_names.insert(zone.name.as_str()) {
@@ -59,13 +74,40 @@ fn validate_zones<'a>(zones: &'a [FirewallZone], errors: &mut Vec<String>) -> Ha
         }
 
         for iface in &zone.interfaces {
-            if let Some(existing_zone) = assigned_interfaces.get(iface.as_str()) {
+            if let Some(issue) = FirewallZone::pattern_issue(iface) {
+                errors.push(format!("Zone '{}': interface '{iface}' {issue}", zone.name));
+                continue;
+            }
+            if let Some((other, existing_zone)) = assigned
+                .iter()
+                .find(|(other, _)| FirewallZone::patterns_overlap(iface, other))
+            {
                 errors.push(format!(
-                    "Interface overlap: interface '{iface}' is assigned to both zone '{existing_zone}' and zone '{}'",
+                    "Interface overlap: interface '{iface}' in zone '{}' also matches '{other}' in zone '{existing_zone}'",
                     zone.name
                 ));
             } else {
-                assigned_interfaces.insert(iface.as_str(), zone.name.as_str());
+                assigned.push((iface.as_str(), zone.name.as_str()));
+            }
+            // Any other zone holding the WAN opens it (bypasses, DNAT acceptance, the zone's own
+            // policy and intra-zone forwarding); the WAN zone holding the LAN closes the LAN.
+            if !zone.is_external()
+                && let Some(wan) = active.wan
+                && FirewallZone::pattern_matches(iface, wan)
+            {
+                errors.push(format!(
+                    "Zone '{}': interface '{iface}' matches the WAN interface '{wan}'; only the external zone may hold the WAN",
+                    zone.name
+                ));
+            }
+            if zone.is_external()
+                && let Some(lan) = active.lan
+                && FirewallZone::pattern_matches(iface, lan)
+            {
+                errors.push(format!(
+                    "Zone '{}': interface '{iface}' matches the LAN interface '{lan}'; the external zone must not hold the LAN",
+                    zone.name
+                ));
             }
         }
     }
@@ -432,7 +474,13 @@ mod tests {
             family: None,
         });
 
-        let report = validate_firewall_candidate(&candidate, &current, &[], || "tx-test".into());
+        let report = validate_firewall_candidate(
+            &candidate,
+            &current,
+            &[],
+            ActiveInterfaces::default(),
+            || "tx-test".into(),
+        );
         assert!(!report.valid);
         assert!(report.tx_id.is_none());
         assert!(
@@ -459,7 +507,13 @@ mod tests {
             enable_hairpin: false,
             family: None,
         });
-        let report = validate_firewall_candidate(&candidate, &current, &[], || "tx".into());
+        let report = validate_firewall_candidate(
+            &candidate,
+            &current,
+            &[],
+            ActiveInterfaces::default(),
+            || "tx".into(),
+        );
         assert!(!report.valid);
         assert!(
             report
@@ -496,7 +550,13 @@ mod tests {
             family: None,
         });
 
-        let report = validate_firewall_candidate(&candidate, &current, &[], || "tx-test".into());
+        let report = validate_firewall_candidate(
+            &candidate,
+            &current,
+            &[],
+            ActiveInterfaces::default(),
+            || "tx-test".into(),
+        );
         assert!(
             report.valid,
             "Dual-stack rules on same port should not collide: {:?}",
@@ -512,7 +572,13 @@ mod tests {
         candidate.zones[0].interfaces = vec!["eth0".into()];
         candidate.zones[1].interfaces = vec!["eth0".into()];
 
-        let report = validate_firewall_candidate(&candidate, &current, &[], || "tx-test".into());
+        let report = validate_firewall_candidate(
+            &candidate,
+            &current,
+            &[],
+            ActiveInterfaces::default(),
+            || "tx-test".into(),
+        );
         assert!(!report.valid);
         assert!(
             report
@@ -536,7 +602,13 @@ mod tests {
         internal.input_policy = FirewallPolicy::Drop;
         internal.open_ports.clear();
 
-        let report = validate_firewall_candidate(&candidate, &current, &[], || "tx-test".into());
+        let report = validate_firewall_candidate(
+            &candidate,
+            &current,
+            &[],
+            ActiveInterfaces::default(),
+            || "tx-test".into(),
+        );
         assert!(!report.valid);
         assert!(
             report
@@ -563,8 +635,13 @@ mod tests {
             family: None,
         });
 
-        let report =
-            validate_firewall_candidate(&candidate, &current, &[], || "tx-valid-123".into());
+        let report = validate_firewall_candidate(
+            &candidate,
+            &current,
+            &[],
+            ActiveInterfaces::default(),
+            || "tx-valid-123".into(),
+        );
         assert!(report.valid);
         assert_eq!(report.tx_id.as_deref(), Some("tx-valid-123"));
         assert_eq!(report.errors, [] as [String; 0]);

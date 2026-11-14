@@ -2,7 +2,7 @@ pub mod transaction;
 pub mod validation;
 
 pub use transaction::FirewallTransactionState;
-pub use validation::validate_firewall_candidate;
+pub use validation::{ActiveInterfaces, validate_firewall_candidate};
 
 use crate::identifiers::DeviceIdentifier;
 use crate::network::pppoe::PppoeNftablesConfig;
@@ -71,6 +71,57 @@ pub struct FirewallZone {
     pub forward_policy: FirewallPolicy,
     pub masquerade: bool,
     pub mtu_fix: bool,
+}
+
+impl FirewallZone {
+    /// Whether this is the WAN zone (`external`, or `wan` in older files): the ruleset binds the
+    /// active WAN to it, and only it may hold the WAN.
+    #[must_use]
+    pub fn is_external(&self) -> bool {
+        matches!(self.name.as_str(), "external" | "wan")
+    }
+
+    /// Whether the interface pattern `pattern` takes `ifname`, as nftables matches `iifname`:
+    /// a trailing `*` matches by prefix (`ppp*`, `p*` take `ppp0`).
+    #[must_use]
+    pub fn pattern_matches(pattern: &str, ifname: &str) -> bool {
+        pattern
+            .strip_suffix('*')
+            .map_or_else(|| pattern == ifname, |prefix| ifname.starts_with(prefix))
+    }
+
+    /// Whether two interface patterns can take the same interface.
+    #[must_use]
+    pub fn patterns_overlap(a: &str, b: &str) -> bool {
+        match (a.strip_suffix('*'), b.strip_suffix('*')) {
+            (Some(pa), Some(pb)) => pa.starts_with(pb) || pb.starts_with(pa),
+            (Some(prefix), None) => b.starts_with(prefix),
+            (None, Some(prefix)) => a.starts_with(prefix),
+            (None, None) => a == b,
+        }
+    }
+
+    /// Why `pattern` cannot name an interface, if it cannot: Linux names are 1..=15 bytes
+    /// without whitespace, `/` or `:`, and nftables refuses the whole ruleset for a bare `*`.
+    #[must_use]
+    pub fn pattern_issue(pattern: &str) -> Option<&'static str> {
+        if pattern.is_empty() {
+            Some("is empty")
+        } else if pattern == "*" {
+            Some("would match every interface, the WAN included")
+        } else if pattern.len() > 15 {
+            Some("is longer than 15 bytes")
+        } else if pattern == "." || pattern == ".." {
+            Some("is not an interface name")
+        } else if pattern
+            .chars()
+            .any(|c| c.is_whitespace() || c == '/' || c == ':')
+        {
+            Some("contains whitespace, '/' or ':'")
+        } else {
+            None
+        }
+    }
 }
 
 /// Inter-zone traffic forwarding permission.

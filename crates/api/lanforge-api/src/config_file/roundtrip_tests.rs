@@ -893,7 +893,7 @@ prefix = "2001:db8:1::/64"
 /// later CLI/WebUI change fail the pre-flight check ("zone 'trusted' does not exist").
 #[test]
 fn default_forwardings_only_link_zones_the_file_has() {
-    use lanforge_types::network::firewall::validate_firewall_candidate;
+    use lanforge_types::network::firewall::{ActiveInterfaces, validate_firewall_candidate};
 
     let text = r#"
 [firewall.zones.external]
@@ -918,7 +918,10 @@ forward = "accept"
 
     let mut candidate = fw.clone();
     candidate.flow_offload = !candidate.flow_offload;
-    let report = validate_firewall_candidate(&candidate, &fw, &[], || "tx".into());
+    let report =
+        validate_firewall_candidate(&candidate, &fw, &[], ActiveInterfaces::default(), || {
+            "tx".into()
+        });
     assert!(report.errors.is_empty(), "{:?}", report.errors);
 }
 

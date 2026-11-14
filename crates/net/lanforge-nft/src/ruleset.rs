@@ -1,7 +1,7 @@
 use lanforge_types::identifiers::DeviceIdentifier;
 use lanforge_types::network::firewall::{
-    DynamicPortRequest, FirewallConfig, FirewallMode, FirewallPolicy, ForwardAddrs, ForwardTarget,
-    L4Protocol, PortForwardRule,
+    DynamicPortRequest, FirewallConfig, FirewallMode, FirewallPolicy, FirewallZone, ForwardAddrs,
+    ForwardTarget, L4Protocol, PortForwardRule,
 };
 use nftables::batch::Batch;
 use nftables::expr::{
@@ -15,6 +15,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::iter;
 use std::net::{IpAddr, Ipv4Addr};
+use tracing::warn;
 
 fn is_external_zone(name: &str) -> bool {
     name == "external" || name == "wan"
@@ -117,9 +118,26 @@ impl<'a> RulesetBuilder<'a> {
         for zone in &self.cfg.zones {
             if zone.name == zone_name {
                 for iface in &zone.interfaces {
-                    if !iface.starts_with("ifb") && !ifaces.contains(iface) {
-                        ifaces.push(iface.clone());
+                    if iface.starts_with("ifb") || ifaces.contains(iface) {
+                        continue;
                     }
+                    // nft refuses the whole ruleset for a bare `*`: the firewall would keep an
+                    // old ruleset forever. Left out, and refused by the API's pre-flight check.
+                    if let Some(issue) = FirewallZone::pattern_issue(iface) {
+                        warn!(zone = %zone.name, interface = %iface, issue, "Firewall zone interface left out");
+                        continue;
+                    }
+                    // Only the WAN zone may hold the WAN: in any other zone it would get the
+                    // zone's policy, the DNS/IKE bypasses and DNAT acceptance (`ppp*` in
+                    // `internal` opened the WAN). The pattern is left out while it matches.
+                    if !zone.is_external()
+                        && let Some(wan) = self.active_wan
+                        && FirewallZone::pattern_matches(iface, wan)
+                    {
+                        warn!(zone = %zone.name, interface = %iface, wan, "Firewall zone interface matches the WAN; left out");
+                        continue;
+                    }
+                    ifaces.push(iface.clone());
                 }
                 // Auto-bind active WAN interface to external zone
                 if (zone.name == "external" || zone.name == "wan")

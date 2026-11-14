@@ -4,8 +4,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use lanforge_types::events::FirewallEvent;
 use lanforge_types::network::firewall::{
-    DynamicPortRequest, FirewallConfig, FirewallStopAction, FirewallTransactionState,
-    FirewallValidationReport, L4Protocol, validate_firewall_candidate,
+    ActiveInterfaces, DynamicPortRequest, FirewallConfig, FirewallStopAction,
+    FirewallTransactionState, FirewallValidationReport, L4Protocol, validate_firewall_candidate,
 };
 
 use crate::bus::LanforgeEvent;
@@ -76,6 +76,27 @@ impl LanforgeContext {
         self.inner.runtime.firewall_ports.read().clone()
     }
 
+    /// Pre-flight checks of `candidate` against the running firewall, the registered service
+    /// ports and the router's active WAN and primary LAN; `tx_id` is set when it passes.
+    #[must_use]
+    pub fn check_firewall_candidate(&self, candidate: &FirewallConfig) -> FirewallValidationReport {
+        let current = self.get_firewall_config().unwrap_or_default();
+        let dynamic_ports = self.registered_service_ports();
+        let wan = self.wan_snapshot().ifname;
+        let lan = self.target_interface_name();
+        let active = ActiveInterfaces {
+            wan: wan.as_deref(),
+            lan: lan.as_deref(),
+        };
+        validate_firewall_candidate(candidate, &current, &dynamic_ports, active, || {
+            let id = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            format!("tx-{id:x}")
+        })
+    }
+
     /// Evaluates a candidate firewall configuration, runs pre-flight sanity checks,
     /// and stages it as an active pending transaction if valid.
     #[must_use]
@@ -84,15 +105,7 @@ impl LanforgeContext {
         candidate: FirewallConfig,
     ) -> FirewallValidationReport {
         let current = self.get_firewall_config().unwrap_or_default();
-        let dynamic_ports = self.registered_service_ports();
-
-        let report = validate_firewall_candidate(&candidate, &current, &dynamic_ports, || {
-            let id = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis();
-            format!("tx-{id:x}")
-        });
+        let report = self.check_firewall_candidate(&candidate);
 
         if let Some(ref tx_id) = report.tx_id {
             let now = Instant::now();

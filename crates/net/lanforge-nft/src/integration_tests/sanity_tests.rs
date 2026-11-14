@@ -770,3 +770,59 @@ fn test_dnat_only_for_the_routers_own_addresses() {
         "DNAT without a local-destination match: {open:#?}"
     );
 }
+
+fn default_with_internal(ifaces: &[&str]) -> FirewallConfig {
+    let mut cfg = FirewallConfig::default();
+    cfg.zones
+        .iter_mut()
+        .find(|z| z.name == "internal")
+        .unwrap()
+        .interfaces
+        .extend(ifaces.iter().map(ToString::to_string));
+    cfg
+}
+
+/// `ppp*` in `internal` is a prefix match that takes `ppp0`: it gave the WAN the internal
+/// zone's accept policy, the DNS/IKE bypasses, DNAT acceptance and intra-zone forwarding to the
+/// LAN (every LAN IPv6 host open to the internet). A config from the file reaches the compiler
+/// without the API's pre-flight check, so the compiler leaves the pattern out itself.
+#[test]
+fn test_sanity_non_wan_zone_pattern_matching_wan_left_out() {
+    let cfg = default_with_internal(&["ppp*", "br0"]);
+    let ruleset = RulesetBuilder::new(&cfg)
+        .with_active_wan(Some("ppp0"))
+        .with_primary_lan(Some("lan0"))
+        .build();
+    let json = serde_json::to_string(&ruleset).unwrap();
+    assert!(
+        !json.contains("\"ppp*\""),
+        "a pattern taking the WAN reached the ruleset"
+    );
+    assert!(json.contains("\"br0\""), "the zone's other interfaces stay");
+    assert!(json.contains("\"lan0\""), "the LAN stays internal");
+}
+
+/// Without a WAN up nothing can be taken; the pattern compiles and is left out again when the
+/// WAN comes up (the firewall recompiles on `SessionUp`).
+#[test]
+fn test_sanity_wildcard_kept_while_no_wan_is_up() {
+    let cfg = default_with_internal(&["ppp*"]);
+    let json = serde_json::to_string(&RulesetBuilder::new(&cfg).build()).unwrap();
+    assert!(json.contains("\"ppp*\""));
+}
+
+/// A bare `*` makes nft refuse the whole ruleset (the firewall then keeps an older one).
+#[test]
+fn test_sanity_bare_star_and_empty_interface_left_out() {
+    let cfg = default_with_internal(&["*", ""]);
+    let ruleset = RulesetBuilder::new(&cfg)
+        .with_active_wan(Some("ppp0"))
+        .with_primary_lan(Some("lan0"))
+        .build();
+    let json = serde_json::to_string(&ruleset).unwrap();
+    assert!(!json.contains("\"*\""), "bare `*` reached the ruleset");
+    assert!(
+        !json.contains("\"iifname\"}},\"right\":\"\""),
+        "empty name reached the ruleset"
+    );
+}
