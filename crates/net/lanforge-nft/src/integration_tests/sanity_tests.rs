@@ -861,3 +861,25 @@ fn test_sanity_dhcpv6_client_port_only_to_link_local() {
         assert!(rule.contains("\"right\":547}"), "server port: {rule}");
     }
 }
+
+/// `podman*` was put back into `trusted` (accept input, routed to the LAN) when the admin had
+/// removed it: any container on the router got the router and the LAN. The default zones still
+/// list it; a file without it keeps it out.
+#[test]
+fn test_sanity_podman_stays_out_of_trusted_when_removed() {
+    let mut cfg = FirewallConfig::default();
+    cfg.zones
+        .iter_mut()
+        .find(|z| z.name == "trusted")
+        .unwrap()
+        .interfaces
+        .retain(|i| i != "podman*");
+    let running = cfg.effective(None, false, "lan0");
+    let ruleset = RulesetBuilder::new(&running)
+        .with_active_wan(Some("ppp0"))
+        .with_primary_lan(Some("lan0"))
+        .build();
+    let json = serde_json::to_string(&ruleset).unwrap();
+    assert!(!json.contains("podman"), "podman came back");
+    assert!(json.contains("\"tailscale0\""));
+}

@@ -153,12 +153,6 @@ impl<'a> RulesetBuilder<'a> {
                 {
                     ifaces.push(lan.to_string());
                 }
-                // Auto-bind podman* container wildcard to trusted zone if missing
-                if (zone.name == "trusted" || zone.name == "containers")
-                    && !ifaces.iter().any(|i| i == "podman*")
-                {
-                    ifaces.push("podman*".to_string());
-                }
             }
         }
         ifaces

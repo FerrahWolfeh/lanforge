@@ -444,7 +444,9 @@ impl FirewallConfig {
     /// - flowtable offload and the DNS/`VoWiFi` bypasses off when the `PPPoE` dataplane turns
     ///   them off, and offload off under SQM (CAKE must see every packet; a flowtable would
     ///   send forwarded traffic past it);
-    /// - the LAN interface in the internal zone when no zone has it, `podman*` in `trusted`.
+    /// - the LAN interface in the internal zone when no zone has it. (`podman*` is in the
+    ///   default `trusted` zone; one the admin removed stays out: it gives containers the
+    ///   router and the LAN.)
     #[must_use]
     pub fn effective(
         &self,
@@ -472,11 +474,6 @@ impl FirewallConfig {
                 .find(|z| z.name == "internal" || z.name == "lan")
         {
             internal.interfaces.push(lan_iface.to_string());
-        }
-        if let Some(trusted) = fw.zones.iter_mut().find(|z| z.name == "trusted")
-            && !trusted.interfaces.iter().any(|i| i == "podman*")
-        {
-            trusted.interfaces.push("podman*".into());
         }
         fw
     }
