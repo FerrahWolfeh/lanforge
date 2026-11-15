@@ -1279,7 +1279,6 @@ export interface PppoeNftablesConfig {
 	bypass_dns: boolean;
 	bypass_vowifi: boolean;
 	masquerade: boolean;
-	custom_rules_file: string | null;
 	lan_ifaces?: string[];
 }
 

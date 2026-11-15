@@ -243,7 +243,6 @@
 					bypass_dns: true,
 					bypass_vowifi: true,
 					masquerade: true,
-					custom_rules_file: null,
 				},
 			};
 
