@@ -11,4 +11,7 @@ pub mod mdns;
 pub mod ndp;
 pub mod ping;
 
+#[cfg(test)]
+mod integration_tests;
+
 pub use interface::refresh_interface;

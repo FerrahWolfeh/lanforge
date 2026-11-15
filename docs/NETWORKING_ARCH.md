@@ -281,23 +281,33 @@ Triggered by `NeighborScanRequested` bus event:
 
 ### Design
 
-Uses spawn-blocking `UdpSocket` listeners (non-async) because mDNS requires `SO_REUSEPORT` on port 5353 — the standard async `UdpSocket` cannot share this port with other processes.
+One `UdpTransport::bind_link_multicast` socket pair on the LAN interface only (`SO_BINDTODEVICE`,
+groups joined on its index, multicast sent out of it with TTL 255, `SO_REUSEPORT` to share 5353
+with avahi). The transport is owned by `serve` and closes when it returns. The service waits for
+the LAN link and is started again, with fresh group membership, when the link comes back. Nothing
+is ever sent or heard on the WAN.
 
 ### Query Types
 
-| Query | Target | Purpose |
-| :--- | :--- | :--- |
-| Broadcast PTR | `_services._dns-sd._udp.local.` | Discover all services on LAN |
-| Unicast PTR | `X.X.X.X.in-addr.arpa.` (IPv4 reverse) | Query hostname for specific IP |
-| Unicast PTR | `x.x...x.ip6.arpa.` (IPv6 reverse) | Query hostname for specific IPv6 |
+All queries are QM (answers by multicast), to `224.0.0.251` / `ff02::fb`.
+
+| Query | Target | Purpose | When |
+| :--- | :--- | :--- | :--- |
+| PTR | `_services._dns-sd._udp.local.` (RFC 6763 §9) | Service types of each responder: device class | At start, then every `probe_interval` |
+| PTR | `d.c.b.a.in-addr.arpa.` / nibbles `ip6.arpa.` (RFC 6762 §4) | Hostname of one device without a name | 2 s after it shows up, then 1 min, 10 min, hourly while unnamed and not offline |
+
+Devices that already have a name (DHCP, static) are not asked.
 
 ### Response Parsing
 
 Extracts hostnames from:
-- PTR records (name → hostname.local.)
-- SRV records (target hostname)
+- SRV targets (preferred), else PTR targets (`name.local.` → `name`)
+- A reverse PTR counts only if its owner name is the reverse name of one of the sender's addresses:
+  a Bonjour Sleep Proxy answers for the sleeping hosts it stands in for, from its own address.
 
-Applies `DeviceUpdate::DhcpHostnameHint` to `LanforgeContext`. Skips update if device already has a hostname (avoids noise).
+Service types (`_ipp`, `_airplay`, `_googlecast`, ...) become `DeviceUpdate::ClassHint`. A hostname
+becomes `DeviceUpdate::MdnsHostnameHint` when the device has none yet, and a transient host for the
+sender's address.
 
 ---
 
