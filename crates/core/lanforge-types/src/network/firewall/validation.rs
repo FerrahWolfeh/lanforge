@@ -91,21 +91,21 @@ fn validate_zones<'a>(
             }
             // Any other zone holding the WAN opens it (bypasses, DNAT acceptance, the zone's own
             // policy and intra-zone forwarding); the WAN zone holding the LAN closes the LAN.
-            if !zone.is_external()
+            if !zone.faces_wan()
                 && let Some(wan) = active.wan
                 && FirewallZone::pattern_matches(iface, wan)
             {
                 errors.push(format!(
-                    "Zone '{}': interface '{iface}' matches the WAN interface '{wan}'; only the external zone may hold the WAN",
+                    "Zone '{}': interface '{iface}' matches the WAN interface '{wan}'; only a zone facing the WAN (external, or masquerading) may hold it",
                     zone.name
                 ));
             }
-            if zone.is_external()
+            if zone.faces_wan()
                 && let Some(lan) = active.lan
                 && FirewallZone::pattern_matches(iface, lan)
             {
                 errors.push(format!(
-                    "Zone '{}': interface '{iface}' matches the LAN interface '{lan}'; the external zone must not hold the LAN",
+                    "Zone '{}': interface '{iface}' matches the LAN interface '{lan}'; a zone facing the WAN must not hold the LAN",
                     zone.name
                 ));
             }

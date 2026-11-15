@@ -127,10 +127,10 @@ impl<'a> RulesetBuilder<'a> {
                         warn!(zone = %zone.name, interface = %iface, issue, "Firewall zone interface left out");
                         continue;
                     }
-                    // Only the WAN zone may hold the WAN: in any other zone it would get the
+                    // Only a zone facing the WAN may hold it: in any other zone it would get the
                     // zone's policy, the DNS/IKE bypasses and DNAT acceptance (`ppp*` in
                     // `internal` opened the WAN). The pattern is left out while it matches.
-                    if !zone.is_external()
+                    if !zone.faces_wan()
                         && let Some(wan) = self.active_wan
                         && FirewallZone::pattern_matches(iface, wan)
                     {
@@ -162,8 +162,10 @@ impl<'a> RulesetBuilder<'a> {
     #[must_use]
     pub fn resolve_internal_interfaces(&self) -> Vec<String> {
         let mut ifaces = Vec::new();
+        // By what the zone does, not its name: an uplink zone called `isp` got the bypasses
+        // (an open resolver on the WAN) and DNAT acceptance.
         for zone in &self.cfg.zones {
-            if zone.name != "external" && zone.name != "wan" {
+            if !zone.faces_wan() {
                 for iface in self.resolve_zone_interfaces(&zone.name) {
                     if !iface.is_empty() && !ifaces.contains(&iface) {
                         ifaces.push(iface);
@@ -1377,8 +1379,15 @@ impl<'a> RulesetBuilder<'a> {
         cfg.default_input_policy = FirewallPolicy::Drop;
         cfg.default_forward_policy = FirewallPolicy::Drop;
         cfg.port_forwards.clear();
-        cfg.forwardings.retain(|f| !is_external_zone(&f.from));
-        for zone in cfg.zones.iter_mut().filter(|z| is_external_zone(&z.name)) {
+        let wan_zones: Vec<String> = cfg
+            .zones
+            .iter()
+            .filter(|z| z.faces_wan())
+            .map(|z| z.name.clone())
+            .collect();
+        let faces_wan = |name: &str| is_external_zone(name) || wan_zones.iter().any(|z| z == name);
+        cfg.forwardings.retain(|f| !faces_wan(&f.from));
+        for zone in cfg.zones.iter_mut().filter(|z| z.faces_wan()) {
             zone.open_ports.clear();
             zone.input_policy = FirewallPolicy::Drop;
             zone.forward_policy = FirewallPolicy::Drop;
@@ -1386,7 +1395,7 @@ impl<'a> RulesetBuilder<'a> {
         let dynamic_ports: Vec<DynamicPortRequest> = self
             .dynamic_ports
             .iter()
-            .filter(|p| !is_external_zone(&p.zone))
+            .filter(|p| !faces_wan(&p.zone))
             .cloned()
             .collect();
 

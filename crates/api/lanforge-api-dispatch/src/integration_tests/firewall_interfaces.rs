@@ -161,3 +161,26 @@ async fn update_route_still_applies_a_valid_config() {
             .any(|z| z.interfaces.iter().any(|i| i == "br0"))
     }));
 }
+
+/// An uplink zone not called `external` (masquerading) may hold the WAN: the guard refused it,
+/// so such a file could not be changed from the `WebUI` anymore.
+#[tokio::test]
+async fn propose_accepts_an_uplink_zone_with_another_name() {
+    let client = client_with_wan();
+    let mut cfg = FirewallConfig::default();
+    for zone in &mut cfg.zones {
+        if zone.name == "external" {
+            zone.name = "isp".into();
+            zone.interfaces = vec!["ppp0".into()];
+        }
+    }
+    for fwd in &mut cfg.forwardings {
+        for end in [&mut fwd.from, &mut fwd.to] {
+            if end == "external" {
+                *end = "isp".into();
+            }
+        }
+    }
+    let errors = propose_errors(&client, cfg).await;
+    assert!(errors.is_empty(), "{errors:?}");
+}

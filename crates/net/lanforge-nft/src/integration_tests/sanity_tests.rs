@@ -883,3 +883,72 @@ fn test_sanity_podman_stays_out_of_trusted_when_removed() {
     assert!(!json.contains("podman"), "podman came back");
     assert!(json.contains("\"tailscale0\""));
 }
+
+/// The default config with its `external` zone renamed `isp`: an uplink by what it does
+/// (masquerade), not by name.
+fn uplink_named_isp() -> FirewallConfig {
+    let mut cfg = FirewallConfig::default();
+    for zone in &mut cfg.zones {
+        if zone.name == "external" {
+            zone.name = "isp".into();
+            zone.interfaces = vec!["ppp0".into()];
+        }
+    }
+    for fwd in &mut cfg.forwardings {
+        for end in [&mut fwd.from, &mut fwd.to] {
+            if end == "external" {
+                *end = "isp".into();
+            }
+        }
+    }
+    cfg
+}
+
+/// An uplink zone not called `external` counted as internal: its WAN interface got the DNS
+/// and IKE bypasses (an open resolver) and DNAT acceptance. Then the WAN guard took the WAN out
+/// of it, and with it the masquerade (no internet). It is a zone facing the WAN now.
+#[test]
+fn test_sanity_uplink_zone_with_another_name_faces_the_wan() {
+    let cfg = uplink_named_isp();
+    let builder = RulesetBuilder::new(&cfg)
+        .with_active_wan(Some("ppp0"))
+        .with_primary_lan(Some("lan0"));
+    assert!(
+        !builder
+            .resolve_internal_interfaces()
+            .iter()
+            .any(|i| i == "ppp0"),
+        "the uplink must not count as internal"
+    );
+    assert_eq!(
+        builder.resolve_zone_interfaces("isp"),
+        vec!["ppp0".to_string()]
+    );
+
+    let v = serde_json::to_value(builder.build()).unwrap();
+    let rules: Vec<String> = v["nftables"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|cmd| cmd.get("add").and_then(|a| a.get("rule")))
+        .map(ToString::to_string)
+        .collect();
+    assert!(
+        rules
+            .iter()
+            .any(|r| r.contains("\"ppp0\"") && r.contains("masquerade")),
+        "the uplink keeps its masquerade"
+    );
+    assert!(
+        !rules.iter().any(|r| r.contains("\"ppp0\"")
+            && r.contains("\"right\":53}")
+            && r.contains("\"accept\"")),
+        "no DNS bypass on the uplink"
+    );
+    assert!(
+        !rules
+            .iter()
+            .any(|r| r.contains("\"ppp0\"") && r.contains("\"dnat\"") && r.contains("\"accept\"")),
+        "no DNAT acceptance on the uplink"
+    );
+}

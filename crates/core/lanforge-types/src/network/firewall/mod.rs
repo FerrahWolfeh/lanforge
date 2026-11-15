@@ -81,6 +81,15 @@ impl FirewallZone {
         matches!(self.name.as_str(), "external" | "wan")
     }
 
+    /// Whether the zone faces the WAN: the external zone, or any zone that masquerades (its
+    /// traffic leaves with the router's address: an uplink, whatever the zone is called). Only
+    /// such a zone may hold the WAN, and it never gets the LAN's DNS/IKE bypasses, DNAT
+    /// acceptance or hairpin NAT.
+    #[must_use]
+    pub fn faces_wan(&self) -> bool {
+        self.is_external() || self.masquerade
+    }
+
     /// Whether the interface pattern `pattern` takes `ifname`, as nftables matches `iifname`:
     /// a trailing `*` matches by prefix (`ppp*`, `p*` take `ppp0`).
     #[must_use]
