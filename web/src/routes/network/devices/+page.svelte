@@ -17,6 +17,7 @@
 	import DeviceWhoisModal from "./components/DeviceWhoisModal.svelte";
 	import DevicePromoteModal from "./components/DevicePromoteModal.svelte";
 	import DeviceAdblockModal from "./components/DeviceAdblockModal.svelte";
+	import DeviceLinkedModal from "./components/DeviceLinkedModal.svelte";
 	import MonitorIcon from "@lucide/svelte/icons/monitor";
 	import BookmarkIcon from "@lucide/svelte/icons/bookmark";
 	import WifiIcon from "@lucide/svelte/icons/wifi";
@@ -52,6 +53,8 @@
 	// Adblock Groups Modal State
 	let adblockOpen = $state(false);
 	let adblockDevice = $state<DeviceEntry | null>(null);
+	let linkedOpen = $state(false);
+	let linkedDevice = $state<DeviceEntry | null>(null);
 	let eventSource: EventSource | null = null;
 
 	async function loadDevices(showSpinner = true) {
@@ -257,6 +260,12 @@
 					adblockOpen = true;
 				}
 			: undefined}
+		onLinked={auth.can("device_write")
+			? (dev) => {
+					linkedDevice = dev;
+					linkedOpen = true;
+				}
+			: undefined}
 		onPurge={auth.can("device_write") ? handlePurge : undefined}
 	/>
 </div>
@@ -268,6 +277,8 @@
 />
 
 <DeviceAdblockModal bind:open={adblockOpen} device={adblockDevice} />
+
+<DeviceLinkedModal bind:open={linkedOpen} device={linkedDevice} onSaved={() => loadDevices(false)} />
 
 <DevicePromoteModal
 	bind:open={promoteOpen}

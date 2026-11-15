@@ -134,10 +134,12 @@
 										{client.hostname || client.ip}
 									</span>
 									{#if client.hostname}
+										{@const others = (client.addresses?.length ?? 1) - 1}
 										<span
 											class="text-[10px] font-mono text-muted-foreground truncate"
+											title={client.addresses?.join("\n")}
 										>
-											{client.ip}
+											{client.ip}{others > 0 ? ` +${others} more` : ""}
 										</span>
 									{/if}
 								</div>

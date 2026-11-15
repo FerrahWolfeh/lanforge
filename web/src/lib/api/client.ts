@@ -613,6 +613,9 @@ export const dnsAdblockGroupDelete = (name: string) =>
 	del<void>(`/dns/adblock/groups/${encodeURIComponent(name)}`);
 export const dnsAdblockBypassSet = (clients: string[]) =>
 	put<void>('/dns/adblock/bypass', { clients });
+/** Replaces the addresses linked to one device (its tailnet / VPN addresses). */
+export const deviceLinkedSet = (mac: string, addresses: string[]) =>
+	put<void>(`/devices/${encodeURIComponent(mac)}/linked`, { addresses });
 /** Puts one device in exactly `groups`, and bypassed or not. */
 export const dnsAdblockDeviceSet = (mac: string, groups: string[], bypass: boolean) =>
 	put<void>(`/dns/adblock/devices/${encodeURIComponent(mac)}`, { groups, bypass });

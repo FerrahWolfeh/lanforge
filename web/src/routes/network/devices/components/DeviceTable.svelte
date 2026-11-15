@@ -16,6 +16,7 @@
 	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import ShieldIcon from "@lucide/svelte/icons/shield";
+	import LinkIcon from "@lucide/svelte/icons/link";
 
 	let {
 		devices = [],
@@ -30,6 +31,7 @@
 		onWol,
 		onPromote,
 		onAdblock,
+		onLinked,
 		onPurge,
 	}: {
 		devices?: DeviceEntry[];
@@ -43,6 +45,7 @@
 		onWol?: (mac: string) => void;
 		onPromote?: (dev: DeviceEntry) => void;
 		onAdblock?: (dev: DeviceEntry) => void;
+		onLinked?: (dev: DeviceEntry) => void;
 		onPurge?: (mac: string) => void;
 	} = $props();
 
@@ -294,6 +297,12 @@
 						<DropdownMenu.Item onclick={() => onAdblock(dev)} class="gap-2">
 							<ShieldIcon class="size-3.5" />
 							Adblock groups...
+						</DropdownMenu.Item>
+						{/if}
+						{#if onLinked}
+						<DropdownMenu.Item onclick={() => onLinked(dev)} class="gap-2">
+							<LinkIcon class="size-3.5" />
+							Linked addresses...
 						</DropdownMenu.Item>
 						{/if}
 						<DropdownMenu.Separator />
