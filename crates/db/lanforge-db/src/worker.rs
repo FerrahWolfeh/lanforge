@@ -28,7 +28,9 @@ use lanforge_core::service::{
     AsyncService, Condition, LanforgeService, RestartPolicy, RuntimeClass, ServiceCommand,
     ServiceHandle, ServiceSpec,
 };
-use lanforge_db_core::{DeviceStore, LogFilterStore, LogStore, NameBindingStore, PrefixStore};
+use lanforge_db_core::{
+    DeviceStore, LinkedAddressStore, LogFilterStore, LogStore, NameBindingStore, PrefixStore,
+};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::QueryLogEntry;
 use lanforge_types::network::dns::{DnsRequest, DnsResponse};
@@ -459,6 +461,12 @@ impl AsyncService for DbWorker {
                             // restart must not lose a binding.
                             if let Err(e) = db.save_name_bindings(&self.ctx.name_bindings()) {
                                 error!("Failed to save the name bindings: {e}");
+                            }
+                        }
+                        LanforgeEvent::Storage(StorageEvent::LinkedAddressesChanged) => {
+                            // An admin change: saved at once.
+                            if let Err(e) = db.save_linked_addresses(&self.ctx.linked_addresses()) {
+                                error!("Failed to save the linked addresses: {e}");
                             }
                         }
                         LanforgeEvent::System(SystemEvent::LogFilterSaved { filter }) => {

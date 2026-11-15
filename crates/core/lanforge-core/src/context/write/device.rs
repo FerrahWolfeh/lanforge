@@ -7,6 +7,7 @@ use lanforge_types::network::dns::adblock::RewriteAnswer;
 use lanforge_types::network::firewall::ForwardTarget;
 use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate};
 use std::collections::{BTreeMap, HashSet};
+use std::net::IpAddr;
 use std::time::{Duration, SystemTime};
 
 #[cfg(test)]
@@ -135,6 +136,23 @@ impl LanforgeContext {
                 .name_bindings
                 .iter()
                 .map(|(name, mac)| (name.clone(), *mac))
+                .collect()
+        })
+    }
+
+    /// Restores the linked addresses saved in redb. Call it at start, before any service runs.
+    pub fn restore_linked_addresses(&self, links: BTreeMap<IpAddr, MacAddr>) {
+        self.with_state_mut(|state| state.restore_linked_addresses(links));
+    }
+
+    /// The addresses linked to devices (address → MAC), as redb keeps them.
+    #[must_use]
+    pub fn linked_addresses(&self) -> BTreeMap<IpAddr, MacAddr> {
+        self.with_state(|state| {
+            state
+                .linked_addresses
+                .iter()
+                .map(|(ip, mac)| (*ip, *mac))
                 .collect()
         })
     }
