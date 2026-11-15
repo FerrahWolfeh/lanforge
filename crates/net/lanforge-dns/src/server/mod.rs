@@ -6,7 +6,6 @@ use crate::config::DnsConfig;
 use crate::pipeline::Pipeline;
 #[cfg(feature = "adblock")]
 use crate::resolver::AdBlocker;
-use crate::resolver::recursive::UpstreamManager;
 use crate::resolver::{
     LocalResolver, RewriteStore,
     recursive::{DnsCache, UpstreamStrategy},
@@ -16,11 +15,10 @@ use lanforge_core::bus::{DnsEvent, EventBus, LanforgeEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_transport::TransportMetrics;
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::dns::{
     DnsRecordType, FilterMatch, QueryLogEntry, QueryResult, TransportProtocol,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -45,8 +43,7 @@ pub struct DnsContext {
     #[cfg(feature = "adblock")]
     pub filter: Option<Arc<AdBlocker>>,
 
-    // Reverse DNS resolution managers and lock-free tracking
-    pub reverse_managers: Arc<parking_lot::RwLock<HashMap<UpstreamTarget, Arc<UpstreamManager>>>>,
+    /// Client addresses whose name is being looked up through their reverse resolver.
     pub resolving_ips: Arc<parking_lot::Mutex<HashSet<IpAddr>>>,
 
     // Pre-compiled query log client ignore filters

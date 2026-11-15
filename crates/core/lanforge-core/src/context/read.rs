@@ -50,7 +50,6 @@ use lanforge_types::{
     device::{Device, TransientHost},
     dhcp::{Dhcpv4Stats, Dhcpv6Stats},
     identifiers::{DeviceIdentifier, Duid, MacAddr},
-    network::dns::upstream::UpstreamTarget,
     network::firewall::ForwardAddrs,
     network::{DnsReverseResolver, Ipv6Prefix},
     update::InterfaceState,
@@ -236,17 +235,6 @@ impl LanforgeContext {
             .iter()
             .map(|(ip, host)| (*ip, host.clone()))
             .collect()
-    }
-
-    /// Finds a configured reverse DNS resolver target that contains the target IP.
-    #[must_use]
-    pub fn find_reverse_resolver(&self, ip: IpAddr) -> Option<UpstreamTarget> {
-        self.with_config(|cfg| {
-            cfg.dns_reverse
-                .iter()
-                .find(|r| r.subnet.contains(ip))
-                .map(|r| r.resolver.clone())
-        })
     }
 
     /// Returns all configured reverse DNS resolvers.

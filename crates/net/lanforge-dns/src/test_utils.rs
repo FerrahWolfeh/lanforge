@@ -111,7 +111,6 @@ pub fn create_test_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> Arc<DnsC
         rewrites,
         #[cfg(feature = "adblock")]
         filter,
-        reverse_managers: Arc::new(parking_lot::RwLock::new(HashMap::new())),
         resolving_ips: Arc::new(parking_lot::Mutex::new(HashSet::new())),
         compiled_ignore_clients: CompiledIgnoreClients::compile(&cfg_arc.query_log.ignore_clients),
     })

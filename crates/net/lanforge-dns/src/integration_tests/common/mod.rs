@@ -32,7 +32,7 @@ use lanforge_types::network::dns::{
 };
 use lanforge_types::system::{ServiceId, ServiceState};
 use lanforge_types::update::DeviceUpdate;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
@@ -110,7 +110,6 @@ pub async fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContex
         rewrites,
         #[cfg(feature = "adblock")]
         filter,
-        reverse_managers: Arc::new(RwLock::new(HashMap::new())),
         resolving_ips: Arc::new(Mutex::new(HashSet::new())),
         compiled_ignore_clients: CompiledIgnoreClients::compile(&cfg_arc.query_log.ignore_clients),
     }

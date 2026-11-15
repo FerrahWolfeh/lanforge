@@ -10,7 +10,7 @@ use crate::server::transport::doq::unframe;
 use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
 #[cfg(feature = "doq")]
 use quinn::crypto::rustls::QuicClientConfig;
-pub use strategy::{Resolved, UpstreamMode, UpstreamStrategy};
+pub use strategy::{Resolved, ReverseRoute, UpstreamMode, UpstreamStrategy};
 use tokio::task::JoinHandle;
 #[cfg(feature = "dot")]
 use tokio_rustls::TlsConnector;

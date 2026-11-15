@@ -60,7 +60,7 @@ addresses = ["udp://1.1.1.1:53", "udp://[2606:4700:4700::1111]:53"]
 # addresses = ["udp://10.0.0.1:53"]
 # domain = "corp.example"
 
-# PTR queries for a subnet go to its resolver.
+# PTR queries for a subnet's addresses go to its resolver (the most specific subnet wins).
 # [dns.reverse]
 # "10.0.0.0/8" = "udp://10.0.0.1:53"
 

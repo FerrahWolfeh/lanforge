@@ -15,13 +15,12 @@ use crate::pipeline::middleware::AdblockMiddleware;
 use crate::pipeline::middleware::{
     CacheMiddleware, LocalResolverMiddleware, RewriteMiddleware, UpstreamMiddleware,
 };
-use crate::resolver::recursive::{DnsCache, UpstreamManager};
+use crate::resolver::recursive::UpstreamManager;
 use crate::server::DnsContext;
 use crate::utils::ip_to_arpa;
 use lanforge_core::context::LanforgeContext;
-use lanforge_types::network::dns::upstream::UpstreamTarget;
-use parking_lot::{Mutex, RwLock};
-use std::collections::{HashMap, HashSet};
+use parking_lot::Mutex;
+use std::collections::HashSet;
 use std::net::IpAddr;
 use std::sync::Arc;
 
@@ -180,84 +179,25 @@ fn classify_transient_origin(ip: IpAddr) -> TransientOrigin {
 }
 
 fn handle_reverse_dns_trigger(ctx: &DnsContext, client_ip: IpAddr) {
-    if let Some(resolver) = ctx.local.ctx.find_reverse_resolver(client_ip)
+    if let Some(resolver) = ctx.recursive.reverse_route(client_ip)
         && ctx.local.ctx.get_transient_host(&client_ip).is_none()
+        && ctx.resolving_ips.lock().insert(client_ip)
     {
-        let should_resolve = {
-            let mut resolving = ctx.resolving_ips.lock();
-            if resolving.contains(&client_ip) {
-                false
-            } else {
-                resolving.insert(client_ip);
-                true
-            }
-        };
-
-        if should_resolve {
-            let ctx_core = ctx.local.ctx.clone();
-            let reverse_managers = Arc::clone(&ctx.reverse_managers);
-            let resolving_ips = Arc::clone(&ctx.resolving_ips);
-            let cache = Arc::clone(&ctx.cache);
-
-            tokio::spawn(async move {
-                resolve_reverse_ptr_background(
-                    ctx_core,
-                    reverse_managers,
-                    resolving_ips,
-                    cache,
-                    client_ip,
-                    resolver,
-                )
-                .await;
-            });
-        }
+        let ctx_core = ctx.local.ctx.clone();
+        let resolving_ips = Arc::clone(&ctx.resolving_ips);
+        tokio::spawn(async move {
+            resolve_reverse_ptr_background(ctx_core, resolving_ips, client_ip, resolver).await;
+        });
     }
 }
 
+/// Names a client from its reverse resolver's PTR answer (a transient host).
 async fn resolve_reverse_ptr_background(
     ctx_core: LanforgeContext,
-    reverse_managers: Arc<RwLock<HashMap<UpstreamTarget, Arc<UpstreamManager>>>>,
     resolving_ips: Arc<Mutex<HashSet<IpAddr>>>,
-    cache: Arc<DnsCache>,
     ip: IpAddr,
-    resolver: UpstreamTarget,
+    mgr: Arc<UpstreamManager>,
 ) {
-    // 1. Get or create UpstreamManager
-    let mgr = {
-        let read_guard = reverse_managers.read();
-        read_guard.get(&resolver).cloned()
-    };
-
-    let mgr = match mgr {
-        Some(m) => m,
-        None => {
-            // Reverse resolvers are addresses (the file form refuses host names).
-            let Some(addr) = resolver.addr.ip() else {
-                resolving_ips.lock().remove(&ip);
-                return;
-            };
-            let new_mgr = match UpstreamManager::new(&resolver, addr, cache).await {
-                Ok(new_mgr) => new_mgr,
-                Err(e) => {
-                    tracing::error!(
-                        "❌ DNS: Failed to initialize reverse resolver UpstreamManager for {}: {}",
-                        resolver,
-                        e
-                    );
-                    resolving_ips.lock().remove(&ip);
-                    return;
-                }
-            };
-            let mut write_guard = reverse_managers.write();
-            if let Some(m) = write_guard.get(&resolver) {
-                Arc::clone(m)
-            } else {
-                write_guard.insert(resolver.clone(), Arc::clone(&new_mgr));
-                new_mgr
-            }
-        }
-    };
-
     // 2. Perform reverse PTR query
     let arpa_name = ip_to_arpa(ip);
     let mut query = DnsMessage::new();
@@ -314,7 +254,7 @@ async fn resolve_reverse_ptr_background(
             tracing::warn!(
                 "Reverse resolution failed for {} via resolver {}: {:?}",
                 ip,
-                resolver,
+                mgr.target,
                 e
             );
         }

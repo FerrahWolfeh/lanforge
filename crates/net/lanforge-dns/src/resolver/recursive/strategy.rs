@@ -2,10 +2,12 @@ use crate::error::DnsError;
 use crate::resolver::recursive::UpstreamManager;
 use crate::resolver::recursive::cache::CacheKey;
 use crate::utils::health::UpstreamStatus;
+use crate::utils::parse_arpa_wire;
 use dashmap::DashMap;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use lanforge_dns_wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
+use lanforge_types::network::IpSubnet;
 #[cfg(not(all(feature = "dot", feature = "doq", feature = "doh-upstream")))]
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::dns::{
@@ -14,6 +16,7 @@ use lanforge_types::network::dns::{
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::future::Future;
+use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -55,6 +58,12 @@ pub struct ConditionalRoute {
     pub domain: String,
     pub labels: Vec<Vec<u8>>,
     pub tiers: Arc<[Vec<Arc<UpstreamManager>>]>,
+}
+
+/// A `[dns.reverse]` entry: the PTR names of the addresses in `subnet` go to `upstream`.
+pub struct ReverseRoute {
+    pub subnet: IpSubnet,
+    pub upstream: Arc<UpstreamManager>,
 }
 
 fn group_by_tier(upstreams: Vec<Arc<UpstreamManager>>) -> Arc<[Vec<Arc<UpstreamManager>>]> {
@@ -100,6 +109,8 @@ pub struct UpstreamStrategy {
     /// Conditional split-DNS domain routes sorted descending by label length.
     conditional_routes: parking_lot::RwLock<Arc<[Arc<ConditionalRoute>]>>,
     fallback_upstreams: parking_lot::RwLock<Arc<[Arc<UpstreamManager>]>>,
+    /// Per-subnet reverse resolvers, most specific subnet first.
+    reverse_routes: parking_lot::RwLock<Arc<[ReverseRoute]>>,
     pub rr_index: AtomicUsize,
     in_flight: DashMap<CacheKey, (InFlightTx, u64)>,
     /// Bumped on every `replace_upstreams`: wakes tasks waiting for upstreams to exist.
@@ -118,6 +129,7 @@ impl UpstreamStrategy {
             fallback_upstreams: parking_lot::RwLock::new(Arc::from(
                 Vec::<Arc<UpstreamManager>>::new(),
             )),
+            reverse_routes: parking_lot::RwLock::new(Arc::from(Vec::<ReverseRoute>::new())),
             rr_index: AtomicUsize::new(0),
             in_flight: DashMap::new(),
             upstreams_epoch: watch::Sender::new(0),
@@ -171,6 +183,26 @@ impl UpstreamStrategy {
         routes.sort_by_key(|a| Reverse(a.labels.len()));
         *self.conditional_routes.write() = Arc::from(routes);
         self.upstreams_epoch.send_modify(|epoch| *epoch += 1);
+    }
+
+    /// Replaces the per-subnet reverse resolvers; the most specific subnet wins a lookup.
+    pub fn replace_reverse_routes(&self, mut routes: Vec<ReverseRoute>) {
+        routes.sort_by_key(|r| Reverse(r.subnet.prefix_len));
+        *self.reverse_routes.write() = Arc::from(routes);
+    }
+
+    /// The per-subnet reverse resolvers, most specific subnet first.
+    pub fn reverse_routes(&self) -> Arc<[ReverseRoute]> {
+        Arc::clone(&*self.reverse_routes.read())
+    }
+
+    /// The reverse resolver of the most specific subnet holding `ip`.
+    pub fn reverse_route(&self, ip: IpAddr) -> Option<Arc<UpstreamManager>> {
+        self.reverse_routes
+            .read()
+            .iter()
+            .find(|r| r.subnet.contains(ip))
+            .map(|r| Arc::clone(&r.upstream))
     }
 
     pub fn replace_fallback_upstreams(&self, fallbacks: Vec<Arc<UpstreamManager>>) {
@@ -391,7 +423,18 @@ impl UpstreamStrategy {
         header: &WireHeader<'_>,
         question: &WireQuestion<'_>,
     ) -> Result<Resolved, DnsError> {
-        // 1. Check for matching conditional domain route (Split DNS)
+        // 1. A PTR name of an address in a `[dns.reverse]` subnet goes to its resolver.
+        if question.qtype() == u16::from(DnsRecordType::PTR)
+            && !self.reverse_routes.read().is_empty()
+            && let Some(upstream) =
+                parse_arpa_wire(question.labels()).and_then(|ip| self.reverse_route(ip))
+        {
+            return self
+                .resolve_sequential(&[upstream], data, header, question)
+                .await;
+        }
+
+        // 2. Check for matching conditional domain route (Split DNS)
         if let Some(route) = self.find_conditional_route(question) {
             let mut last_err = DnsError::Refused;
             for tier in route.tiers.iter() {
@@ -406,7 +449,7 @@ impl UpstreamStrategy {
             return Err(last_err);
         }
 
-        // 2. Fall back to global upstreams
+        // 3. Fall back to global upstreams
         let mut last_err = DnsError::Refused;
         if !self.has_global_upstreams() {
             let fallbacks = Arc::clone(&*self.fallback_upstreams.read());

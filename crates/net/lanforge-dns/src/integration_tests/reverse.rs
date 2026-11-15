@@ -4,23 +4,28 @@
 
 use super::common::{
     DnsPacketBuilder, extract_ptr, init_test_context, mock_config, parse_response,
-    wait_for_service_online,
+    register_test_device, wait_for_service_online,
 };
+use crate::config::DnsConfig;
 use crate::server::service::DnsService;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_dns_wire::{WireDecoder, WireEncoder};
 use lanforge_transport::InertHandle;
+use lanforge_types::device::TransientOrigin;
+use lanforge_types::network::DnsReverseResolver;
 use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::dns::{
     DnsClass, DnsMessage, DnsRData, DnsRecord, DnsRecordType, DnsResponseCode,
 };
 use lanforge_types::system::ServiceId;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
+use tokio::time::{Instant, sleep};
 
 /// A UDP resolver that answers every PTR question with one fixed name and counts the queries.
 struct PtrUpstream {
@@ -98,7 +103,7 @@ impl Drop for PtrUpstream {
 
 /// Starts the DNS service on an inert transport and waits until it serves.
 async fn serve(ctx: &LanforgeContext) -> InertHandle<SocketAddr> {
-    let cfg = crate::config::DnsConfig {
+    let cfg = DnsConfig {
         enabled: true,
         ..mock_config()
     };
@@ -148,5 +153,143 @@ async fn conditional_route_matches_a_full_ip6_arpa_name() {
     assert_eq!(extract_ptr(&resp), ["archie.tailnet.ts.net"]);
     assert_eq!(tailnet.queries(), 1);
     assert_eq!(global.queries(), 0);
+    ctx.terminate();
+}
+
+fn reverse(subnet: &str, resolver: &PtrUpstream) -> DnsReverseResolver {
+    DnsReverseResolver {
+        subnet: subnet.parse().expect("test subnet"),
+        resolver: resolver.target(),
+    }
+}
+
+/// `[dns.reverse]` routes the PTR names of a subnet's addresses to its resolver, v4 and v6
+/// (the Tailscale ranges here). They used to go to the global upstreams: the subnet's
+/// resolver was only asked about the querying client's own address, in the background.
+#[tokio::test]
+async fn reverse_resolver_takes_the_ptr_queries_of_its_subnet() {
+    let ctx = init_test_context();
+    let global = PtrUpstream::spawn("global.example.").await;
+    let tailnet = PtrUpstream::spawn("archie.tailnet.ts.net.").await;
+    ctx.update_dns_upstreams(vec![global.target()]);
+    ctx.set_reverse_resolvers(vec![
+        reverse("100.64.0.0/10", &tailnet),
+        reverse("fd7a:115c:a1e0::/48", &tailnet),
+    ]);
+    let handle = serve(&ctx).await;
+
+    let v4 = query_ptr(&handle, "100.64.0.1").await;
+    let v6 = query_ptr(&handle, "fd7a:115c:a1e0::ca37:dd28").await;
+    let outside = query_ptr(&handle, "8.8.4.4").await;
+
+    assert_eq!(extract_ptr(&v4), ["archie.tailnet.ts.net"]);
+    assert_eq!(extract_ptr(&v6), ["archie.tailnet.ts.net"]);
+    assert_eq!(extract_ptr(&outside), ["global.example"]);
+    assert_eq!(tailnet.queries(), 2);
+    assert_eq!(global.queries(), 1);
+    ctx.terminate();
+}
+
+/// The most specific subnet wins, whatever the order in the file.
+#[tokio::test]
+async fn most_specific_reverse_subnet_wins() {
+    let ctx = init_test_context();
+    let wide = PtrUpstream::spawn("wide.example.").await;
+    let narrow = PtrUpstream::spawn("narrow.example.").await;
+    ctx.update_dns_upstreams(vec![]);
+    ctx.set_reverse_resolvers(vec![
+        reverse("10.0.0.0/8", &wide),
+        reverse("10.1.0.0/16", &narrow),
+    ]);
+    let handle = serve(&ctx).await;
+
+    assert_eq!(
+        extract_ptr(&query_ptr(&handle, "10.1.2.3").await),
+        ["narrow.example"]
+    );
+    assert_eq!(
+        extract_ptr(&query_ptr(&handle, "10.2.2.3").await),
+        ["wide.example"]
+    );
+    ctx.terminate();
+}
+
+/// A LAN device's address is answered locally even inside a reverse subnet.
+#[tokio::test]
+async fn lan_device_ptr_stays_local_inside_a_reverse_subnet() {
+    let ctx = init_test_context();
+    let resolver = PtrUpstream::spawn("remote.example.").await;
+    register_test_device(
+        &ctx,
+        "printer",
+        "aa:bb:cc:dd:ee:01".parse().expect("mac"),
+        Ipv4Addr::new(192, 168, 1, 50),
+    );
+    ctx.set_reverse_resolvers(vec![reverse("192.168.0.0/16", &resolver)]);
+    let handle = serve(&ctx).await;
+
+    let resp = query_ptr(&handle, "192.168.1.50").await;
+
+    assert_eq!(extract_ptr(&resp), ["printer.lan"]);
+    assert_eq!(resolver.queries(), 0);
+    ctx.terminate();
+}
+
+/// Removing a reverse resolver applies in place: its subnet goes back to the global upstreams.
+#[tokio::test]
+async fn reverse_resolver_change_applies_in_place() {
+    let ctx = init_test_context();
+    let global = PtrUpstream::spawn("global.example.").await;
+    let tailnet = PtrUpstream::spawn("archie.tailnet.ts.net.").await;
+    ctx.update_dns_upstreams(vec![global.target()]);
+    ctx.set_reverse_resolvers(vec![reverse("100.64.0.0/10", &tailnet)]);
+    let handle = serve(&ctx).await;
+    assert_eq!(
+        extract_ptr(&query_ptr(&handle, "100.64.0.1").await),
+        ["archie.tailnet.ts.net"]
+    );
+
+    ctx.set_reverse_resolvers(vec![]);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        // A different address each time: the first answer is cached.
+        let resp = query_ptr(&handle, "100.64.0.2").await;
+        if extract_ptr(&resp) == ["global.example"] {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the removed resolver is still used"
+        );
+        sleep(Duration::from_millis(20)).await;
+    }
+    ctx.terminate();
+}
+
+/// A client in a reverse subnet is named from its resolver's PTR answer (a transient host).
+#[tokio::test]
+async fn client_in_a_reverse_subnet_gets_named() {
+    let ctx = init_test_context();
+    let tailnet = PtrUpstream::spawn("archie.tailnet.ts.net.").await;
+    ctx.set_reverse_resolvers(vec![reverse("100.64.0.0/10", &tailnet)]);
+    let handle = serve(&ctx).await;
+    let client_ip: IpAddr = "100.64.0.5".parse().expect("client address");
+
+    let query = DnsPacketBuilder::query("nonexistent.lan", DnsRecordType::A).build_bytes();
+    handle
+        .inject(query, SocketAddr::new(client_ip, 40000))
+        .await;
+    handle.recv_reply().await.expect("a reply");
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let host = loop {
+        if let Some(host) = ctx.get_transient_host(&client_ip) {
+            break host;
+        }
+        assert!(Instant::now() < deadline, "the client was never named");
+        sleep(Duration::from_millis(10)).await;
+    };
+    assert_eq!(host.hostname.name, "archie.tailnet.ts.net");
+    assert_eq!(host.origin, TransientOrigin::Tailscale);
     ctx.terminate();
 }

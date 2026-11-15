@@ -15,7 +15,7 @@ use crate::resolver::filter::manifest::AdblockManifest;
 use crate::resolver::recursive::cache::CacheKey;
 use crate::resolver::{
     LocalResolver, RewriteStore, bootstrap,
-    recursive::{DnsCache, UpstreamManager, UpstreamStrategy},
+    recursive::{DnsCache, ReverseRoute, UpstreamManager, UpstreamStrategy},
 };
 #[cfg(feature = "doq")]
 use crate::server::transport::doq;
@@ -50,6 +50,7 @@ use lanforge_transport::TransportMetrics;
 use lanforge_types::config::AdblockRules;
 use lanforge_types::config::{ChangeImpact, ConfigDomain, DnsListenConfig, SiteDomains};
 #[cfg(feature = "adblock")]
+use lanforge_types::network::DnsReverseResolver;
 use lanforge_types::network::dns::adblock::AdblockPolicy;
 use lanforge_types::network::dns::{
     AdblockCheckResponse, DnsAdblockSourcesResponse, DnsAdblockStatusResponse, DnsCacheEntry,
@@ -68,7 +69,7 @@ use lanforge_types::system::{
     DegradedReason, DormantReason, PppoeSessionState, ServiceId, ServiceState,
 };
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::num::NonZero;
@@ -221,7 +222,6 @@ impl DnsService {
             rewrites,
             #[cfg(feature = "adblock")]
             filter,
-            reverse_managers: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             resolving_ips: Arc::new(parking_lot::Mutex::new(HashSet::new())),
             compiled_ignore_clients: CompiledIgnoreClients::compile(
                 &self.cfg.query_log.ignore_clients,
@@ -433,6 +433,8 @@ impl AsyncService for DnsService {
         let mut listen_sub = ctx.config_subscription::<DnsListenConfig>();
         let mut rewrites_sub = ctx.config_subscription::<Vec<RewriteRule>>();
         let mut domains_sub = ctx.config_subscription::<SiteDomains>();
+        let mut reverse_sub = ctx.config_subscription::<Vec<DnsReverseResolver>>();
+        resync_reverse_routes(&dns_ctx, &reverse_sub.current()).await;
         let mut filter_subs = FilterSubscriptions::new(ctx);
 
         let (mpsc_stop_tx, mut mpsc_stop_rx) = oneshot::channel::<()>();
@@ -586,6 +588,10 @@ impl AsyncService for DnsService {
                 Some(delta) = domains_sub.next() => {
                     info!(domains = ?delta.new.0, "Site search domains changed; applied in place");
                     dns_ctx.local.set_domains(&delta.new.0);
+                }
+                Some(delta) = reverse_sub.next() => {
+                    info!(resolvers = delta.new.len(), "Reverse resolvers changed; applied in place");
+                    resync_reverse_routes(&dns_ctx, &delta.new).await;
                 }
                 Some(delta) = rewrites_sub.next() => {
                     info!("Reloading rewrites");
@@ -827,6 +833,39 @@ async fn resync_upstreams(ctx: &LanforgeContext, dns_ctx: &DnsContext, force: bo
         dns_ctx.cache.invalidate_all();
     }
     complete
+}
+
+/// Points the PTR routes at `[dns.reverse]`. A resolver already in use keeps its socket.
+async fn resync_reverse_routes(dns_ctx: &DnsContext, resolvers: &[DnsReverseResolver]) {
+    let current = dns_ctx.recursive.reverse_routes();
+    let mut routes: Vec<ReverseRoute> = Vec::with_capacity(resolvers.len());
+    for r in resolvers {
+        // The file form refuses host names: a reverse resolver is an address.
+        let Some(addr) = r.resolver.addr.ip() else {
+            continue;
+        };
+        let in_use = current
+            .iter()
+            .chain(&routes)
+            .find(|route| route.upstream.target == r.resolver)
+            .map(|route| Arc::clone(&route.upstream));
+        let upstream = match in_use {
+            Some(upstream) => upstream,
+            None => match UpstreamManager::new(&r.resolver, addr, Arc::clone(&dns_ctx.cache)).await
+            {
+                Ok(upstream) => upstream,
+                Err(e) => {
+                    error!(subnet = %r.subnet, resolver = %r.resolver, error = %e, "Failed to initialize reverse resolver");
+                    continue;
+                }
+            },
+        };
+        routes.push(ReverseRoute {
+            subnet: r.subnet,
+            upstream,
+        });
+    }
+    dns_ctx.recursive.replace_reverse_routes(routes);
 }
 
 async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsResponse {
