@@ -1965,7 +1965,7 @@ async fn served_client() -> ClientContext {
     client
 }
 
-/// A device with a DHCPv4 lease and a name.
+/// A device with a `DHCPv4` lease and a name.
 fn leased_device(client: &ClientContext, mac: MacAddr, ip: &str, name: &str) {
     let expires = SystemTime::now() + Duration::from_secs(3600);
     let ip = ip.parse().unwrap();
