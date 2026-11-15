@@ -767,7 +767,25 @@ export const firewallAbort = (tx_id: string) =>
 	post<void>('/firewall/abort', { tx_id });
 
 export const trafficStatus = () => get<TrafficStatusResponse>('/traffic/status');
-export const trafficTelemetry = () => get<TrafficTelemetryResponse>('/traffic/telemetry');
+/**
+ * An incremental telemetry poller: the first call returns the whole history, later calls only
+ * the samples newer than the last one received (`?since=`). Everything outside `history` is
+ * always complete. One feed per page; `TrafficActivityChart` merges the partial histories.
+ */
+export function trafficTelemetryFeed() {
+	let since: number | undefined;
+	return async () => {
+		const t = await get<TrafficTelemetryResponse>('/traffic/telemetry', { since });
+		const last = t.history?.at(-1)?.timestamp;
+		if (since !== undefined && t.timestamp < since) {
+			// The daemon's clock went back: its new samples are older than `since`. Reload.
+			since = undefined;
+		} else if (last !== undefined) {
+			since = last;
+		}
+		return t;
+	};
+}
 export const trafficConfig = () => get<TrafficConfig>('/traffic/config');
 export const trafficUpdateConfig = (config: TrafficConfig) =>
 	post<void>('/traffic/config', config);

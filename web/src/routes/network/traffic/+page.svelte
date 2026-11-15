@@ -1,11 +1,13 @@
 <script lang="ts">
-	import { trafficStatus, trafficTelemetry } from "$lib/api/client";
+	import { trafficStatus, trafficTelemetryFeed } from "$lib/api/client";
 	import type { TrafficStatusResponse, TrafficTelemetryResponse } from "$lib/api/types";
 	import { onMount } from "svelte";
 	import { createPolling } from "$lib/utils/polling";
 
 	import TrafficStatsCards from "./components/TrafficStatsCards.svelte";
 	import TrafficActivityChart from "$lib/components/TrafficActivityChart.svelte";
+
+	const trafficTelemetry = trafficTelemetryFeed();
 
 	let status = $state<TrafficStatusResponse | null>(null);
 	let telemetry = $state<TrafficTelemetryResponse | null>(null);

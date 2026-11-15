@@ -1044,7 +1044,7 @@ impl LanforgeRpc for ClientContext {
     }
 
     async fn traffic_telemetry(&self) -> Result<Box<TrafficTelemetryResponse>, RpcCallError> {
-        match self.handle_traffic_telemetry().await {
+        match self.handle_traffic_telemetry(None).await {
             Response::TrafficTelemetry(t) => Ok(t),
             other => Err(Self::map_failure(other)),
         }

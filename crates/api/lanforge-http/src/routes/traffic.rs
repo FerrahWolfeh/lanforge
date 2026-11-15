@@ -1,5 +1,11 @@
-use axum::{Json, Router, extract::State, response::IntoResponse, routing::get};
+use axum::{
+    Json, Router,
+    extract::{Query, State},
+    response::IntoResponse,
+    routing::get,
+};
 use lanforge_types::network::TrafficConfig;
+use serde::Deserialize;
 
 use crate::routes::create_client_ctx;
 use crate::server::AppState;
@@ -16,9 +22,21 @@ async fn handle_status(State(state): State<AppState>) -> impl IntoResponse {
     crate::http_response!(ctx.handle_traffic_status().await, TrafficStatus)
 }
 
-async fn handle_telemetry(State(state): State<AppState>) -> impl IntoResponse {
+/// `?since=<unix seconds>`: only history samples newer than that (the last one the client has).
+#[derive(Debug, Deserialize)]
+struct TelemetryQuery {
+    since: Option<u64>,
+}
+
+async fn handle_telemetry(
+    State(state): State<AppState>,
+    Query(query): Query<TelemetryQuery>,
+) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_traffic_telemetry().await, TrafficTelemetry)
+    crate::http_response!(
+        ctx.handle_traffic_telemetry(query.since).await,
+        TrafficTelemetry
+    )
 }
 
 async fn handle_get_config(State(state): State<AppState>) -> impl IntoResponse {

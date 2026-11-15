@@ -23,6 +23,9 @@ use lanforge_db::worker::DbWorker;
 use lanforge_db::{UserStore, config::DatabaseConfig, engine::LanforgeDb, log_engine::LogDb, redb};
 use lanforge_types::build::BuildInfo;
 use lanforge_types::events::{FirewallEvent, SystemEvent, TimedEvent};
+use lanforge_types::network::traffic::{
+    InterfaceThroughputPoint, InterfaceTrafficStats, TrafficHistorySample, TrafficTelemetryResponse,
+};
 use lanforge_types::system::ServiceId;
 use lanforge_types::{
     auth::{ApiScope, ApiScopes, UserRole},
@@ -1668,6 +1671,66 @@ async fn test_traffic_telemetry_contract() {
     assert!(
         data["interfaces"].as_array().is_some(),
         "interfaces must be a list"
+    );
+}
+
+/// `?since=<ts>` returns only the history samples newer than `ts`: the dashboard polls every
+/// 2.5 s and must not download the whole 240-sample ring each time. Everything outside
+/// `history` stays complete.
+#[tokio::test]
+async fn test_traffic_telemetry_since_returns_newer_history_only() {
+    let state = make_state(false).await;
+    let sample = |timestamp| TrafficHistorySample {
+        timestamp,
+        interfaces: vec![InterfaceThroughputPoint {
+            interface: "lan0".to_string(),
+            rx_rate_bps: timestamp,
+            tx_rate_bps: 0,
+        }],
+    };
+    state.ctx.set_traffic_telemetry(TrafficTelemetryResponse {
+        timestamp: 130,
+        interfaces: vec![InterfaceTrafficStats {
+            interface: "lan0".to_string(),
+            ..Default::default()
+        }],
+        history: vec![sample(100), sample(110), sample(120), sample(130)],
+        wan_interface: Some("ppp0".to_string()),
+        ..Default::default()
+    });
+    let app = TestApp {
+        router: build_router(state),
+        token: None,
+        elevation: None,
+    };
+    let stamps = |body: &Value| -> Vec<u64> {
+        body["data"]["history"]
+            .as_array()
+            .expect("history must be a list")
+            .iter()
+            .map(|s| s["timestamp"].as_u64().expect("sample timestamp"))
+            .collect()
+    };
+
+    let cases: &[(&str, &[u64])] = &[
+        ("/api/v1/traffic/telemetry", &[100, 110, 120, 130]),
+        ("/api/v1/traffic/telemetry?since=110", &[120, 130]),
+        ("/api/v1/traffic/telemetry?since=130", &[]),
+        ("/api/v1/traffic/telemetry?since=0", &[100, 110, 120, 130]),
+    ];
+    for (path, expected) in cases {
+        let (status, body) = app.get(path).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert_eq!(stamps(&body), *expected, "{path}");
+        assert_eq!(body["data"]["interfaces"][0]["interface"], "lan0", "{path}");
+        assert_eq!(body["data"]["wan_interface"], "ppp0", "{path}");
+    }
+
+    let (status, _) = app.get("/api/v1/traffic/telemetry?since=soon").await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "a non-numeric since is bad input"
     );
 }
 

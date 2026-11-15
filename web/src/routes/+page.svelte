@@ -12,7 +12,7 @@
 		listDevices,
 		scan,
 		dnsAnalytics,
-		trafficTelemetry,
+		trafficTelemetryFeed,
 	} from "$lib/api/client";
 	import {
 		normalizeServices,
@@ -42,6 +42,8 @@
 	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 	import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
+
+	const trafficTelemetry = trafficTelemetryFeed();
 
 	let statusData = $state<StatusResponse | null>(null);
 	let dnsData = $state<DnsStatsResponse | null>(null);

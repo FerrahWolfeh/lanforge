@@ -446,7 +446,7 @@ This route is unauthenticated alongside `/login` and `/status`. Used by CLI and 
 | Method | Path | RPC | Description |
 |:-------|:-----|:----|:-----------|
 | `GET` | `/api/v1/traffic/status` | `traffic_status` | Active SQM queue disciplines and tuning state |
-| `GET` | `/api/v1/traffic/telemetry` | `traffic_telemetry` | Interface packet throughput and drop counters |
+| `GET` | `/api/v1/traffic/telemetry` | `traffic_telemetry` | Interface packet throughput and drop counters, plus the rate history (last 240 samples). `?since=<unix seconds>` returns only the history samples newer than that; the other fields are always complete |
 | `GET` | `/api/v1/traffic/config` | `traffic_config` | Traffic shaping and hardware offload configuration |
 | `POST` | `/api/v1/traffic/config` | `update_traffic_config` | Update SQM rules and interface masks |
 
