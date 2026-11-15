@@ -694,7 +694,8 @@ fn test_sanity_no_interface_less_accept_reaches_wan() {
         let allowed = expr.contains("\"established\"")
             || expr.contains("\"icmp\"")
             || expr.contains("\"icmpv6\"")
-            || expr.contains("\"right\":546}");
+            // DHCPv6 client replies, only to a link-local address (no router forwards those).
+            || (expr.contains("\"right\":546}") && expr.contains("\"fe80::\""));
         if !allowed {
             offenders.push(format!("{chain}: {expr}"));
         }
@@ -825,4 +826,38 @@ fn test_sanity_bare_star_and_empty_interface_left_out() {
         !json.contains("\"iifname\"}},\"right\":\"\""),
         "empty name reached the ruleset"
     );
+}
+
+/// DHCPv6 client port: UDP 546 was accepted on every interface and both families, from
+/// anywhere (the lockdown table too). Only IPv6 replies from port 547 to a link-local address
+/// remain: what a DHCPv6 server or relay sends a client (RFC 8415 §16), unreachable from beyond
+/// the link.
+#[test]
+fn test_sanity_dhcpv6_client_port_only_to_link_local() {
+    let cfg = FirewallConfig::default();
+    let builder = RulesetBuilder::new(&cfg)
+        .with_active_wan(Some("ppp0"))
+        .with_primary_lan(Some("lan0"));
+    for ruleset in [builder.build(), builder.build_lockdown()] {
+        let v = serde_json::to_value(&ruleset).unwrap();
+        let rules: Vec<String> = v["nftables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|cmd| cmd.get("add").and_then(|a| a.get("rule")))
+            .map(|rule| rule["expr"].to_string())
+            .filter(|expr| expr.contains("\"right\":546}"))
+            .collect();
+        assert_eq!(rules.len(), 1, "{rules:?}");
+        let rule = &rules[0];
+        assert!(
+            rule.contains("\"ip6\"") && rule.contains("\"daddr\""),
+            "{rule}"
+        );
+        assert!(
+            rule.contains("\"addr\":\"fe80::\"") && rule.contains("\"len\":10"),
+            "{rule}"
+        );
+        assert!(rule.contains("\"right\":547}"), "server port: {rule}");
+    }
 }

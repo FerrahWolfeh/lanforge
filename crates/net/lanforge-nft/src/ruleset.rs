@@ -6,7 +6,7 @@ use lanforge_types::network::firewall::{
 use nftables::batch::Batch;
 use nftables::expr::{
     CT, Expression, Fib, FibFlag, FibResult, Meta, MetaKey, NamedExpression, Payload, PayloadField,
-    TcpOption,
+    Prefix, TcpOption,
 };
 use nftables::schema::{Chain, FlowTable, FlushObject, NfCmd, NfListObject, Nftables, Rule, Table};
 use nftables::stmt::{Flow, Limit, Mangle, Match, NAT, NATFamily, Operator, SetOp, Statement};
@@ -480,7 +480,29 @@ impl<'a> RulesetBuilder<'a> {
             }
         }
 
-        // Rule: DHCPv6 Client (UDP 546) on WAN for ISP Prefix Delegation (IA_PD)
+        Self::build_input_dhcpv6_client(batch, table);
+    }
+
+    /// `DHCPv6` client replies (the ISP's prefix delegation, `IA_PD`): IPv6 only, server port
+    /// 547 to client port 546, to a link-local address. A client sends from its link-local
+    /// address (RFC 8415 §16), so servers and relays answer there, whatever their own source
+    /// address; and no router forwards a packet to a link-local address, so nothing beyond the
+    /// link can reach the client port. Replies to a client's unicast request are `established`.
+    /// The rule accepted UDP 546 on every interface and family, from anywhere.
+    #[allow(clippy::ptr_arg)]
+    fn build_input_dhcpv6_client(batch: &mut Batch<'static>, table: &Cow<'static, str>) {
+        let port = |field: &'static str, number: u32| {
+            Statement::Match(Match {
+                left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                    PayloadField {
+                        protocol: "udp".into(),
+                        field: field.into(),
+                    },
+                ))),
+                right: Expression::Number(number),
+                op: Operator::EQ,
+            })
+        };
         batch.add(Self::make_rule(
             table,
             "input",
@@ -488,13 +510,18 @@ impl<'a> RulesetBuilder<'a> {
                 Statement::Match(Match {
                     left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
                         PayloadField {
-                            protocol: "udp".into(),
-                            field: "dport".into(),
+                            protocol: "ip6".into(),
+                            field: "daddr".into(),
                         },
                     ))),
-                    right: Expression::Number(546),
+                    right: Expression::Named(NamedExpression::Prefix(Prefix {
+                        addr: Box::new(Expression::String("fe80::".into())),
+                        len: 10,
+                    })),
                     op: Operator::EQ,
                 }),
+                port("sport", 547),
+                port("dport", 546),
                 Statement::Accept(None),
             ],
         ));
