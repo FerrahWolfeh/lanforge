@@ -253,8 +253,11 @@ default_input_policy = "drop"
 default_forward_policy = "drop"
 # custom_rules_file = "/etc/lanforge/firewall.custom.nft"
 
-# Zone fields: interfaces, input, forward, masquerade, mtu_fix, open_ports,
-# allowed_subnets. Port entries use PORT/protocol, for example "51820/udp".
+# Zone fields: interfaces, input, forward, masquerade, mtu_fix, open_ports.
+# Port entries use PORT/protocol, for example "51820/udp". Interface names are
+# nftables patterns: a trailing `*` matches by prefix ("podman*"). A zone that
+# masquerades faces the WAN, whatever its name: only such a zone may hold the
+# WAN interface, and it never gets the LAN's DNS/IKE bypasses.
 [firewall.zones.external]
 interfaces = ["ppp0", "wan0"]
 input = "drop"
