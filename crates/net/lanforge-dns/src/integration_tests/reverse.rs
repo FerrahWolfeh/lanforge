@@ -266,7 +266,8 @@ async fn reverse_resolver_change_applies_in_place() {
     ctx.terminate();
 }
 
-/// A client in a reverse subnet is named from its resolver's PTR answer (a transient host).
+/// A client in a reverse subnet is named from its resolver's PTR answer (a transient host),
+/// by its raw host name: the first label.
 #[tokio::test]
 async fn client_in_a_reverse_subnet_gets_named() {
     let ctx = init_test_context();
@@ -289,7 +290,7 @@ async fn client_in_a_reverse_subnet_gets_named() {
         assert!(Instant::now() < deadline, "the client was never named");
         sleep(Duration::from_millis(10)).await;
     };
-    assert_eq!(host.hostname.name, "archie.tailnet.ts.net");
+    assert_eq!(host.hostname.name, "archie");
     assert_eq!(host.origin, TransientOrigin::Tailscale);
     ctx.terminate();
 }

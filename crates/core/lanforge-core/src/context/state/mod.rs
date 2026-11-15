@@ -316,6 +316,35 @@ impl State {
         self.indices.duid_index.get(duid).copied()
     }
 
+    /// The name a device is shown by: its host name, else the name its DNS fallback recorded.
+    #[must_use]
+    pub fn device_name(&self, mac: MacAddr) -> Option<String> {
+        let d = self.devices.get(&mac)?;
+        let name = d.display_hostname();
+        if name != "?" && !name.is_empty() {
+            return Some(name.to_string());
+        }
+        (!d.dns_fallback.is_empty()).then(|| d.dns_fallback.clone())
+    }
+
+    /// The device of a DNS client (`mac` when the query carried it) and the name it is shown by.
+    /// A client without a named device (a tailnet peer, a VPN client) is named from its
+    /// transient host (reverse resolver PTR, mDNS).
+    #[must_use]
+    pub fn client_identity(
+        &self,
+        ip: IpAddr,
+        mac: Option<MacAddr>,
+    ) -> (Option<MacAddr>, Option<String>) {
+        let mac = mac.or_else(|| self.get_mac_by_ip(ip));
+        let name = mac.and_then(|m| self.device_name(m)).or_else(|| {
+            self.transient_hosts
+                .get(&ip.to_canonical())
+                .map(|t| t.hostname.name.clone())
+        });
+        (mac, name)
+    }
+
     #[must_use]
     pub fn get_mac_by_ip(&self, ip: IpAddr) -> Option<MacAddr> {
         let canonical = ip.to_canonical();

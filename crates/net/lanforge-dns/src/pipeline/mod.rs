@@ -225,8 +225,8 @@ async fn resolve_reverse_ptr_background(
                 }
 
                 if let Some(name) = resolved_name {
-                    // Normalize the hostname: strip trailing dot if present
-                    let name = name.strip_suffix('.').unwrap_or(&name).to_string();
+                    // The raw host name: `archie.tailnet.ts.net.` names the client `archie`.
+                    let name = name.split('.').next().unwrap_or_default().to_string();
                     if !name.is_empty() {
                         let origin = classify_transient_origin(ip);
                         let hostname = Hostname {

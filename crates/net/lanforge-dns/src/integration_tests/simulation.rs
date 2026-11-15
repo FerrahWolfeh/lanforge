@@ -383,7 +383,8 @@ async fn dns_simulation_transient_ip_reverse_dns() {
     let mut resolved = false;
     for _ in 0..50 {
         if let Some(host) = ctx.get_transient_host(&client_ip) {
-            assert_eq!(host.hostname.name, "socket-transient.local");
+            // The raw host name: the first label of the PTR answer.
+            assert_eq!(host.hostname.name, "socket-transient");
             assert_eq!(host.origin, TransientOrigin::LocalPtr);
             resolved = true;
             break;
