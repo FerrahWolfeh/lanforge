@@ -2,6 +2,7 @@ use crate::bind::{bind_error, dual_bind_error};
 use crate::inert::{InertHandle, InertPort};
 use crate::limiter::RateLimiter;
 use crate::metrics::{TransportMetrics, TransportStats};
+use crate::sys;
 use lanforge_types::network::bind::BindError;
 use lanforge_types::network::snapshot::TransportSnapshot;
 use std::io;
@@ -151,6 +152,80 @@ impl UdpTransport {
             )))
         };
         open().map_err(|e| bind_error(format!("{addr}%{iface}"), e))
+    }
+
+    /// Binds `port` on `iface` only, in both families, for a link-local multicast protocol like
+    /// mDNS: joins `v4_group` and `v6_group` on that interface alone, sends multicast out of it
+    /// (never by the routing table, which would pick the WAN) with TTL/hop limit 255 (RFC 6762
+    /// §11), and does not loop its own packets back. `SO_REUSEPORT` lets another responder on the
+    /// host (avahi) share the port.
+    ///
+    /// If one family cannot be opened (IPv6 disabled) the other serves alone.
+    ///
+    /// # Errors
+    /// The interface does not exist ([`BindErrorKind::NoDevice`]), or neither family could be
+    /// bound and joined.
+    ///
+    /// [`BindErrorKind::NoDevice`]: crate::BindErrorKind::NoDevice
+    pub fn bind_link_multicast(
+        iface: &str,
+        v4_group: Ipv4Addr,
+        v6_group: Ipv6Addr,
+        port: u16,
+    ) -> Result<Self, BindError> {
+        let open = |group: IpAddr| -> io::Result<TokioUdpSocket> {
+            let domain = if group.is_ipv4() {
+                socket2::Domain::IPV4
+            } else {
+                socket2::Domain::IPV6
+            };
+            let sock =
+                socket2::Socket::new(domain, socket2::Type::DGRAM, Some(socket2::Protocol::UDP))?;
+            sock.set_reuse_address(true)?;
+            sock.set_reuse_port(true)?;
+            sock.bind_device(Some(iface.as_bytes()))?;
+            // The socket is bound to `iface`, so the name resolves.
+            let ifindex = sys::if_name_to_index(iface)
+                .ok_or_else(|| io::Error::from_raw_os_error(libc::ENODEV))?;
+            match group {
+                IpAddr::V4(g) => {
+                    sock.join_multicast_v4_n(
+                        &g,
+                        &socket2::InterfaceIndexOrAddress::Index(ifindex),
+                    )?;
+                    sock.set_multicast_ttl_v4(255)?;
+                    sock.set_multicast_loop_v4(false)?;
+                    sock.bind(&SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)).into())?;
+                }
+                IpAddr::V6(g) => {
+                    sock.set_only_v6(true)?;
+                    sock.join_multicast_v6(&g, ifindex)?;
+                    sock.set_multicast_if_v6(ifindex)?;
+                    sock.set_multicast_hops_v6(255)?;
+                    sock.set_multicast_loop_v6(false)?;
+                    sock.bind(&SocketAddr::from((Ipv6Addr::UNSPECIFIED, port)).into())?;
+                }
+            }
+            sock.set_nonblocking(true)?;
+            TokioUdpSocket::from_std(sock.into())
+        };
+
+        match (open(IpAddr::V4(v4_group)), open(IpAddr::V6(v6_group))) {
+            (Ok(v4), Ok(v6)) => Ok(Self::from_backend(UdpBackend::KernelDual { v4, v6 })),
+            (Ok(v4), Err(e)) => {
+                warn!(%iface, "UDP: {v6_group} not joined ({e}), serving IPv4 only");
+                Ok(Self::from_backend(UdpBackend::KernelSingle(v4)))
+            }
+            (Err(e), Ok(v6)) => {
+                warn!(%iface, "UDP: {v4_group} not joined ({e}), serving IPv6 only");
+                Ok(Self::from_backend(UdpBackend::KernelSingle(v6)))
+            }
+            (Err(e4), Err(e6)) => Err(dual_bind_error(
+                format!("{v4_group}:{port}%{iface} and [{v6_group}]:{port}%{iface}"),
+                &e4,
+                &e6,
+            )),
+        }
     }
 
     /// Joins the IPv6 multicast `group` on the interface `ifindex` (a server listening to a
@@ -389,6 +464,7 @@ mod tests {
     use super::*;
     use crate::limiter::RateLimitConfig;
     use std::net::SocketAddr;
+    use std::process::Command;
     use tokio::time::{Duration, timeout};
 
     #[tokio::test]
@@ -572,5 +648,89 @@ mod tests {
             res.is_ok(),
             "Multicast join in inert mode must succeed as no-op"
         );
+    }
+
+    const MDNS_V4: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 251);
+    const MDNS_V6: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0xfb);
+
+    fn sh(cmd: &str) {
+        let ok = Command::new("sh")
+            .args(["-c", cmd])
+            .status()
+            .is_ok_and(|s| s.success());
+        assert!(ok, "`{cmd}` failed");
+    }
+
+    /// A LAN (`lfl0`, peer `lfl1`) and a WAN (`lfw0`, peer `lfw1`) holding the default route,
+    /// as on the box where the default route is `ppp0`.
+    fn lan_and_wan() {
+        sh(
+            "sysctl -qw net.ipv6.conf.default.accept_dad=0 net.ipv4.conf.all.accept_local=1 \
+            net.ipv4.conf.default.accept_local=1",
+        );
+        sh(
+            "ip link add lfl0 type veth peer name lfl1 && ip link add lfw0 type veth peer name lfw1",
+        );
+        sh("for l in lo lfl0 lfl1 lfw0 lfw1; do ip link set $l up; done");
+        sh("ip addr add 10.1.0.1/24 dev lfl0 && ip addr add 10.1.0.2/24 dev lfl1");
+        sh("ip addr add 10.2.0.1/24 dev lfw0 && ip addr add 10.2.0.2/24 dev lfw1");
+        sh("ip route add default via 10.2.0.2");
+    }
+
+    /// An endpoint on `iface` alone in the mDNS groups, standing for another host on that link.
+    fn peer(iface: &str) -> UdpTransport {
+        UdpTransport::bind_link_multicast(iface, MDNS_V4, MDNS_V6, 5353).expect("peer socket")
+    }
+
+    async fn hears(t: &UdpTransport) -> Option<SocketAddr> {
+        let mut buf = [0u8; 64];
+        timeout(Duration::from_millis(300), t.recv(&mut buf))
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .map(|(_, from)| from)
+    }
+
+    /// mDNS stays on its link (RFC 6762 §11): queries leave by the LAN, not by the default route
+    /// (the WAN), and a packet to the group arriving on the WAN is not heard. The old mDNS
+    /// socket joined the group on every interface and sent by the routing table.
+    #[tokio::test]
+    #[ignore = "needs a network namespace: unshare -rn <test binary> --ignored link_multicast"]
+    async fn link_multicast_stays_on_its_interface() {
+        lan_and_wan();
+        let lan = peer("lfl0");
+        let (lan_peer, wan_peer) = (peer("lfl1"), peer("lfw1"));
+        let v4 = SocketAddr::from((MDNS_V4, 5353));
+        let v6 = SocketAddr::from((MDNS_V6, 5353));
+
+        for group in [v4, v6] {
+            lan.send(b"query", &group).await.expect("send");
+            assert!(
+                hears(&lan_peer).await.is_some(),
+                "{group} must leave by the LAN"
+            );
+            assert_eq!(
+                hears(&wan_peer).await,
+                None,
+                "{group} must not leave by the WAN"
+            );
+        }
+
+        let wan_side = peer("lfw0");
+        for group in [v4, v6] {
+            wan_peer.send(b"answer", &group).await.expect("send");
+            assert!(
+                hears(&wan_side).await.is_some(),
+                "the WAN side carries the packet"
+            );
+            assert_eq!(
+                hears(&lan).await,
+                None,
+                "{group} from the WAN must not be heard"
+            );
+
+            lan_peer.send(b"answer", &group).await.expect("send");
+            assert!(hears(&lan).await.is_some(), "{group} from the LAN is heard");
+        }
     }
 }
