@@ -3,7 +3,7 @@ use lanforge_types::network::firewall::{
     DynamicPortRequest, FirewallConfig, FirewallMode, FirewallPolicy, FirewallZone, L4Protocol,
     PortForwardRule, ZoneForwarding,
 };
-use nftables::schema::{NfCmd, NfListObject, NfObject};
+use nftables::schema::{NfCmd, NfListObject, NfObject, Nftables};
 use nftables::types::NfChainPolicy;
 use std::net::IpAddr;
 
@@ -335,7 +335,9 @@ fn test_sanity_port_forwarding_crud() {
     .unwrap();
     assert!(!json3.contains("8443"));
     assert!(!json3.contains("192.168.1.60"));
-    assert!(!json3.contains("\"prerouting\""));
+    // No NAT prerouting chain left (the rpfilter chain also hooks prerouting).
+    assert!(!json3.contains("\"name\":\"prerouting\""));
+    assert!(!json3.contains("\"chain\":\"prerouting\""));
 }
 
 #[test]
@@ -951,4 +953,122 @@ fn test_sanity_uplink_zone_with_another_name_faces_the_wan() {
             .any(|r| r.contains("\"ppp0\"") && r.contains("\"dnat\"") && r.contains("\"accept\"")),
         "no DNAT acceptance on the uplink"
     );
+}
+
+/// The `rpfilter` chain's rules, as JSON expressions.
+fn rpfilter_rules(ruleset: &Nftables<'static>) -> Vec<String> {
+    let v = serde_json::to_value(ruleset).unwrap();
+    v["nftables"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|cmd| cmd.get("add").and_then(|a| a.get("rule")))
+        .filter(|rule| rule["chain"] == "rpfilter")
+        .map(|rule| rule["expr"].to_string())
+        .collect()
+}
+
+/// §2.2 anti-spoofing: nothing checked a packet's source against the interface it came in on,
+/// so a LAN host could send as any address (another host, the internet) and the WAN could send
+/// as the LAN. Strict reverse-path filter (RFC 3704 §2.2) on every zone interface, the WAN
+/// too, in a raw-priority prerouting chain; the full and the lockdown ruleset alike.
+#[test]
+fn test_sanity_rpfilter_drops_spoofed_sources_on_every_zone_interface() {
+    let cfg = FirewallConfig::default();
+    let builder = RulesetBuilder::new(&cfg)
+        .with_active_wan(Some("ppp0"))
+        .with_primary_lan(Some("lan0"));
+    for ruleset in [builder.build(), builder.build_lockdown()] {
+        let v = serde_json::to_value(&ruleset).unwrap();
+        let chain = v["nftables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|cmd| cmd.get("add").and_then(|a| a.get("chain")))
+            .find(|c| c["name"] == "rpfilter")
+            .expect("rpfilter chain");
+        assert_eq!(chain["hook"], "prerouting");
+        assert_eq!(chain["prio"], -300, "before conntrack");
+        assert_eq!(chain["policy"], "accept");
+
+        let rules = rpfilter_rules(&ruleset);
+        let drops: Vec<&String> = rules.iter().filter(|r| r.contains("\"drop\"")).collect();
+        for iface in ["lan0", "ppp0", "tailscale0", "podman*"] {
+            let rule = drops
+                .iter()
+                .find(|r| r.contains(&format!("\"right\":\"{iface}\"")))
+                .unwrap_or_else(|| panic!("no rpfilter on {iface}: {rules:?}"));
+            assert!(
+                rule.contains(r#""fib":{"flags":["saddr","iif"],"result":"oif"}"#)
+                    || rule.contains(r#""fib":{"flags":["iif","saddr"],"result":"oif"}"#),
+                "{rule}"
+            );
+            assert!(rule.contains("\"right\":false"), "oif missing: {rule}");
+            assert!(rule.contains("\"counter\""), "{rule}");
+        }
+        assert_eq!(drops.len(), 4, "one per zone interface: {drops:?}");
+        assert!(
+            !rules.iter().any(|r| r.contains("\"lo\"")),
+            "the router's own traffic is not checked"
+        );
+    }
+}
+
+/// The sources with no route by design: a DHCPv4 client's `0.0.0.0` (only to the server
+/// port) and IPv6 `::` (only ICMPv6: DAD, MLD). They are let through before the drop rules;
+/// nothing else is.
+#[test]
+fn test_sanity_rpfilter_exempts_only_dhcp_discover_and_unspecified_icmpv6() {
+    let cfg = FirewallConfig::default();
+    let ruleset = RulesetBuilder::new(&cfg)
+        .with_active_wan(Some("ppp0"))
+        .with_primary_lan(Some("lan0"))
+        .build();
+    let rules = rpfilter_rules(&ruleset);
+    let accepts: Vec<&String> = rules.iter().filter(|r| r.contains("\"accept\"")).collect();
+    assert_eq!(accepts.len(), 2, "{accepts:?}");
+    let first_drop = rules.iter().position(|r| r.contains("\"drop\"")).unwrap();
+    assert!(
+        rules[..first_drop].iter().all(|r| r.contains("\"accept\"")),
+        "exemptions come first: {rules:?}"
+    );
+
+    let dhcp = accepts
+        .iter()
+        .find(|r| r.contains("\"0.0.0.0\""))
+        .expect("DHCPv4 exemption");
+    assert!(
+        dhcp.contains("\"right\":68}") && dhcp.contains("\"right\":67}"),
+        "{dhcp}"
+    );
+    let unspecified = accepts
+        .iter()
+        .find(|r| r.contains("\"right\":\"::\""))
+        .expect(":: exemption");
+    assert!(unspecified.contains("\"ipv6-icmp\""), "{unspecified}");
+}
+
+/// Minimal mode filters nothing (no input chain); it gets no reverse-path filter either. A
+/// firewall with no zone interface at all has nothing to check.
+#[test]
+fn test_sanity_rpfilter_absent_in_minimal_mode_and_without_interfaces() {
+    let minimal = FirewallConfig {
+        mode: FirewallMode::Minimal,
+        ..FirewallConfig::default()
+    };
+    let json = serde_json::to_string(
+        &RulesetBuilder::new(&minimal)
+            .with_active_wan(Some("ppp0"))
+            .with_primary_lan(Some("lan0"))
+            .build(),
+    )
+    .unwrap();
+    assert!(!json.contains("rpfilter"));
+
+    let mut bare = FirewallConfig::default();
+    for zone in &mut bare.zones {
+        zone.interfaces.clear();
+    }
+    let json = serde_json::to_string(&RulesetBuilder::new(&bare).build()).unwrap();
+    assert!(!json.contains("rpfilter"));
 }
