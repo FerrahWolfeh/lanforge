@@ -15,7 +15,7 @@ use axum::{
     body::Body,
     extract::{FromRef, State},
     http::{HeaderName, HeaderValue},
-    middleware::from_fn_with_state,
+    middleware::{from_fn, from_fn_with_state},
     response::{IntoResponse, Response as AxumResponse},
     routing::get,
 };
@@ -49,6 +49,9 @@ use tower_http::{
 use tracing::{error, info, warn};
 
 use crate::auth::{AuthManager, middleware as auth_middleware};
+#[cfg(feature = "webui")]
+use crate::compression::accepts_gzip;
+use crate::compression::gzip_json;
 use crate::config::HttpConfig;
 #[cfg(feature = "doh")]
 use crate::doh::handle_dns_query;
@@ -74,6 +77,7 @@ pub fn api_router(state: &AppState) -> Router<AppState> {
         .unwrap_or_else(|_| HeaderValue::from_static("unknown"));
     routes::router()
         .layer(from_fn_with_state(state.clone(), auth_middleware))
+        .layer(from_fn(gzip_json))
         .layer(CorsLayer::permissive())
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static(BUILD_HEADER),
@@ -549,28 +553,4 @@ async fn handle_embedded_webui(headers: HeaderMap, uri: Uri) -> AxumResponse {
             .insert(VARY, HeaderValue::from_static("Accept-Encoding"));
     }
     resp
-}
-
-/// Whether an `Accept-Encoding` value takes gzip (RFC 9110 §12.5.3): `gzip` (or `x-gzip`)
-/// listed with a non-zero weight, or `*` with one while gzip is not listed. No header at all
-/// gets the plain file: such clients (`curl` without `--compressed`) rarely decode.
-#[cfg(feature = "webui")]
-fn accepts_gzip(value: &str) -> bool {
-    let mut star = false;
-    for item in value.split(',') {
-        let mut parts = item.split(';');
-        let coding = parts.next().unwrap_or_default().trim();
-        let refused = parts.any(|param| {
-            let param = param.trim();
-            param.get(..2).is_some_and(|k| k.eq_ignore_ascii_case("q="))
-                && param[2..].trim().parse::<f32>().is_ok_and(|q| q <= 0.0)
-        });
-        if coding.eq_ignore_ascii_case("gzip") || coding.eq_ignore_ascii_case("x-gzip") {
-            return !refused;
-        }
-        if coding == "*" {
-            star = !refused;
-        }
-    }
-    star
 }

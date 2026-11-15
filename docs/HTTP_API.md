@@ -446,7 +446,7 @@ This route is unauthenticated alongside `/login` and `/status`. Used by CLI and 
 | Method | Path | RPC | Description |
 |:-------|:-----|:----|:-----------|
 | `GET` | `/api/v1/traffic/status` | `traffic_status` | Active SQM queue disciplines and tuning state |
-| `GET` | `/api/v1/traffic/telemetry` | `traffic_telemetry` | Interface packet throughput and drop counters |
+| `GET` | `/api/v1/traffic/telemetry` | `traffic_telemetry` | Interface packet throughput and drop counters, plus the rate history (last 240 samples). `?since=<unix seconds>` returns only the history samples newer than that; the other fields are always complete |
 | `GET` | `/api/v1/traffic/config` | `traffic_config` | Traffic shaping and hardware offload configuration |
 | `POST` | `/api/v1/traffic/config` | `update_traffic_config` | Update SQM rules and interface masks |
 
@@ -473,6 +473,6 @@ This route is unauthenticated alongside `/login` and `/status`. Used by CLI and 
 
 - Use `axum::response::sse::Sse` for all SSE endpoints.
 - All route handlers receive a shared `AppState` (Arc) containing the RPC channel to the daemon's internal bus.
-- Middleware stack (applied globally): CORS → auth extractor → routes. Responses are not compressed; the embedded WebUI is stored gzip-compressed and sent as such to clients that accept gzip. Auth extractor short-circuits with `401` before reaching any handler, except for `POST /api/v1/auth/validate` which is explicitly excluded.
+- Middleware stack (applied globally): CORS → gzip → auth extractor → routes. JSON answers of 1 KiB or more are gzip-compressed for clients whose `Accept-Encoding` takes gzip (every JSON answer carries `Vary: Accept-Encoding`); smaller answers and the SSE stream go out plain. The embedded WebUI is stored gzip-compressed and sent as such to clients that accept gzip. Auth extractor short-circuits with `401` before reaching any handler, except for `POST /api/v1/auth/validate` which is explicitly excluded.
 - `DELETE /api/v1/db` should require a `X-Confirm: wipe` header in addition to auth, as a minimal mechanical safeguard against accidental calls from scripts.
 - UDS-only routes (`POST /auth/tokens`, `DELETE /auth/tokens/{id}`, `POST /auth/tokens/{id}/renew`) should be registered normally but return `403` immediately in the handler body — this way they appear correctly in any auto-generated API documentation.

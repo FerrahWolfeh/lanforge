@@ -1104,20 +1104,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
-name = "duration-str"
-version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "027cd1402a609c71a9ac333c7e3d90ee042e7a131da1a83da8c60df323f12f61"
-dependencies = [
- "chrono",
- "rust_decimal",
- "serde",
- "thiserror 2.0.21",
- "time",
- "winnow 0.7.15",
-]
-
-[[package]]
 name = "dyn-clone"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2063,7 +2049,7 @@ checksum = "bf36173d4167ed999940f804952e6b08197cae5ad5d572eb4db150ce8ad5d58f"
 
 [[package]]
 name = "lanforge"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "anyhow",
  "bytesize",
@@ -2108,7 +2094,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-api"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "bitflags 2.13.0",
  "lanforge-crypto",
@@ -2127,7 +2113,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-api-dispatch"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "chrono",
  "hex",
@@ -2150,7 +2136,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-cli"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "argon2",
  "bytes",
@@ -2162,7 +2148,6 @@ dependencies = [
  "colored",
  "comfy-table",
  "directories",
- "duration-str",
  "futures",
  "hex",
  "http-body-util",
@@ -2188,7 +2173,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-core"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "arc-swap",
  "dashmap",
@@ -2206,7 +2191,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-crypto"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "argon2",
  "aws-lc-rs",
@@ -2220,7 +2205,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-db"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "hotpath",
  "lanforge-core",
@@ -2237,7 +2222,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-db-core"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "lanforge-types",
  "postcard",
@@ -2249,7 +2234,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-db-redb"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "lanforge-core",
  "lanforge-db-core",
@@ -2265,7 +2250,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-dhcp"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "dhcproto",
  "hex",
@@ -2287,7 +2272,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-discovery"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "futures",
  "hotpath",
@@ -2310,7 +2295,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-dns"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -2349,7 +2334,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-dns-wire"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "hotpath",
  "lanforge-types",
@@ -2358,7 +2343,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-http"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "async-stream",
  "axum",
@@ -2399,7 +2384,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-lab"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "clap",
  "color-eyre",
@@ -2422,7 +2407,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-macros"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "quote",
  "syn 2.0.117",
@@ -2430,7 +2415,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-nft"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "lanforge-core",
  "lanforge-types",
@@ -2444,14 +2429,14 @@ dependencies = [
 
 [[package]]
 name = "lanforge-pppoe"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "lanforge-core",
  "lanforge-transport",
  "lanforge-types",
  "libc",
  "md-5",
- "nix 0.31.3",
+ "nix 0.30.1",
  "parking_lot",
  "postcard",
  "rand 0.10.3",
@@ -2466,7 +2451,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-ra"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "hotpath",
  "lanforge-core",
@@ -2482,7 +2467,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-tftp"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "lanforge-core",
  "lanforge-transport",
@@ -2498,7 +2483,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-traffic"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "lanforge-core",
  "lanforge-types",
@@ -2510,7 +2495,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-transport"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "lanforge-types",
  "libc",
@@ -2522,7 +2507,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-types"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "bitflags 2.13.0",
  "lanforge-macros",
@@ -2534,7 +2519,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-uds"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "hotpath",
  "lanforge-api",
@@ -2552,7 +2537,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-webui"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "flate2",
 ]
@@ -2847,18 +2832,6 @@ name = "nix"
 version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "74523f3a35e05aba87a1d978330aef40f67b0304ac79c1c00b294c9830543db6"
-dependencies = [
- "bitflags 2.13.0",
- "cfg-if",
- "cfg_aliases",
- "libc",
-]
-
-[[package]]
-name = "nix"
-version = "0.31.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
 dependencies = [
  "bitflags 2.13.0",
  "cfg-if",
@@ -3866,16 +3839,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust_decimal"
-version = "1.42.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c5108e3d4d903e21aac27f12ba5377b6b34f9f44b325e4894c7924169d06995"
-dependencies = [
- "arrayvec",
- "num-traits",
-]
-
-[[package]]
 name = "rustc-demangle"
 version = "0.1.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4654,7 +4617,7 @@ dependencies = [
  "toml_datetime",
  "toml_parser",
  "toml_writer",
- "winnow 1.0.3",
+ "winnow",
 ]
 
 [[package]]
@@ -4678,7 +4641,7 @@ dependencies = [
  "toml_datetime",
  "toml_parser",
  "toml_writer",
- "winnow 1.0.3",
+ "winnow",
 ]
 
 [[package]]
@@ -4687,7 +4650,7 @@ version = "1.1.5+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baa693a8032d7e1cada7d0041e96126df243179ff061456783ac7f12bda4744c"
 dependencies = [
- "winnow 1.0.3",
+ "winnow",
 ]
 
 [[package]]
@@ -5416,15 +5379,6 @@ name = "windows_x86_64_msvc"
 version = "0.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
-
-[[package]]
-name = "winnow"
-version = "0.7.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
-dependencies = [
- "memchr",
-]
 
 [[package]]
 name = "winnow"

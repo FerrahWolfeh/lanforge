@@ -3,7 +3,7 @@
 	import FloatingSaveBar from "$lib/components/FloatingSaveBar.svelte";
 	import {
 		trafficStatus,
-		trafficTelemetry,
+		trafficTelemetryFeed,
 		trafficConfig,
 		trafficUpdateConfig,
 		getSetupStatus,
@@ -25,6 +25,8 @@
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 
 	import TrafficSqmTab from "../components/TrafficSqmTab.svelte";
+
+	const trafficTelemetry = trafficTelemetryFeed();
 
 	const canEdit = $derived(auth.can("config_write"));
 

@@ -182,6 +182,7 @@
 	}
 
 	let rawSamples = $state<TelemetrySample[]>(createInitialSamples());
+	let hasHistory = false;
 
 	$effect(() => {
 		const data = telemetryData;
@@ -189,7 +190,7 @@
 
 		untrack(() => {
 			if (data.history && data.history.length > 0) {
-				const mapped: TelemetrySample[] = data.history.map((s) => {
+				const fresh: TelemetrySample[] = data.history.map((s) => {
 					const ms = s.timestamp < 10_000_000_000 ? s.timestamp * 1000 : s.timestamp;
 					return {
 						date: new Date(ms),
@@ -197,6 +198,16 @@
 						interfaces: s.interfaces,
 					};
 				});
+				// A polling feed sends only the samples newer than its last one: keep the real
+				// samples received before them (padding has no interfaces). A full history
+				// starts at or before what is held, so it replaces it.
+				const held = hasHistory
+					? rawSamples.filter(
+							(s) => s.interfaces.length > 0 && s.timestamp < fresh[0].timestamp,
+						)
+					: [];
+				hasHistory = true;
+				const mapped = [...held, ...fresh];
 
 				if (mapped.length < TOTAL_SAMPLES) {
 					const t0 = mapped[0].timestamp;
@@ -214,7 +225,9 @@
 				} else {
 					rawSamples = mapped.slice(-TOTAL_SAMPLES);
 				}
-			} else {
+			} else if (!hasHistory) {
+				// No history from the daemon yet: plot the live rates. Once history arrives, an
+				// empty one only means no new sample since the last poll.
 				const now = new Date();
 				const currentIfaces: InterfaceSample[] = (data.interfaces ?? []).map((i) => ({
 					interface: i.interface,

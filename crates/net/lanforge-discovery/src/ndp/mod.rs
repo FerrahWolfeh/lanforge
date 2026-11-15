@@ -68,7 +68,7 @@ use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio::task::JoinSet;
 use tokio::time::{interval, sleep};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 // ---------------------------------------------------------------------------
 // NeighborMonitor — Reacts to netlink neighbor events
@@ -164,7 +164,7 @@ impl DiscoveryService {
             .ctx
             .apply_with_events(DeviceUpdate::NeighborBatch { entries: batch });
 
-        // Diagnostic: Publish summary of the batch only if new devices were discovered
+        // Publish a summary only when the batch found new devices; quiet batches log at trace.
         let duration = start.elapsed();
         let new_count = events
             .iter()
@@ -181,7 +181,8 @@ impl DiscoveryService {
                         duration_ms: u64::try_from(duration.as_millis()).unwrap_or_default(),
                     }));
         } else {
-            debug!(
+            // Every kernel neighbor refresh lands here: at debug it buried everything else.
+            trace!(
                 service = "DiscoveryService",
                 total,
                 duration_ms = duration.as_millis(),

@@ -6,6 +6,7 @@
 // reducing boilerplate while maximising coverage of the API contract.
 #![cfg(feature = "server")]
 use std::fs;
+use std::io::Read;
 use std::{sync::Arc, time::Instant};
 
 use crate::server::api_router;
@@ -15,6 +16,7 @@ use axum::{
     body::Body,
     http::{HeaderMap, Request, StatusCode, header},
 };
+use flate2::read::GzDecoder;
 use http_body_util::BodyExt;
 use lanforge_core::bus::{EventBus, LanforgeEvent};
 use lanforge_core::context::{LanforgeContext, state::State as CoreState};
@@ -23,6 +25,9 @@ use lanforge_db::worker::DbWorker;
 use lanforge_db::{UserStore, config::DatabaseConfig, engine::LanforgeDb, log_engine::LogDb, redb};
 use lanforge_types::build::BuildInfo;
 use lanforge_types::events::{FirewallEvent, SystemEvent, TimedEvent};
+use lanforge_types::network::traffic::{
+    InterfaceThroughputPoint, InterfaceTrafficStats, TrafficHistorySample, TrafficTelemetryResponse,
+};
 use lanforge_types::system::ServiceId;
 use lanforge_types::{
     auth::{ApiScope, ApiScopes, UserRole},
@@ -1669,6 +1674,149 @@ async fn test_traffic_telemetry_contract() {
         data["interfaces"].as_array().is_some(),
         "interfaces must be a list"
     );
+}
+
+/// `?since=<ts>` returns only the history samples newer than `ts`: the dashboard polls every
+/// 2.5 s and must not download the whole 240-sample ring each time. Everything outside
+/// `history` stays complete.
+#[tokio::test]
+async fn test_traffic_telemetry_since_returns_newer_history_only() {
+    let state = make_state(false).await;
+    let sample = |timestamp| TrafficHistorySample {
+        timestamp,
+        interfaces: vec![InterfaceThroughputPoint {
+            interface: "lan0".to_string(),
+            rx_rate_bps: timestamp,
+            tx_rate_bps: 0,
+        }],
+    };
+    state.ctx.set_traffic_telemetry(TrafficTelemetryResponse {
+        timestamp: 130,
+        interfaces: vec![InterfaceTrafficStats {
+            interface: "lan0".to_string(),
+            ..Default::default()
+        }],
+        history: vec![sample(100), sample(110), sample(120), sample(130)],
+        wan_interface: Some("ppp0".to_string()),
+        ..Default::default()
+    });
+    let app = TestApp {
+        router: build_router(state),
+        token: None,
+        elevation: None,
+    };
+    let stamps = |body: &Value| -> Vec<u64> {
+        body["data"]["history"]
+            .as_array()
+            .expect("history must be a list")
+            .iter()
+            .map(|s| s["timestamp"].as_u64().expect("sample timestamp"))
+            .collect()
+    };
+
+    let cases: &[(&str, &[u64])] = &[
+        ("/api/v1/traffic/telemetry", &[100, 110, 120, 130]),
+        ("/api/v1/traffic/telemetry?since=110", &[120, 130]),
+        ("/api/v1/traffic/telemetry?since=130", &[]),
+        ("/api/v1/traffic/telemetry?since=0", &[100, 110, 120, 130]),
+    ];
+    for (path, expected) in cases {
+        let (status, body) = app.get(path).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert_eq!(stamps(&body), *expected, "{path}");
+        assert_eq!(body["data"]["interfaces"][0]["interface"], "lan0", "{path}");
+        assert_eq!(body["data"]["wan_interface"], "ppp0", "{path}");
+    }
+
+    let (status, _) = app.get("/api/v1/traffic/telemetry?since=soon").await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "a non-numeric since is bad input"
+    );
+}
+
+/// JSON answers of 1 KiB or more go gzip-compressed to a client that takes gzip (RFC 9110
+/// §8.4, §12.5.3), with `Vary: Accept-Encoding`; small ones, clients that refuse gzip or send
+/// no `Accept-Encoding`, and the SSE stream get the plain body.
+#[tokio::test]
+async fn test_api_json_is_gzipped_for_clients_that_accept_it() {
+    let state = make_state(false).await;
+    state.ctx.set_traffic_telemetry(TrafficTelemetryResponse {
+        history: (0..100)
+            .map(|timestamp| TrafficHistorySample {
+                timestamp,
+                interfaces: vec![InterfaceThroughputPoint {
+                    interface: "lan0".to_string(),
+                    rx_rate_bps: timestamp,
+                    tx_rate_bps: 0,
+                }],
+            })
+            .collect(),
+        ..Default::default()
+    });
+    let router = build_router(state);
+    let fetch = |path: &'static str, accept: Option<&'static str>| {
+        let router = router.clone();
+        async move {
+            let mut builder = Request::builder().method("GET").uri(path);
+            if let Some(accept) = accept {
+                builder = builder.header(header::ACCEPT_ENCODING, accept);
+            }
+            let res = router
+                .oneshot(builder.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            let headers = res.headers().clone();
+            let bytes = res.into_body().collect().await.unwrap().to_bytes();
+            (headers, bytes)
+        }
+    };
+    let encoding = |headers: &HeaderMap| {
+        headers
+            .get(header::CONTENT_ENCODING)
+            .map(|v| v.to_str().unwrap().to_string())
+    };
+    let telemetry = "/api/v1/traffic/telemetry";
+
+    let (plain_headers, plain) = fetch(telemetry, None).await;
+    assert_eq!(encoding(&plain_headers), None, "no Accept-Encoding: plain");
+    assert!(
+        plain.len() >= 1024,
+        "the fixture must be over the threshold"
+    );
+    let plain_json: Value = serde_json::from_slice(&plain).unwrap();
+
+    let (headers, body) = fetch(telemetry, Some("gzip, deflate, br, zstd")).await;
+    assert_eq!(encoding(&headers).as_deref(), Some("gzip"));
+    assert_eq!(
+        headers.get(header::VARY).unwrap(),
+        "accept-encoding",
+        "the representation depends on Accept-Encoding"
+    );
+    assert_eq!(
+        headers.get(header::CONTENT_TYPE).unwrap(),
+        "application/json"
+    );
+    assert!(body.len() < plain.len());
+    let mut unzipped = Vec::new();
+    GzDecoder::new(&body[..])
+        .read_to_end(&mut unzipped)
+        .expect("a gzip body");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&unzipped).unwrap(),
+        plain_json
+    );
+
+    for accept in ["gzip;q=0", "identity", "br"] {
+        let (headers, body) = fetch(telemetry, Some(accept)).await;
+        assert_eq!(encoding(&headers), None, "{accept}: plain");
+        assert_eq!(body, plain, "{accept}: the same body");
+    }
+
+    let (headers, body) = fetch("/api/v1/db/stats", Some("gzip")).await;
+    assert!(body.len() < 1024, "db/stats is a small answer");
+    assert_eq!(encoding(&headers), None, "a small answer stays plain");
 }
 
 #[tokio::test]

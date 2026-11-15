@@ -2,6 +2,8 @@
 #![allow(clippy::missing_panics_doc, clippy::missing_errors_doc)]
 
 #[cfg(feature = "server")]
+mod compression;
+#[cfg(feature = "server")]
 pub mod config;
 pub mod error;
 

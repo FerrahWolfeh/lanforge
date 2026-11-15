@@ -8,6 +8,7 @@ use comfy_table::Cell;
 use inquire::{Confirm, Text};
 
 use lanforge_api::api::AuthTokenEntry;
+use lanforge_api::config_file::HumanDuration;
 use lanforge_types::auth::{ApiScope, ApiScopes};
 
 use crate::client::LanforgeClient;
@@ -228,12 +229,21 @@ pub fn parse_expires_duration(s: &str) -> Result<Option<i64>> {
         return Ok(None);
     }
 
-    let dur = if let Ok(secs) = trimmed.parse::<u64>() {
-        Duration::from_secs(secs)
-    } else {
-        duration_str::parse_std(&trimmed)
-            .map_err(|e| eyre!("Invalid expiration duration '{s}': {e}"))?
-    };
+    // Years exist only here: a token is the one duration that runs that long.
+    let secs = trimmed.strip_suffix('y').map_or_else(
+        || trimmed.parse::<HumanDuration>().ok().map(u64::from),
+        |years| {
+            years
+                .trim()
+                .parse::<u64>()
+                .ok()
+                .and_then(|y| y.checked_mul(365 * 86_400))
+        },
+    );
+    let secs = secs.ok_or_else(|| {
+        eyre!("Invalid expiration duration '{s}' (e.g. '30d', '24h', '1y', 'never')")
+    })?;
+    let dur = Duration::from_secs(secs);
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -386,6 +396,36 @@ mod tests {
         let res_secs = parse_expires_duration("3600").unwrap();
         assert!(res_secs.is_some());
         assert!(parse_expires_duration("invalid-duration-string").is_err());
+    }
+
+    /// The forms `--expires` documents ('30d', '24h', '1y') and plain seconds, to the second.
+    #[test]
+    fn test_parse_expires_duration_documented_forms() {
+        for (input, secs) in [
+            ("30d", 30 * 86_400),
+            ("24h", 86_400),
+            ("1y", 365 * 86_400),
+            ("2Y", 2 * 365 * 86_400),
+            ("90m", 5_400),
+            ("3600", 3_600),
+        ] {
+            let before = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            let at = parse_expires_duration(input)
+                .unwrap()
+                .expect("expires")
+                .cast_unsigned();
+            let after = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            assert!(
+                (before + secs..=after + secs).contains(&at),
+                "{input}: {at} not {secs} s from now"
+            );
+        }
     }
 
     #[test]

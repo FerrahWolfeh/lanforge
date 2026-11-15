@@ -158,7 +158,9 @@ impl ClientContext {
         Response::TrafficStatus(status)
     }
 
-    pub async fn handle_traffic_telemetry(&self) -> Response {
+    /// The traffic telemetry snapshot. With `since`, `history` keeps only the samples newer than
+    /// that timestamp (a polling client already holds the rest); every other field is complete.
+    pub async fn handle_traffic_telemetry(&self, since: Option<u64>) -> Response {
         let telemetry = self.ctx.traffic_telemetry().map_or_else(
             || {
                 let traffic_st = self.ctx.traffic_status();
@@ -187,7 +189,23 @@ impl ClientContext {
                     history: Vec::new(),
                 }
             },
-            |t| (*t).clone(),
+            |t| match since {
+                None => (*t).clone(),
+                Some(since) => TrafficTelemetryResponse {
+                    timestamp: t.timestamp,
+                    interfaces: t.interfaces.clone(),
+                    sqm: t.sqm.clone(),
+                    conntrack: t.conntrack.clone(),
+                    history: t
+                        .history
+                        .iter()
+                        .filter(|s| s.timestamp > since)
+                        .cloned()
+                        .collect(),
+                    wan_interface: t.wan_interface.clone(),
+                    ingress_device: t.ingress_device.clone(),
+                },
+            },
         );
 
         Response::TrafficTelemetry(Box::new(telemetry))
