@@ -246,6 +246,38 @@ fn reverse_name(ip: IpAddr) -> String {
     name
 }
 
+fn is_reverse_name(name: &str) -> bool {
+    let name = name.trim_end_matches('.').as_bytes();
+    name.len() >= 5 && name[name.len() - 5..].eq_ignore_ascii_case(b".arpa")
+}
+
+/// Whether the reverse name `name` is one of the sender's own addresses. A Bonjour Sleep Proxy
+/// answers the reverse query of each sleeping host it stands in for, from its own address: such an
+/// answer must not name the proxy.
+fn reverse_names_sender(
+    ctx: &LanforgeContext,
+    name: &str,
+    from: IpAddr,
+    mac: Option<MacAddr>,
+) -> bool {
+    let name = name.trim_end_matches('.');
+    let names = |ip: IpAddr| reverse_name(ip).eq_ignore_ascii_case(name);
+    // An IPv6 answer comes from the link-local address: the name may be another of the sender's.
+    names(from)
+        || mac.is_some_and(|mac| {
+            ctx.with_state(|s| {
+                s.devices.get(&mac).is_some_and(|dev| {
+                    dev.v4.ip().map(IpAddr::V4).is_some_and(names)
+                        || dev
+                            .v6
+                            .iter()
+                            .filter_map(IPv6State::ip)
+                            .any(|ip| names(IpAddr::V6(ip)))
+                })
+            })
+        })
+}
+
 /// Asks the owner of `ip` for its name (RFC 6762 §4: reverse address mapping).
 async fn send_reverse_query(transport: &UdpTransport, ip: IpAddr) {
     let question = DnsQuestion {
@@ -439,7 +471,14 @@ pub(crate) fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: Socke
     for record in msg.answers.iter().chain(msg.additionals.iter()) {
         match &record.rdata {
             DnsRData::SRV { target, .. } => srv_targets.push(target.as_ref()),
-            DnsRData::PTR(name) => ptr_targets.push(name.as_ref()),
+            DnsRData::PTR(name) => {
+                if is_reverse_name(&record.name)
+                    && !reverse_names_sender(ctx, &record.name, from.ip(), mac)
+                {
+                    continue;
+                }
+                ptr_targets.push(name.as_ref());
+            }
             _ => {}
         }
     }

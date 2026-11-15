@@ -12,7 +12,7 @@ use lanforge_types::network::{DnsClass, DnsMessage, DnsRData, DnsRecord, DnsReco
 use lanforge_types::system::{ServiceId, ServiceState};
 use lanforge_types::update::DeviceUpdate;
 use std::fs;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
@@ -325,6 +325,69 @@ async fn ipv6_only_device_is_asked_on_the_ipv6_group() {
         reverse_query("2.0.0.0.1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.d.f.ip6.arpa")
     );
     assert_eq!(to, SocketAddr::from((MDNS_V6, 5353)));
+    running.stop().await;
+}
+
+/// A Bonjour Sleep Proxy answers the reverse query of a sleeping host from its own address:
+/// that answer names neither the proxy nor its address.
+#[tokio::test(start_paused = true)]
+async fn sleep_proxy_answer_does_not_name_the_proxy() {
+    let ctx = context();
+    let proxy = MacAddr([0x02, 0, 0, 0, 0, 0x41]);
+    let proxy_ip = Ipv4Addr::new(192, 168, 1, 41);
+    let _ = ctx.apply(DeviceUpdate::ArpSeen {
+        mac: proxy,
+        ip: proxy_ip,
+        is_active: true,
+    });
+    let (handle, running) = start_inert(&ctx).await;
+
+    handle
+        .inject(
+            answer(vec![ptr("40.1.168.192.in-addr.arpa", "macbook.local.")]),
+            SocketAddr::from((proxy_ip, 5353)),
+        )
+        .await;
+    // The proxy's own answer, sent after, is applied: the first one was handled before it.
+    handle
+        .inject(
+            answer(vec![ptr("41.1.168.192.in-addr.arpa", "apple-tv.local.")]),
+            SocketAddr::from((proxy_ip, 5353)),
+        )
+        .await;
+    assert_eq!(hostname_of(&ctx, proxy).await, "apple-tv");
+    let transient = ctx
+        .get_transient_host(&IpAddr::V4(proxy_ip))
+        .expect("transient host");
+    assert_eq!(transient.hostname.name, "apple-tv");
+    running.stop().await;
+}
+
+/// An IPv6 answer comes from the responder's link-local address; a reverse name of another of
+/// its addresses still names it.
+#[tokio::test(start_paused = true)]
+async fn ipv6_answer_from_link_local_names_the_device() {
+    let ctx = context();
+    let mac = MacAddr([0x02, 0, 0, 0, 0, 0x42]);
+    let ula: Ipv6Addr = "fd00::42".parse().expect("address");
+    let link_local: Ipv6Addr = "fe80::42".parse().expect("address");
+    for ip in [ula, link_local] {
+        let _ = ctx.apply(DeviceUpdate::NdpSeen {
+            mac,
+            ip,
+            is_active: true,
+        });
+    }
+    let (handle, running) = start_inert(&ctx).await;
+
+    let name = "2.4.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.d.f.ip6.arpa";
+    handle
+        .inject(
+            answer(vec![ptr(name, "pixel.local.")]),
+            SocketAddr::from((link_local, 5353)),
+        )
+        .await;
+    assert_eq!(hostname_of(&ctx, mac).await, "pixel");
     running.stop().await;
 }
 
