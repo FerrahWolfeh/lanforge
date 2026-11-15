@@ -2,5 +2,7 @@
 
 [mdns]
 enabled = true
-# Full network probe interval; probing too often is multicast noise.
+# Interval of the DNS-SD service meta-query (classifies devices by their service types);
+# probing too often is multicast noise. Devices without a name are asked for it on their own
+# schedule (2 s after they show up, 1 min, 10 min, then hourly), on the LAN only.
 probe_interval = "1h"
