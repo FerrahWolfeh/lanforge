@@ -348,8 +348,9 @@ impl AdBlocker {
 
     /// The groups of the client at `ip`. Without groups or `bypass` every client is only in the
     /// global group and nothing is looked up; a `dev:` selector looks the client's device up by its
-    /// address (lease, static host, neighbour cache). An address no device is known for gets
-    /// only what its subnet selectors give, never `bypass` by accident of an unknown name.
+    /// address (lease, static host, neighbour cache, or an address linked to it). An address no
+    /// device is known for gets only what its subnet selectors give, never `bypass` by accident
+    /// of an unknown name.
     pub fn client_layers(&self, ctx: &LanforgeContext, ip: IpAddr) -> ClientLayers {
         let layers = self.layers.read().clone();
         if layers.bypass.is_empty() && layers.groups.len() == 1 {
@@ -361,6 +362,7 @@ impl AdBlocker {
             None
         };
         ctx.with_state(|state| {
+            let mac = mac.or_else(|| layers.by_device.then(|| state.linked_device(ip)).flatten());
             let device = mac.and_then(|m| state.devices.get(&m)).map(|d| &**d);
             let is = |s: &ClientSelector| s.matches(ip, mac, device);
             if layers.bypass.iter().any(is) {
