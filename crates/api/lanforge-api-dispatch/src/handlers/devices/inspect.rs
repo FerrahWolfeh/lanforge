@@ -24,6 +24,7 @@ impl ClientContext {
                     |ip| {
                         self.ctx
                             .get_mac_by_ip(ip)
+                            .or_else(|| self.ctx.with_state(|s| s.linked_device(ip)))
                             .and_then(|m| self.ctx.get_device(&m))
                     },
                 )

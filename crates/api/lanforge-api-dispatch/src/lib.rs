@@ -120,6 +120,20 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
+    async fn device_linked_addresses_set(
+        &self,
+        mac: MacAddr,
+        addresses: Vec<IpAddr>,
+    ) -> Result<SimpleSuccess, RpcCallError> {
+        match self
+            .handle_device_linked_addresses_set(mac, addresses)
+            .await
+        {
+            Response::Success(s) => Ok(s),
+            other => Err(Self::map_failure(other)),
+        }
+    }
+
     async fn reload(&self) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_reload().await {
             Response::Success(s) => Ok(s),

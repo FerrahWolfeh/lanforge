@@ -163,6 +163,7 @@ On connection, the server emits up to `initial` historical entries (oldest-first
 | `GET` | `/api/v1/devices/{target}` | `whois` | Detail for one device. `{target}` = MAC, IP, or hostname |
 | `DELETE` | `/api/v1/devices/{target}` | `purge` | Remove device from memory and DB |
 | `POST` | `/api/v1/devices/{target}/wol` | `wol` | Send Wake-on-LAN magic packet |
+| `PUT` | `/api/v1/devices/{mac}/linked` | `device_linked_addresses_set` | Body `{"addresses": [...]}`: the addresses linked to the device (its tailnet / VPN addresses), a full list (`[]` unlinks). DNS stats and `dev:` adblock selectors count them as the device; DNS answers, rewrites, forwards and the firewall never use them. 400 for another device's LAN address, one linked elsewhere, loopback/link-local/multicast, more than 16; 404 for an unknown device |
 | `GET` | `/api/v1/topology` | `topology` | Inferred physical network topology |
 
 #### `GET /api/v1/devices` — Query Parameters

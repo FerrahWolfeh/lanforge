@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io;
 use std::marker::PhantomData;
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -261,6 +261,7 @@ pub mod config_keys {
     use lanforge_types::logging::LogFilter;
     use lanforge_types::network::Ipv6Prefix;
     use std::collections::BTreeMap;
+    use std::net::IpAddr;
 
     pub const LAST_GUA_PREFIX: ConfigKey<Ipv6Prefix> = ConfigKey::new("last_gua_prefix");
     /// The log filter saved through the API (a logging switch: state, not file config).
@@ -270,11 +271,17 @@ pub mod config_keys {
     /// MAC): state learned at the first mention, so a restart opens no race for the name.
     pub const NAME_BINDINGS: ConfigKey<BTreeMap<String, MacAddr>> = ConfigKey::new("name_bindings");
 
+    /// Addresses linked to a device (tailnet / VPN address → MAC): a `WebUI` convenience that
+    /// attributes DNS clients to their device, state like the DNS log switches.
+    pub const LINKED_ADDRESSES: ConfigKey<BTreeMap<IpAddr, MacAddr>> =
+        ConfigKey::new("linked_addresses");
+
     /// The keys of the config table still in use; any other was left by an older binary.
-    pub const IN_USE: [&str; 3] = [
+    pub const IN_USE: [&str; 4] = [
         LAST_GUA_PREFIX.name(),
         LOG_FILTER.name(),
         NAME_BINDINGS.name(),
+        LINKED_ADDRESSES.name(),
     ];
 }
 
@@ -384,6 +391,14 @@ pub trait NameBindingStore: Send + Sync {
 
     /// Replaces the saved bindings with `bindings`.
     fn save_name_bindings(&self, bindings: &BTreeMap<String, MacAddr>) -> Result<(), DbError>;
+}
+
+/// The addresses linked to devices (see `LINKED_ADDRESSES`), kept across restarts.
+pub trait LinkedAddressStore: Send + Sync {
+    fn load_linked_addresses(&self) -> Result<BTreeMap<IpAddr, MacAddr>, DbError>;
+
+    /// Replaces the saved links with `links`.
+    fn save_linked_addresses(&self, links: &BTreeMap<IpAddr, MacAddr>) -> Result<(), DbError>;
 }
 
 /// Handles storage and administration of user accounts.

@@ -1947,3 +1947,174 @@ async fn query_log_names_a_client_from_its_transient_host() {
     };
     assert_eq!(log.entries[0].src_hostname.as_deref(), Some("archie"));
 }
+
+/// A storage-backed client whose DB worker serves (see `a_fresh_query_is_in_the_log_at_once`).
+async fn served_client() -> ClientContext {
+    let client = init_test_context().await;
+    let storage = loop {
+        if let Some(s) = client.ctx.storage_handle() {
+            break s;
+        }
+        yield_now().await;
+    };
+    storage
+        .call(|s: &Stores| s.db.is_provisioned())
+        .await
+        .unwrap();
+    sleep(Duration::from_millis(20)).await;
+    client
+}
+
+/// A device with a `DHCPv4` lease and a name.
+fn leased_device(client: &ClientContext, mac: MacAddr, ip: &str, name: &str) {
+    let expires = SystemTime::now() + Duration::from_secs(3600);
+    let ip = ip.parse().unwrap();
+    let _ = client
+        .ctx
+        .apply(DeviceUpdate::V4LeaseGranted { mac, ip, expires });
+    let _ = client.ctx.apply(DeviceUpdate::DhcpHostnameHint {
+        mac,
+        hostname: name.to_string(),
+    });
+}
+
+/// Publishes `n` answered queries from `src` (as the DNS service does).
+fn queries_from(client: &ClientContext, src: &str, n: usize) {
+    use lanforge_types::network::dns::{QueryLogEntry, QueryResult, TransportProtocol};
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    for i in 0..n {
+        let _ = client
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::Dns(DnsEvent::QueryResolved(Arc::new(
+                QueryLogEntry {
+                    timestamp: now,
+                    src_ip: src.parse().unwrap(),
+                    domain: Arc::from(format!("q{i}.example.org")),
+                    upstream_us: 0,
+                    qtype: DnsRecordType::A,
+                    result: QueryResult::Forwarded,
+                    cached: false,
+                    src_mac: None,
+                    answer: None,
+                    protocol: TransportProtocol::Udp,
+                    filter: None,
+                    coalesce_id: None,
+                    repeats: 1,
+                    upstream: None,
+                },
+            ))));
+    }
+}
+
+/// Linking a device's tailnet addresses: listed on the device, found by `whois`, refused for
+/// another device's LAN address, an address linked elsewhere, a link-local one or an unknown
+/// device (all 4xx, nothing applied).
+#[tokio::test]
+async fn linked_addresses_are_set_listed_and_checked() {
+    let client = served_client().await;
+    let phone = MacAddr::parse("02:00:00:00:00:61").unwrap();
+    let pc = MacAddr::parse("02:00:00:00:00:62").unwrap();
+    leased_device(&client, phone, "192.168.1.61", "s26-ultra");
+    leased_device(&client, pc, "192.168.1.62", "archie");
+    let tailnet: IpAddr = "100.64.0.6".parse().unwrap();
+    let tailnet6: IpAddr = "fd7a:115c:a1e0::1537:ab07".parse().unwrap();
+
+    let res = client
+        .handle_device_linked_addresses_set(phone, vec![tailnet6, tailnet, tailnet])
+        .await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    let Response::Whois(who) = client.handle_whois("100.64.0.6".into()).await else {
+        panic!("whois by a linked address");
+    };
+    assert_eq!(who.entry.mac, phone);
+    assert_eq!(who.entry.linked_addresses, [tailnet, tailnet6]);
+
+    for (mac, addresses) in [
+        (pc, vec!["192.168.1.61".parse().unwrap()]),
+        (pc, vec![tailnet]),
+        (pc, vec!["fe80::1".parse().unwrap()]),
+    ] {
+        let res = client
+            .handle_device_linked_addresses_set(mac, addresses.clone())
+            .await;
+        assert!(
+            matches!(res, Response::Rejected { .. }),
+            "{addresses:?}: {res:?}"
+        );
+    }
+    let unknown = MacAddr::parse("02:00:00:00:00:99").unwrap();
+    let res = client
+        .handle_device_linked_addresses_set(unknown, vec!["100.64.0.9".parse().unwrap()])
+        .await;
+    assert!(matches!(res, Response::NotFound { .. }), "{res:?}");
+    assert_eq!(client.ctx.linked_addresses().len(), 2);
+
+    // An empty list unlinks.
+    let res = client
+        .handle_device_linked_addresses_set(phone, Vec::new())
+        .await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    assert!(client.ctx.linked_addresses().is_empty());
+}
+
+/// The query log names a client by the device its address is linked to, and the top clients
+/// fold a device's LAN and linked addresses into one row (busiest address first).
+#[tokio::test]
+async fn linked_addresses_count_as_their_device() {
+    let client = served_client().await;
+    let phone = MacAddr::parse("02:00:00:00:00:61").unwrap();
+    leased_device(&client, phone, "192.168.1.61", "S26-Ultra-de-Pedro");
+    let res = client
+        .handle_device_linked_addresses_set(
+            phone,
+            vec![
+                "100.64.0.6".parse().unwrap(),
+                "fd7a:115c:a1e0::1537:ab07".parse().unwrap(),
+            ],
+        )
+        .await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+
+    queries_from(&client, "192.168.1.61", 2);
+    queries_from(&client, "100.64.0.6", 3);
+    queries_from(&client, "fd7a:115c:a1e0::1537:ab07", 1);
+    queries_from(&client, "192.168.1.80", 4);
+    sleep(Duration::from_millis(50)).await;
+
+    let Response::DnsQueryLog(log) = client
+        .handle_dns_query_log(
+            None,
+            Some("100.64.0.6".into()),
+            None,
+            None,
+            None,
+            false,
+            None,
+        )
+        .await
+    else {
+        panic!("query log");
+    };
+    assert!(!log.entries.is_empty());
+    assert!(log.entries.iter().all(
+        |e| e.src_mac == Some(phone) && e.src_hostname.as_deref() == Some("S26-Ultra-de-Pedro")
+    ));
+
+    let Response::DnsAnalytics(stats) = client.handle_dns_analytics(Some(10), None).await else {
+        panic!("analytics");
+    };
+    let rows: Vec<(&str, u64, usize)> = stats
+        .top_clients
+        .iter()
+        .map(|c| (c.ip.as_str(), c.count, c.addresses.len()))
+        .collect();
+    assert_eq!(rows, [("100.64.0.6", 6, 3), ("192.168.1.80", 4, 1)]);
+    assert_eq!(
+        stats.top_clients[0].hostname.as_deref(),
+        Some("S26-Ultra-de-Pedro")
+    );
+}

@@ -63,6 +63,12 @@ pub trait LanforgeRpc {
         &self,
         query: Box<DeviceListQuery>,
     ) -> impl Future<Output = Result<DevicesResponse, RpcCallError>> + Send;
+    /// Replaces the addresses linked to a device (tailnet / VPN addresses).
+    fn device_linked_addresses_set(
+        &self,
+        mac: MacAddr,
+        addresses: Vec<IpAddr>,
+    ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn reload(&self) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn log(
         &self,

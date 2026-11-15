@@ -1028,6 +1028,33 @@ mod tests {
     }
 
     #[test]
+    fn the_linked_addresses_are_saved_and_cleared() {
+        use lanforge_db_core::LinkedAddressStore;
+        use lanforge_db_core::config_keys::IN_USE;
+        use lanforge_types::identifiers::MacAddr;
+        use std::collections::BTreeMap;
+        use std::net::IpAddr;
+
+        let db = RedbDatabase::open_temp().unwrap();
+        assert!(db.load_linked_addresses().unwrap().is_empty());
+        let links: BTreeMap<IpAddr, MacAddr> = [
+            ("100.64.0.6".parse().unwrap(), MacAddr([2, 0, 0, 0, 0, 1])),
+            (
+                "fd7a:115c:a1e0::1537:ab07".parse().unwrap(),
+                MacAddr([2, 0, 0, 0, 0, 1]),
+            ),
+        ]
+        .into_iter()
+        .collect();
+        db.save_linked_addresses(&links).unwrap();
+        assert_eq!(db.load_linked_addresses().unwrap(), links);
+        // The key is in use: the start-up sweep of stale config keys keeps it.
+        assert!(IN_USE.contains(&"linked_addresses"));
+        db.save_linked_addresses(&BTreeMap::new()).unwrap();
+        assert!(db.load_linked_addresses().unwrap().is_empty());
+    }
+
+    #[test]
     fn the_name_bindings_are_saved_replaced_and_cleared() {
         use lanforge_db_core::NameBindingStore;
         use lanforge_types::identifiers::MacAddr;

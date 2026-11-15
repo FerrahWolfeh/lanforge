@@ -76,6 +76,16 @@
 						</span>
 					</div>
 				{/if}
+				{#if device.linked_addresses?.length}
+					<div class="flex justify-between items-start gap-3 border-b border-border/50 pb-2">
+						<span class="text-muted-foreground font-medium">Linked Addresses</span>
+						<span class="font-mono text-foreground text-right">
+							{#each device.linked_addresses as address (address)}
+								<span class="block">{address}</span>
+							{/each}
+						</span>
+					</div>
+				{/if}
 				<div class="flex justify-between items-center border-b border-border/50 pb-2">
 					<span class="text-muted-foreground font-medium">Discovery Origin</span>
 					<Badge variant="outline">{device.origin || "Dynamic"}</Badge>

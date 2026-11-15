@@ -4,7 +4,7 @@
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import * as Empty from "$lib/components/ui/empty";
 	import UsersIcon from "@lucide/svelte/icons/users";
-	import type { DnsAnalyticsResponse, TopClientEntry } from "$lib/api/types";
+	import type { DnsAnalyticsResponse } from "$lib/api/types";
 
 	let {
 		loading = true,
@@ -14,44 +14,7 @@
 		analyticsData?: DnsAnalyticsResponse | null;
 	} = $props();
 
-	const topClientsList = $derived.by(() => {
-		const clients = analyticsData?.top_clients ?? [];
-		if (clients.length === 0) {
-			return [
-				{
-					ip: "192.168.1.105",
-					hostname: "faiko-desktop.lan",
-					count: 3420,
-					blocked_count: 512,
-				},
-				{
-					ip: "192.168.1.112",
-					hostname: "livingroom-tv.lan",
-					count: 1840,
-					blocked_count: 820,
-				},
-				{
-					ip: "192.168.1.120",
-					hostname: "pixel-8-pro.lan",
-					count: 1120,
-					blocked_count: 195,
-				},
-				{
-					ip: "192.168.1.1",
-					hostname: "openwrt-gateway.local",
-					count: 950,
-					blocked_count: 0,
-				},
-				{
-					ip: "192.168.1.150",
-					hostname: "nas-storage.lan",
-					count: 610,
-					blocked_count: 12,
-				},
-			];
-		}
-		return clients;
-	});
+	const topClientsList = $derived(analyticsData?.top_clients ?? []);
 
 	const maxClientQueries = $derived.by(() => {
 		if (topClientsList.length === 0) return 1;
@@ -134,10 +97,12 @@
 										{client.hostname || client.ip}
 									</span>
 									{#if client.hostname}
+										{@const others = (client.addresses?.length ?? 1) - 1}
 										<span
 											class="text-[10px] font-mono text-muted-foreground truncate"
+											title={client.addresses?.join("\n")}
 										>
-											{client.ip}
+											{client.ip}{others > 0 ? ` +${others} more` : ""}
 										</span>
 									{/if}
 								</div>

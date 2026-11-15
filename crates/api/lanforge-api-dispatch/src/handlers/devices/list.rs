@@ -117,6 +117,7 @@ impl ClientContext {
             vlan_id: dev.vlan_id(),
             ignore_dns_log: dev.ignore_dns_log,
             ignored_log_domains: dev.ignored_log_domains.clone(),
+            linked_addresses: self.ctx.with_state(|s| s.linked_addresses_of(dev.mac)),
             duid: dev.duid.clone(),
             primary_v4: dev.primary_v4(),
             primary_v6: dev.primary_v6(gua_prefix, ula_prefix),

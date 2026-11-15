@@ -5,6 +5,7 @@ pub mod handlers;
 pub mod indices;
 #[cfg(test)]
 pub mod jit_tests;
+pub mod linked;
 pub mod names;
 pub mod network;
 #[cfg(test)]
@@ -61,6 +62,7 @@ impl State {
             | DeviceUpdate::CliHostUpdated { .. }
             | DeviceUpdate::IgnoreDnsLogSet { .. }
             | DeviceUpdate::IgnoredLogDomainsSet { .. }
+            | DeviceUpdate::LinkedAddressesSet { .. }
             | DeviceUpdate::ClassHint { .. } => self.apply_host_meta_update(update, discovery),
 
             DeviceUpdate::HostRemoved { .. }
@@ -151,6 +153,9 @@ impl State {
                 self.handle_ignored_log_domains_set(mac, domains)
             }
             DeviceUpdate::ClassHint { mac, class } => self.handle_class_hint(mac, class),
+            DeviceUpdate::LinkedAddressesSet { mac, addresses } => {
+                self.set_linked_addresses(mac, addresses)
+            }
             _ => unreachable!(),
         }
     }
@@ -201,6 +206,10 @@ pub struct State {
     /// The last bound name refused to each device, so a repeated claim is reported once.
     #[serde(skip)]
     pub hostname_refusals: HashMap<MacAddr, String>,
+    /// Addresses linked to a device (tailnet / VPN), canonical address → MAC; kept in redb.
+    /// See `linked.rs`.
+    #[serde(skip)]
+    pub linked_addresses: HashMap<IpAddr, MacAddr>,
 }
 
 impl State {
@@ -336,7 +345,7 @@ impl State {
         ip: IpAddr,
         mac: Option<MacAddr>,
     ) -> (Option<MacAddr>, Option<String>) {
-        let mac = mac.or_else(|| self.get_mac_by_ip(ip));
+        let mac = mac.or_else(|| self.client_device(ip));
         let name = mac.and_then(|m| self.device_name(m)).or_else(|| {
             self.transient_hosts
                 .get(&ip.to_canonical())
@@ -697,6 +706,16 @@ impl State {
             .is_ok_and(|age| age >= Self::TRANSIENT_MAX_AGE)
     }
 
+    /// How long `dev` may stay unseen before it is pruned; a device with linked addresses is
+    /// kept like one with admin settings.
+    fn prune_retention(&self, mac: MacAddr, dev: &Device) -> Option<Duration> {
+        if self.has_linked_addresses(mac) {
+            None
+        } else {
+            dev.prune_retention()
+        }
+    }
+
     /// Advances every device's prune clock (dropping clocks of devices that are gone) and
     /// reports whether [`Self::prune_zombies`] would remove anything.
     #[must_use]
@@ -706,7 +725,7 @@ impl State {
             .retain(|mac, _| self.devices.contains_key(mac));
         let mut due = false;
         for (mac, dev) in &self.devices {
-            due |= discovery.prune_expired(*mac, dev.prune_retention(), now);
+            due |= discovery.prune_expired(*mac, self.prune_retention(*mac, dev), now);
         }
         let wall = SystemTime::now();
         due || self
@@ -719,8 +738,14 @@ impl State {
     /// and old transient hosts. Returns one `DeviceEvent::Purged` per removed device.
     pub fn prune_zombies(&mut self, discovery: &DiscoveryStore, now: Instant) -> EventVec {
         let mut removed = Vec::new();
+        let linked: HashSet<MacAddr> = self.linked_addresses.values().copied().collect();
         self.devices.retain(|mac, dev| {
-            let expired = discovery.prune_expired(*mac, dev.prune_retention(), now);
+            let retention = if linked.contains(mac) {
+                None
+            } else {
+                dev.prune_retention()
+            };
+            let expired = discovery.prune_expired(*mac, retention, now);
             if expired {
                 discovery.prune_clock.remove(mac);
                 removed.push(*mac);

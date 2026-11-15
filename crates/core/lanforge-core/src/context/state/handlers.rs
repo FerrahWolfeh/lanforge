@@ -277,6 +277,7 @@ impl State {
                 vec![LanforgeEvent::Device(DeviceEvent::Purged { mac })].into();
             // Deleting a device is how the admin frees the names bound to it.
             events.extend(self.unbind_names_of(mac));
+            events.extend(self.unlink_addresses_of(mac));
             return events;
         }
         EventVec::new()

@@ -1630,6 +1630,33 @@ fn prune_never_removes_a_device_with_admin_settings() {
     assert!(ctx.get_device(&named).is_some());
 }
 
+/// A device with linked addresses (its tailnet address) is kept like one with admin settings,
+/// and deleting it drops its links.
+#[test]
+fn linked_addresses_keep_their_device_and_go_with_it() {
+    let ctx = setup();
+    let (mac, dev) = device(1, "");
+    ctx.insert_device(mac, dev);
+    let tailnet: IpAddr = "100.64.0.6".parse().unwrap();
+    let _ = ctx.apply(DeviceUpdate::LinkedAddressesSet {
+        mac,
+        addresses: vec![tailnet],
+    });
+    assert_eq!(ctx.with_state(|s| s.client_device(tailnet)), Some(mac));
+    assert_eq!(ctx.with_state(|s| s.get_mac_by_ip(tailnet)), None);
+    let t0 = Instant::now();
+
+    let _ = ctx.prune_zombies_at(t0);
+    let _ = ctx.prune_zombies_at(t0 + Device::ANONYMOUS_RETENTION);
+    assert!(
+        ctx.get_device(&mac).is_some(),
+        "pruned with a linked address"
+    );
+
+    let _ = ctx.apply(DeviceUpdate::HostRemoved { mac });
+    assert!(ctx.linked_addresses().is_empty());
+}
+
 #[test]
 fn test_reverse_resolvers_management() {
     use lanforge_types::network::{DnsReverseResolver, IpSubnet};

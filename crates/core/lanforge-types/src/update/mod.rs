@@ -207,4 +207,9 @@ pub enum DeviceUpdate {
         entries: Vec<(MacAddr, IpAddr, bool)>,
     },
     TransientHostResolved(Box<TransientHostUpdate>),
+    /// The admin set the addresses linked to a device (tailnet / VPN addresses): a full list.
+    LinkedAddressesSet {
+        mac: MacAddr,
+        addresses: Vec<IpAddr>,
+    },
 }

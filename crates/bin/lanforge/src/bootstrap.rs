@@ -15,7 +15,8 @@ use lanforge_core::context::state::State;
 use lanforge_core::context::{ConfigPatch, LanforgeContext};
 use lanforge_core::logging::LogLevels;
 use lanforge_db::{
-    LanforgeDb, LogDb, LogFilterStore, LogStore, NameBindingStore, PrefixStore, UserStore,
+    LanforgeDb, LinkedAddressStore, LogDb, LogFilterStore, LogStore, NameBindingStore, PrefixStore,
+    UserStore,
 };
 #[cfg(feature = "dhcp")]
 use lanforge_dhcp::v4::sanity::derive_dhcp_defaults_from_v4;
@@ -205,6 +206,10 @@ impl Bootstrapper {
         match db.load_name_bindings() {
             Ok(bindings) => ctx.restore_name_bindings(bindings),
             Err(e) => warn!("Could not read the saved name bindings: {e}"),
+        }
+        match db.load_linked_addresses() {
+            Ok(links) => ctx.restore_linked_addresses(links),
+            Err(e) => warn!("Could not read the saved linked addresses: {e}"),
         }
         // `[hosts]` is the static hosts' only source: the table follows it.
         if let Some(hosts) = cfg.static_hosts.as_ref() {

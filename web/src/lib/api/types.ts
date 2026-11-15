@@ -626,6 +626,8 @@ export interface DeviceEntry {
 	vlan_id?: number | null;
 	ignore_dns_log?: boolean;
 	ignored_log_domains?: string[];
+	/** Addresses linked to the device outside the LAN (its tailnet address). */
+	linked_addresses?: string[];
 }
 
 export interface DevicesMeta {
@@ -819,10 +821,13 @@ export interface TopDomainEntry {
 }
 
 export interface TopClientEntry {
+	/** The client's busiest address. */
 	ip: string;
 	hostname: string | null;
 	count: number;
 	blocked_count?: number;
+	/** Every address counted in this row: one device's LAN and linked addresses. */
+	addresses?: string[];
 }
 
 export interface QueryTypeEntry {

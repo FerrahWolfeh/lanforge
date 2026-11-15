@@ -1414,6 +1414,26 @@ impl LanforgeClient {
             .map_err(|e| eyre!("{e}"))
     }
 
+    pub async fn device_linked_addresses_set(
+        &self,
+        mac: MacAddr,
+        addresses: Vec<IpAddr>,
+    ) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self
+                .http_put(
+                    &format!("/devices/{mac}/linked"),
+                    &serde_json::json!({ "addresses": addresses }),
+                )
+                .await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.device_linked_addresses_set(mac, addresses)
+            .await
+            .map_err(|e| eyre!("{e}"))
+    }
+
     pub async fn dns_adblock_device_change(
         &self,
         mac: MacAddr,

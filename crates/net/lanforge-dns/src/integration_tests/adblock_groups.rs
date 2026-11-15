@@ -459,3 +459,54 @@ async fn a_list_added_while_down_is_downloaded_at_boot() {
     wait_for(&dns, "192.168.1.70", "games.example.com", BLOCKED).await;
     ctx.terminate();
 }
+
+/// An address linked to a device (its tailnet address) is in the device's `dev:` groups and
+/// bypass: the phone keeps its `bradesco` group when it queries over Tailscale. An address
+/// linked to nobody gets only the global layer.
+#[tokio::test]
+async fn a_linked_address_is_in_its_devices_groups() {
+    use lanforge_types::update::DeviceUpdate;
+
+    let ctx = init_test_context();
+    ctx.apply_config(ConfigPatch::new().with_dns_adblock_policy(owner_policy(1)));
+    let mac = |m: &str| MacAddr::parse(m).unwrap();
+    register_test_device(
+        &ctx,
+        "pixel-faiko",
+        mac(PIXEL),
+        Ipv4Addr::new(192, 168, 1, 50),
+    );
+    register_test_device(
+        &ctx,
+        "notebook",
+        mac(NOTEBOOK),
+        Ipv4Addr::new(192, 168, 1, 30),
+    );
+    let _ = ctx.apply(DeviceUpdate::LinkedAddressesSet {
+        mac: mac(PIXEL),
+        addresses: vec![
+            "100.64.0.6".parse().unwrap(),
+            "fd7a:115c:a1e0::1537:ab07".parse().unwrap(),
+        ],
+    });
+    let _ = ctx.apply(DeviceUpdate::LinkedAddressesSet {
+        mac: mac(NOTEBOOK),
+        addresses: vec!["100.64.0.9".parse().unwrap()],
+    });
+    let filter = AdBlocker::new(true);
+    filter.sync_from_context(&ctx);
+
+    for ip in ["100.64.0.6", "fd7a:115c:a1e0::1537:ab07"] {
+        let layers = filter.client_layers(&ctx, ip.parse().unwrap());
+        assert_eq!(filter.group_names(layers), ["bradesco"], "{ip}");
+    }
+    assert!(
+        filter
+            .client_layers(&ctx, "100.64.0.9".parse().unwrap())
+            .bypass
+    );
+    assert_eq!(
+        filter.client_layers(&ctx, "100.64.0.7".parse().unwrap()),
+        ClientLayers::GLOBAL
+    );
+}

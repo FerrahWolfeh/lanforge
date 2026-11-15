@@ -329,6 +329,7 @@ const fn event_topic_and_kind(event: &LanforgeEvent) -> (&'static str, &'static 
                 StorageEvent::DbWrite { .. } => "DbWrite",
                 StorageEvent::SaveTrafficHistory(_) => "SaveTrafficHistory",
                 StorageEvent::NameBindingsChanged => "NameBindingsChanged",
+                StorageEvent::LinkedAddressesChanged => "LinkedAddressesChanged",
             },
         ),
         LanforgeEvent::Pppoe(p) => (
