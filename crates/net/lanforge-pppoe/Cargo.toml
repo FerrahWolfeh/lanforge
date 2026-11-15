@@ -31,7 +31,7 @@ postcard = { workspace = true }
 sd-notify = { workspace = true, features = ["fdstore"] }
 
 # Third party protocol / low level
-nix = { version = "0.31.3", features = ["socket", "ioctl", "net", "fs"] }
+nix = { version = "0.30.1", features = ["socket", "ioctl", "net", "fs"] }
 md-5 = "0.11.0"
 smallvec = { workspace = true }
 
