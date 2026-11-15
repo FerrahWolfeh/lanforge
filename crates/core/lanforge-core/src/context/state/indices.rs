@@ -40,14 +40,28 @@ impl Indices {
         }
     }
 
-    pub fn index_device(&mut self, mac: MacAddr, dev: &Device) {
+    /// Indexes `dev` under `mac`. A name follows the last device indexed with it, except that a
+    /// non-static device never takes a static host's name (`is_static` tells which MACs are):
+    /// the admin named that host in `[hosts]`, and `dev:<name>` already resolves it first.
+    pub fn index_device(
+        &mut self,
+        mac: MacAddr,
+        dev: &Device,
+        is_static: impl Fn(&MacAddr) -> bool,
+    ) {
         if !dev.hostname.name.is_empty() {
             let key = if dev.hostname.name.bytes().any(|b| b.is_ascii_uppercase()) {
                 dev.hostname.name.to_ascii_lowercase()
             } else {
                 dev.hostname.name.clone()
             };
-            self.name_index.insert(key, mac);
+            let static_holder = self
+                .name_index
+                .get(&key)
+                .is_some_and(|held| *held != mac && is_static(held));
+            if dev.is_static() || !static_holder {
+                self.name_index.insert(key, mac);
+            }
         }
         self.name_index.insert(dev.dns_fallback.clone(), mac);
 

@@ -12,9 +12,10 @@ use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::system::{Cap, ServiceId, ServiceState, SystemStatus};
 use lanforge_types::update::DeviceUpdate;
 use std::iter;
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::task::yield_now;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -608,5 +609,34 @@ fn a_device_dropping_a_shared_name_keeps_the_holder_indexed() {
     assert_eq!(ctx.get_by_hostname("nas").map(|d| d.mac), Some(nas));
 
     let _ = hint(&ctx, announcer, "tablet");
+    assert_eq!(ctx.get_by_hostname("nas").map(|d| d.mac), Some(nas));
+}
+
+/// A device announcing a static host's name took the name index entry the DNS resolver reads
+/// (`nas.lan` answered the announcer) while `dev:nas` still found the static host.
+#[test]
+fn an_announcer_never_takes_a_static_hosts_dns_name() {
+    use lanforge_types::device::StaticHost;
+
+    let ctx = new_ctx();
+    let nas = MacAddr([2, 0, 0, 0, 5, 1]);
+    let issues = ctx.apply_static_hosts(&[StaticHost {
+        mac: nas,
+        hostname: "nas".to_string(),
+        v4: None,
+        v6: None,
+        boot_file: None,
+    }]);
+    assert!(issues.is_empty(), "{issues:?}");
+
+    let _ = hint(&ctx, INTRUDER, "NAS");
+    let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
+        mac: INTRUDER,
+        ip: Ipv4Addr::new(192, 168, 1, 66),
+        expires: SystemTime::now() + Duration::from_hours(1),
+    });
+    assert_eq!(ctx.get_by_hostname("nas").map(|d| d.mac), Some(nas));
+    // A full rebuild (boot, indexing switched on) keeps it too.
+    ctx.with_state_mut(State::rebuild_indices);
     assert_eq!(ctx.get_by_hostname("nas").map(|d| d.mac), Some(nas));
 }

@@ -235,8 +235,9 @@ impl State {
         if self.indexing_enabled || dev.is_static() {
             let ula_prefix = self.active_ula_prefix();
             let gua_prefix = self.active_gua_prefix();
+            let devices = &self.devices;
             let indices = Arc::make_mut(&mut self.indices);
-            indices.index_device(mac, dev);
+            indices.index_device(mac, dev, |m| devices.get(m).is_some_and(|d| d.is_static()));
 
             for state in &dev.v6 {
                 if let IPv6State::Static(Ipv6AddrOrSuffix::Suffix(suf), _) = state {
@@ -500,9 +501,10 @@ impl State {
         let indexing_enabled = self.indexing_enabled;
         let indices = Arc::make_mut(&mut self.indices);
         indices.clear();
-        for (mac, dev) in &self.devices {
+        let devices = &self.devices;
+        for (mac, dev) in devices {
             if (indexing_enabled || dev.is_static()) && dev.is_worthy() {
-                indices.index_device(*mac, dev);
+                indices.index_device(*mac, dev, |m| devices.get(m).is_some_and(|d| d.is_static()));
                 for state in &dev.v6 {
                     if let IPv6State::Static(Ipv6AddrOrSuffix::Suffix(suf), _) = state {
                         for prefix in [ula_prefix, gua_prefix].into_iter().flatten() {
