@@ -1171,14 +1171,12 @@ mod tests {
         cfg.firewall_toml = from_file.effective(Some(&cfg.pppoe_toml.nftables), true, "lan0");
         assert_eq!(cfg.firewall_toml, live, "the daemon runs the live firewall");
 
+        // Compared as values: `fib` flags are a set, serialized in no fixed order.
         let ruleset = |fw: &FirewallConfig| {
-            serde_json::to_string(
-                &RulesetBuilder::new(fw)
-                    .with_active_wan(Some("ppp0"))
-                    .with_primary_lan(Some("lan0"))
-                    .build(),
-            )
-            .unwrap()
+            RulesetBuilder::new(fw)
+                .with_active_wan(Some("ppp0"))
+                .with_primary_lan(Some("lan0"))
+                .build()
         };
         assert_eq!(ruleset(&cfg.firewall_toml), ruleset(&live));
     }
