@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, timeout};
+use tokio::time::{Instant, sleep, timeout};
 
 const MDNS_V4: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 251);
 const MDNS_V6: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0xfb);
@@ -152,6 +152,179 @@ async fn meta_query_answers_classify_the_device() {
         "a service type is not a hostname"
     );
 
+    running.stop().await;
+}
+
+/// A config whose meta-query does not come back during a test.
+fn quiet_meta() -> MdnsConfig {
+    MdnsConfig {
+        probe_interval: 30 * 24 * 3600,
+        ..MdnsConfig::default()
+    }
+}
+
+/// Starts a prober on an inert transport and swallows its two start-up meta-queries.
+async fn start_inert(ctx: &LanforgeContext) -> (InertHandle<SocketAddr>, Running) {
+    let (handle, transport) = UdpTransport::inert();
+    let running = start(ctx, MdnsProber::with_transport(quiet_meta(), transport)).await;
+    for _ in 0..2 {
+        let (q, _) = next_query(&handle).await;
+        assert_eq!(q[0].0, "_services._dns-sd._udp.local");
+    }
+    (handle, running)
+}
+
+fn reverse_query(name: &str) -> Vec<(String, DnsRecordType)> {
+    vec![(name.to_string(), DnsRecordType::PTR)]
+}
+
+/// The next query, if one is sent within `within`.
+async fn query_within(
+    handle: &InertHandle<SocketAddr>,
+    within: Duration,
+) -> Option<(Vec<(String, DnsRecordType)>, SocketAddr)> {
+    match timeout(within, handle.recv_reply()).await {
+        Ok(Some((bytes, to))) => {
+            let msg = WireDecoder::new(&bytes)
+                .decode_message()
+                .expect("valid DNS");
+            let q = msg
+                .questions
+                .iter()
+                .map(|q| (q.name.to_string(), q.qtype))
+                .collect();
+            Some((q, to))
+        }
+        _ => None,
+    }
+}
+
+async fn hostname_of(ctx: &LanforgeContext, mac: MacAddr) -> String {
+    for _ in 0..100 {
+        let name = ctx
+            .get_device(&mac)
+            .map_or_else(String::new, |d| d.hostname.name.clone());
+        if !name.is_empty() {
+            return name;
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+    String::new()
+}
+
+/// A device known without a name is asked for the name of its address by reverse mDNS (RFC
+/// 6762 §4); its answer names it and it is not asked again. Before, nothing ever sent this
+/// query (the box's capture showed lanforge silent while the AP asked the Echo's name).
+#[tokio::test(start_paused = true)]
+async fn unnamed_device_is_asked_for_its_name() {
+    let ctx = context();
+    let mac = MacAddr([0x02, 0, 0, 0, 0, 0x32]);
+    let ip = Ipv4Addr::new(192, 168, 1, 32);
+    let _ = ctx.apply(DeviceUpdate::ArpSeen {
+        mac,
+        ip,
+        is_active: true,
+    });
+    let (handle, running) = start_inert(&ctx).await;
+
+    let (q, to) = query_within(&handle, Duration::from_secs(10))
+        .await
+        .expect("asked");
+    assert_eq!(q, reverse_query("32.1.168.192.in-addr.arpa"));
+    assert_eq!(to, SocketAddr::from((MDNS_V4, 5353)));
+
+    handle
+        .inject(
+            answer(vec![ptr("32.1.168.192.in-addr.arpa", "echo-dot.local.")]),
+            SocketAddr::from((ip, 5353)),
+        )
+        .await;
+    assert_eq!(hostname_of(&ctx, mac).await, "echo-dot");
+
+    assert_eq!(
+        query_within(&handle, Duration::from_hours(3)).await,
+        None,
+        "a named device is not asked again"
+    );
+    running.stop().await;
+}
+
+/// A device that shows up while the prober runs is asked within seconds; while it stays silent
+/// the queries back off (1 min, 10 min, then hourly), never faster.
+#[tokio::test(start_paused = true)]
+async fn new_device_is_asked_with_back_off() {
+    let ctx = context();
+    let (handle, running) = start_inert(&ctx).await;
+
+    let mac = MacAddr([0x02, 0, 0, 0, 0, 0x33]);
+    let _ = ctx.apply(DeviceUpdate::ArpSeen {
+        mac,
+        ip: Ipv4Addr::new(192, 168, 1, 33),
+        is_active: true,
+    });
+    let expected = reverse_query("33.1.168.192.in-addr.arpa");
+
+    let mut last = Instant::now();
+    let mut gaps = Vec::new();
+    for _ in 0..5 {
+        let (q, _) = query_within(&handle, Duration::from_hours(2))
+            .await
+            .expect("asked again");
+        assert_eq!(q, expected);
+        let now = Instant::now();
+        gaps.push((now - last).as_secs());
+        last = now;
+        // Keep the device online, as its own traffic would.
+        let _ = ctx.apply(DeviceUpdate::ArpSeen {
+            mac,
+            ip: Ipv4Addr::new(192, 168, 1, 33),
+            is_active: true,
+        });
+    }
+    assert_eq!(gaps, vec![2, 60, 600, 3600, 3600]);
+    running.stop().await;
+}
+
+/// A device that already has a name (DHCP) is never asked.
+#[tokio::test(start_paused = true)]
+async fn named_device_is_not_asked() {
+    let ctx = context();
+    let mac = MacAddr([0x02, 0, 0, 0, 0, 0x34]);
+    let _ = ctx.apply(DeviceUpdate::ArpSeen {
+        mac,
+        ip: Ipv4Addr::new(192, 168, 1, 34),
+        is_active: true,
+    });
+    let _ = ctx.apply(DeviceUpdate::DhcpHostnameHint {
+        mac,
+        hostname: "laptop".to_string(),
+    });
+    let (handle, running) = start_inert(&ctx).await;
+    assert_eq!(query_within(&handle, Duration::from_hours(2)).await, None);
+    running.stop().await;
+}
+
+/// A device seen only by IPv6 is asked by its nibble name on the IPv6 group.
+#[tokio::test(start_paused = true)]
+async fn ipv6_only_device_is_asked_on_the_ipv6_group() {
+    let ctx = context();
+    let (handle, running) = start_inert(&ctx).await;
+    let mac = MacAddr([0x02, 0, 0, 0, 0, 0x35]);
+    let ip: Ipv6Addr = "fd00::1:2".parse().expect("address");
+    let _ = ctx.apply(DeviceUpdate::NdpSeen {
+        mac,
+        ip,
+        is_active: true,
+    });
+
+    let (q, to) = query_within(&handle, Duration::from_secs(10))
+        .await
+        .expect("asked");
+    assert_eq!(
+        q,
+        reverse_query("2.0.0.0.1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.d.f.ip6.arpa")
+    );
+    assert_eq!(to, SocketAddr::from((MDNS_V6, 5353)));
     running.stop().await;
 }
 

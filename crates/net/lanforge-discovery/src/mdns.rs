@@ -8,6 +8,9 @@
 //! - Listens on `224.0.0.251:5353` and `[ff02::fb]:5353`, on the LAN interface only.
 //! - Periodically asks the DNS-SD meta-query `_services._dns-sd._udp.local.` PTR (RFC 6763 §9):
 //!   each responder lists its service types, which classify the device.
+//! - Asks each device that has no name for the name of its address (reverse PTR such as
+//!   `31.3.168.192.in-addr.arpa.`, RFC 6762 §4) when it shows up, then again after 1 min,
+//!   10 min, and hourly while it stays unnamed and online.
 //!
 //! ## Design
 //!
@@ -20,7 +23,9 @@
 //! Failures are retried by the supervisor with backoff; they never halt the daemon.
 
 use lanforge_types::config::ConfigDomain;
-use lanforge_types::device::{DeviceClass, TransientOrigin};
+use lanforge_types::device::{Device, DeviceClass, DeviceStatus, IPv6State, TransientOrigin};
+use lanforge_types::events::DeviceEvent;
+use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::{
     DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType, Hostname, HostnameOrigin,
 };
@@ -28,6 +33,7 @@ use lanforge_types::system::{DormantReason, ServiceId};
 use lanforge_types::update::{DeviceUpdate, TransientHostUpdate};
 use serde::{Deserialize, Serialize};
 
+use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
@@ -35,11 +41,13 @@ use lanforge_core::service::{
     RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
 };
 use smallvec::SmallVec;
+use std::collections::HashMap;
+use std::fmt::Write;
 use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::{Instant, interval_at};
+use tokio::time::{Instant, interval_at, sleep_until};
 use tracing::{debug, info};
 
 use lanforge_dns_wire::{WireDecoder, WireEncoder};
@@ -50,6 +58,16 @@ const MDNS_IPV4: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 251);
 const MDNS_IPV6: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0xfb);
 /// RFC 6762 §17: an mDNS message fits 9000 bytes.
 const MDNS_MAX_MESSAGE: usize = 9000;
+
+/// Wait before the first reverse query: a device just seen may still be configuring its address.
+const FIRST_PROBE_DELAY: Duration = Duration::from_secs(2);
+/// Waits after the 1st, 2nd and later reverse queries to a device that stays unnamed (RFC 6762
+/// §5.2: growing intervals, at most hourly).
+const PROBE_BACKOFF: [Duration; 3] = [
+    Duration::from_mins(1),
+    Duration::from_mins(10),
+    Duration::from_hours(1),
+];
 
 const MDNS_DEPS: &[Edge] = &[Edge::requires(ServiceId::Interfaces, LossPolicy::Continue)];
 
@@ -146,6 +164,12 @@ impl AsyncService for MdnsProber {
         };
         ctx.set_service_transports(ServiceId::Mdns, vec![transport.metrics_handle()]);
 
+        // Subscribe first, then seed from the state: devices known before the subscription
+        // produce no event.
+        let mut devices = ctx.service_handle_device();
+        let mut probes = NameProbes::default();
+        probes.seed(ctx, Instant::now());
+
         let period = Duration::from_secs(self.cfg.probe_interval.max(60));
         let mut meta_timer = interval_at(Instant::now() + period, period);
         send_meta_query(&transport).await;
@@ -153,6 +177,7 @@ impl AsyncService for MdnsProber {
 
         let mut buf = vec![0u8; MDNS_MAX_MESSAGE];
         loop {
+            let next_probe = probes.next_due();
             tokio::select! {
                 cmd = h.next_command() => match cmd {
                     ServiceCommand::Stop | ServiceCommand::Shutdown => break,
@@ -170,6 +195,17 @@ impl AsyncService for MdnsProber {
                     Err(e) => debug!("mDNS receive error: {e}"),
                 },
                 _ = meta_timer.tick() => send_meta_query(&transport).await,
+                event = devices.next_event() => {
+                    let Some(timed) = event else { break };
+                    if let LanforgeEvent::Device(event) = &timed.event {
+                        probes.on_event(event, Instant::now());
+                    }
+                }
+                () = sleep_until(next_probe.unwrap_or_else(Instant::now)), if next_probe.is_some() => {
+                    for ip in probes.take_due(ctx, Instant::now()) {
+                        send_reverse_query(&transport, ip).await;
+                    }
+                }
             }
         }
         Ok(())
@@ -190,6 +226,128 @@ async fn send_question(transport: &UdpTransport, question: DnsQuestion, family: 
     if let Err(e) = transport.send(&bytes, &group).await {
         debug!("mDNS query to {group} not sent: {e}");
     }
+}
+
+/// The reverse name of `ip` (`d.c.b.a.in-addr.arpa`, nibbles under `ip6.arpa`).
+fn reverse_name(ip: IpAddr) -> String {
+    let mut name = String::with_capacity(72);
+    match ip {
+        IpAddr::V4(v4) => {
+            let [a, b, c, d] = v4.octets();
+            let _ = write!(name, "{d}.{c}.{b}.{a}.in-addr.arpa");
+        }
+        IpAddr::V6(v6) => {
+            for byte in v6.octets().iter().rev() {
+                let _ = write!(name, "{:x}.{:x}.", byte & 0xf, byte >> 4);
+            }
+            name.push_str("ip6.arpa");
+        }
+    }
+    name
+}
+
+/// Asks the owner of `ip` for its name (RFC 6762 §4: reverse address mapping).
+async fn send_reverse_query(transport: &UdpTransport, ip: IpAddr) {
+    let question = DnsQuestion {
+        name: Arc::from(reverse_name(ip)),
+        qtype: DnsRecordType::PTR,
+        qclass: DnsClass::IN,
+    };
+    send_question(transport, question, ip).await;
+    debug!("mDNS reverse query for {ip}");
+}
+
+/// When an unnamed device is next asked for its name.
+struct Probe {
+    due: Instant,
+    sent: usize,
+}
+
+/// Devices without a name, and when each is asked next. A device leaves when it gets a name or
+/// goes away.
+#[derive(Default)]
+struct NameProbes {
+    pending: HashMap<MacAddr, Probe>,
+}
+
+impl NameProbes {
+    fn seed(&mut self, ctx: &LanforgeContext, now: Instant) {
+        ctx.with_state(|s| {
+            for (mac, dev) in &s.devices {
+                if dev.hostname.name.is_empty() {
+                    self.schedule(*mac, now);
+                }
+            }
+        });
+    }
+
+    fn schedule(&mut self, mac: MacAddr, now: Instant) {
+        self.pending.entry(mac).or_insert(Probe {
+            due: now + FIRST_PROBE_DELAY,
+            sent: 0,
+        });
+    }
+
+    fn on_event(&mut self, event: &DeviceEvent, now: Instant) {
+        match event {
+            DeviceEvent::Discovered { mac, hostname }
+            | DeviceEvent::NetworkUpdate { mac, hostname, .. }
+            | DeviceEvent::NetworkActivity { mac, hostname, .. }
+            | DeviceEvent::AdminUpdate { mac, hostname, .. } => {
+                if hostname.as_deref().is_some_and(|h| !h.is_empty()) {
+                    self.pending.remove(mac);
+                } else {
+                    self.schedule(*mac, now);
+                }
+            }
+            DeviceEvent::Expired { mac } | DeviceEvent::Purged { mac } => {
+                self.pending.remove(mac);
+            }
+            _ => {}
+        }
+    }
+
+    fn next_due(&self) -> Option<Instant> {
+        self.pending.values().map(|p| p.due).min()
+    }
+
+    /// The addresses to ask now; reschedules them and drops devices named or gone since.
+    fn take_due(&mut self, ctx: &LanforgeContext, now: Instant) -> SmallVec<[IpAddr; 4]> {
+        let mut due = SmallVec::new();
+        ctx.with_state(|s| {
+            self.pending.retain(|mac, probe| {
+                if probe.due > now {
+                    return true;
+                }
+                let Some(dev) = s.devices.get(mac) else {
+                    return false;
+                };
+                if !dev.hostname.name.is_empty() {
+                    return false;
+                }
+                // An offline device or one without an address is looked at again soon, unasked.
+                let mut wait = PROBE_BACKOFF[0];
+                if dev.status != DeviceStatus::Offline
+                    && let Some(ip) = probe_address(dev)
+                {
+                    due.push(ip);
+                    wait = PROBE_BACKOFF[probe.sent.min(PROBE_BACKOFF.len() - 1)];
+                    probe.sent += 1;
+                }
+                probe.due = now + wait;
+                true
+            });
+        });
+        due
+    }
+}
+
+/// The address to ask a device's name by: its IPv4, else its first IPv6.
+fn probe_address(dev: &Device) -> Option<IpAddr> {
+    dev.v4
+        .ip()
+        .map(IpAddr::V4)
+        .or_else(|| dev.v6.iter().find_map(IPv6State::ip).map(IpAddr::V6))
 }
 
 /// The DNS-SD meta-query (RFC 6763 §9): answers list each responder's service types.
