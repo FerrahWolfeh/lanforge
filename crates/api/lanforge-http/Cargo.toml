@@ -45,6 +45,7 @@ url = { version = "2.5.4", optional = true }
 base64 = { workspace = true, optional = true }
 async-stream = { version = "0.3.6", optional = true }
 lanforge-webui = { workspace = true, optional = true }
+flate2 = { version = "1.1.9", optional = true }
 
 # Client dependencies
 hyper = { workspace = true, features = ["client", "http1", "http2"], optional = true }
@@ -68,6 +69,8 @@ aws-lc = [
 ]
 server = [
     "dep:axum",
+    "dep:flate2",
+    "dep:http-body-util",
     "dep:tower-http",
     "lanforge-crypto/tls",
     "dep:base64",
