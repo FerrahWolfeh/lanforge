@@ -12,6 +12,7 @@ use inquire::{Confirm, Select, Text};
 use lanforge_api::api::{
     AdblockClientEntry, AdblockGroupChange, DeviceListQuery, DnsQueryLogEntry,
 };
+use lanforge_api::config_file::HumanDuration;
 use lanforge_api::rpc::RpcResponse;
 #[cfg(feature = "remote")]
 use lanforge_types::events::TimedEvent;
@@ -1760,8 +1761,8 @@ pub fn parse_pause_duration(s: &str) -> Result<u64> {
     if let Ok(secs) = trimmed.parse::<u64>() {
         return Ok(secs);
     }
-    if let Ok(d) = duration_str::parse_std(trimmed) {
-        return Ok(d.as_secs());
+    if let Ok(d) = trimmed.parse::<HumanDuration>() {
+        return Ok(d.into());
     }
     bail!(
         "Invalid duration format '{s}'. Expected seconds (e.g. 300) or duration string (e.g. 5m, 1h)."

@@ -1,8 +1,7 @@
-use std::time::Duration;
-
 use color_eyre::Result;
 use color_eyre::eyre::eyre;
 use lanforge_api::api::SetLogLevelRequest;
+use lanforge_api::config_file::HumanDuration;
 use lanforge_types::logging::{LogFilter, LogLevelStatus, LogSource};
 
 use crate::client::LanforgeClient;
@@ -38,9 +37,9 @@ impl LogArgs {
                 .duration
                 .as_deref()
                 .map(|d| {
-                    duration_str::parse_std(d.trim())
-                        .map(|d: Duration| d.as_secs())
-                        .map_err(|e| eyre!("Invalid duration '{d}': {e}"))
+                    d.parse::<HumanDuration>()
+                        .map(u64::from)
+                        .map_err(|e| eyre!("{e}"))
                 })
                 .transpose()?;
             filter
