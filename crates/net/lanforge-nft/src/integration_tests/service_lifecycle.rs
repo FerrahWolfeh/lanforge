@@ -1,4 +1,6 @@
+use std::fs;
 use std::net::IpAddr;
+use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1090,6 +1092,10 @@ impl NftApplier for FlakyNft {
         }
         Ok(())
     }
+
+    fn apply_script(&self, _script: &str) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// A ruleset the kernel refused leaves the firewall `Degraded` (it used to stay `Online`); the
@@ -1184,4 +1190,162 @@ async fn test_firewall_retries_a_refused_ruleset() {
         .bus()
         .publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = serve_handle.await;
+}
+
+/// The context with `custom_rules_file` set to `path`.
+fn with_custom_rules(ctx: &LanforgeContext, path: &Path) {
+    let mut cfg = ctx.get_firewall_config().unwrap();
+    cfg.custom_rules_file = Some(path.display().to_string());
+    ctx.update_firewall_config(cfg);
+}
+
+/// `custom_rules_file` was accepted and documented but never loaded. It runs after every
+/// ruleset (our table is rebuilt each time); `lanforge firewall reload` (`RulesetChanged`)
+/// re-reads an edited file.
+#[tokio::test]
+async fn custom_rules_file_runs_after_each_ruleset() {
+    let (ctx, bus) = create_test_context();
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("custom.nft");
+    fs::write(
+        &file,
+        "add rule inet lanforge input tcp dport 2222 accept\n",
+    )
+    .unwrap();
+    with_custom_rules(&ctx, &file);
+    let mut fw_sub = bus.subscribe_firewall();
+
+    let recorder = RecordingNft::default();
+    let mut service = NftService::with_applier(recorder.clone());
+    service.init(&ctx).await.expect("init");
+    let _ = wait_for_ruleset_applied(&mut fw_sub).await;
+    assert_eq!(
+        recorder.scripts(),
+        vec!["add rule inet lanforge input tcp dport 2222 accept\n".to_string()]
+    );
+
+    let serving = service.clone();
+    let ctx_serve = ctx.clone();
+    let serve_handle = tokio::spawn(async move {
+        let mut s = serving;
+        let h = ServiceHandle::new(ServiceId::Nft, ctx_serve.clone());
+        s.serve(&ctx_serve, &h).await
+    });
+    sleep(Duration::from_millis(50)).await;
+
+    fs::write(
+        &file,
+        "add rule inet lanforge input tcp dport 3333 accept\n",
+    )
+    .unwrap();
+    let _ = bus.publish(LanforgeEvent::Firewall(FirewallEvent::RulesetChanged));
+    let _ = wait_for_ruleset_applied(&mut fw_sub).await;
+    sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        recorder.scripts().last().map(String::as_str),
+        Some("add rule inet lanforge input tcp dport 3333 accept\n")
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = serve_handle.await;
+}
+
+/// A refused or missing file never touches our ruleset: it is applied and the firewall stays
+/// online (no `ApplyFailed`, no retry loop).
+#[tokio::test]
+async fn a_bad_custom_rules_file_leaves_the_ruleset_applied() {
+    for refused in [true, false] {
+        let (ctx, bus) = create_test_context();
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("custom.nft");
+        if refused {
+            fs::write(&file, "this is not nft\n").unwrap();
+        }
+        with_custom_rules(&ctx, &file);
+        let mut fw_sub = bus.subscribe_firewall();
+
+        let recorder = RecordingNft::refusing_scripts();
+        let mut service = NftService::with_applier(recorder.clone());
+        service.init(&ctx).await.expect("init");
+        let _ = wait_for_ruleset_applied(&mut fw_sub).await;
+        assert!(recorder.payload().is_some(), "our ruleset is applied");
+        assert_eq!(
+            recorder.scripts().len(),
+            usize::from(refused),
+            "a missing file runs nothing"
+        );
+        while let Ok(evt) = fw_sub.try_recv() {
+            assert!(
+                !matches!(
+                    evt.event,
+                    LanforgeEvent::Firewall(FirewallEvent::ApplyFailed { .. })
+                ),
+                "the custom file is not the ruleset"
+            );
+        }
+    }
+}
+
+/// The lockdown table (firewall stopping) runs no custom rules: it keeps the WAN closed.
+#[tokio::test]
+async fn the_lockdown_runs_no_custom_rules() {
+    let (ctx, bus) = create_test_context();
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("custom.nft");
+    fs::write(
+        &file,
+        "add rule inet lanforge input tcp dport 2222 accept\n",
+    )
+    .unwrap();
+    with_custom_rules(&ctx, &file);
+    let mut fw_sub = bus.subscribe_firewall();
+
+    let recorder = RecordingNft::default();
+    let mut service = NftService::with_applier(recorder.clone());
+    service.init(&ctx).await.expect("init");
+    let _ = wait_for_ruleset_applied(&mut fw_sub).await;
+    service.cleanup(&ctx).await.expect("cleanup");
+    assert!(
+        recorder.payload().is_some(),
+        "the lockdown table is in place"
+    );
+    assert_eq!(recorder.scripts().len(), 1, "only the full ruleset ran it");
+}
+
+/// The kernel path of a custom rules file: a good script adds its rule to our table, a bad
+/// one is refused whole with nft's message and leaves the table as it was.
+#[tokio::test]
+#[ignore = "needs CAP_NET_ADMIN and nft (run inside `unshare -rn`)"]
+async fn kernel_runs_a_custom_script_and_refuses_a_bad_one() {
+    use crate::KernelNft;
+
+    let (ctx, bus) = create_test_context();
+    let mut fw_sub = bus.subscribe_firewall();
+    let mut service = NftService::new();
+    service.init(&ctx).await.expect("init applies the ruleset");
+    let _ = wait_for_ruleset_applied(&mut fw_sub).await;
+    let list = || {
+        String::from_utf8(
+            Command::new("nft")
+                .args(["list", "chain", "inet", "lanforge", "input"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+    };
+
+    KernelNft
+        .apply_script("add rule inet lanforge input tcp dport 2222 accept\n")
+        .expect("a good script applies");
+    assert!(list().contains("tcp dport 2222 accept"));
+
+    let err = KernelNft
+        .apply_script("add rule inet lanforge input tcp dport 3333 accept\nnot nft at all\n")
+        .expect_err("a bad script is refused");
+    assert!(err.contains("Error"), "{err}");
+    assert!(!list().contains("3333"), "a refused script applies nothing");
+    assert!(list().contains("tcp dport 2222 accept"));
+
+    service.cleanup(&ctx).await.expect("cleanup");
 }

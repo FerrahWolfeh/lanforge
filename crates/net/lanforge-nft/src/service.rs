@@ -4,8 +4,10 @@
 //! updates to atomically compile and apply `table inet lanforge` via `nftables-rs`.
 
 use std::collections::HashMap;
+use std::fs;
 use std::future::Future;
 use std::io::ErrorKind;
+use std::path::PathBuf;
 use std::time::Duration;
 
 #[cfg(any(test, feature = "inert"))]
@@ -69,6 +71,8 @@ pub struct NftService<A: NftApplier = KernelNft> {
     /// The kernel refused the last ruleset (it keeps the previous one): the service is degraded
     /// until a ruleset applies.
     apply_failed: bool,
+    /// Why the `custom_rules_file` last failed, so the same failure is logged once.
+    custom_rules_error: Option<String>,
 }
 
 impl NftService<KernelNft> {
@@ -111,6 +115,7 @@ impl<A: NftApplier> NftService<A> {
             applier,
             applied: false,
             apply_failed: false,
+            custom_rules_error: None,
             compiled: None,
             compiled_addrs: HashMap::new(),
         }
@@ -344,6 +349,7 @@ impl<A: NftApplier> NftService<A> {
                 self.applied = true;
                 self.apply_failed = false;
                 ctx.set_firewall_left(None);
+                self.apply_custom_rules(cfg).await;
                 Self::publish_ruleset_applied(
                     ctx,
                     reason,
@@ -371,6 +377,45 @@ impl<A: NftApplier> NftService<A> {
                     .publish(LanforgeEvent::Firewall(FirewallEvent::ApplyFailed {
                         error: err_msg,
                     }));
+            }
+        }
+    }
+}
+
+impl<A: NftApplier> NftService<A> {
+    /// Runs the admin's `custom_rules_file` (nft text syntax) after each ruleset: our table is
+    /// rebuilt every time, so rules added to it are added again. nft runs the file as one
+    /// transaction, so a missing or refused file changes nothing and our ruleset stays; it is
+    /// logged once per failure, never retried in a loop. Not run for the lockdown table.
+    async fn apply_custom_rules(&mut self, cfg: &FirewallConfig) {
+        let Some(path) = cfg
+            .custom_rules_file
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from)
+        else {
+            self.custom_rules_error = None;
+            return;
+        };
+        let applier = self.applier.clone();
+        let shown = path.display().to_string();
+        let result = task::spawn_blocking(move || {
+            let script = fs::read_to_string(&path).map_err(|e| format!("cannot read it: {e}"))?;
+            applier.apply_script(&script)
+        })
+        .await
+        .unwrap_or_else(|e| Err(format!("the task panicked: {e}")));
+        match result {
+            Ok(()) => {
+                info!(file = %shown, "Custom nftables rules applied");
+                self.custom_rules_error = None;
+            }
+            Err(e) => {
+                if self.custom_rules_error.as_deref() != Some(e.as_str()) {
+                    error!(file = %shown, error = %e, "Custom nftables rules not applied; the lanforge ruleset stays");
+                }
+                self.custom_rules_error = Some(e);
             }
         }
     }

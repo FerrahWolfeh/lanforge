@@ -251,6 +251,12 @@ bypass_dns = true
 bypass_vowifi = true
 default_input_policy = "drop"
 default_forward_policy = "drop"
+# Extra rules in nft syntax, run with `nft -f` after every ruleset lanforge applies
+# (not in the lockdown table). `lanforge firewall reload` re-runs an edited file.
+# The `inet lanforge` table is rebuilt each time, so lines like
+#   insert rule inet lanforge input ip saddr 192.0.2.10 tcp dport 22 accept
+# are added again; tables of your own should start with `destroy table inet mine`.
+# The file runs as one transaction: a bad one changes nothing and is logged.
 # custom_rules_file = "/etc/lanforge/firewall.custom.nft"
 
 # Zone fields: interfaces, input, forward, masquerade, mtu_fix, open_ports.
