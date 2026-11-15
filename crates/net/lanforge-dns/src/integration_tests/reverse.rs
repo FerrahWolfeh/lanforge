@@ -27,7 +27,8 @@ use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep};
 
-/// A UDP resolver that answers every PTR question with one fixed name and counts the queries.
+/// A UDP resolver that answers every PTR question with one fixed name and counts the queries;
+/// an empty name makes it mute (a tailnet peer's resolver that never answers).
 struct PtrUpstream {
     addr: SocketAddr,
     queries: Arc<AtomicUsize>,
@@ -49,6 +50,9 @@ impl PtrUpstream {
                     continue;
                 };
                 counter.fetch_add(1, Ordering::Relaxed);
+                if name.is_empty() {
+                    continue;
+                }
                 let mut resp = DnsMessage::new();
                 resp.header.id = req.header.id;
                 resp.header.qr = true;
@@ -57,13 +61,15 @@ impl PtrUpstream {
                 resp.header.qdcount = req.questions.len() as u16;
                 resp.questions = req.questions.clone();
                 match req.questions.first() {
-                    Some(q) if q.qtype == DnsRecordType::PTR => resp.answers.push(DnsRecord {
-                        name: Arc::clone(&q.name),
-                        rtype: DnsRecordType::PTR,
-                        rclass: DnsClass::IN,
-                        ttl: 5,
-                        rdata: DnsRData::PTR(Arc::from(name)),
-                    }),
+                    Some(q) if q.qtype == DnsRecordType::PTR && !name.is_empty() => {
+                        resp.answers.push(DnsRecord {
+                            name: Arc::clone(&q.name),
+                            rtype: DnsRecordType::PTR,
+                            rclass: DnsClass::IN,
+                            ttl: 5,
+                            rdata: DnsRData::PTR(Arc::from(name)),
+                        })
+                    }
                     _ => resp.header.rcode = DnsResponseCode::NXDomain,
                 }
                 resp.header.ancount = resp.answers.len() as u16;
@@ -292,5 +298,29 @@ async fn client_in_a_reverse_subnet_gets_named() {
     };
     assert_eq!(host.hostname.name, "archie");
     assert_eq!(host.origin, TransientOrigin::Tailscale);
+    ctx.terminate();
+}
+
+/// A client its reverse resolver does not answer for is asked about once per retry window,
+/// not on every query it sends: each query after a timeout used to start another PTR lookup
+/// (and log another warning).
+#[tokio::test]
+async fn unanswered_client_is_not_looked_up_on_every_query() {
+    let ctx = init_test_context();
+    let tailnet = PtrUpstream::spawn("").await;
+    ctx.set_reverse_resolvers(vec![reverse("100.64.0.0/10", &tailnet)]);
+    let handle = serve(&ctx).await;
+    let client = SocketAddr::new("100.64.0.5".parse().expect("client address"), 40000);
+    let ask = |name: &str| DnsPacketBuilder::query(name, DnsRecordType::A).build_bytes();
+
+    handle.inject(ask("one.lan"), client).await;
+    handle.recv_reply().await.expect("a reply");
+    // The upstream timeout is 3 s: the first lookup has failed by then.
+    sleep(Duration::from_millis(3300)).await;
+    handle.inject(ask("two.lan"), client).await;
+    handle.recv_reply().await.expect("a reply");
+    sleep(Duration::from_millis(100)).await;
+
+    assert_eq!(tailnet.queries(), 1);
     ctx.terminate();
 }

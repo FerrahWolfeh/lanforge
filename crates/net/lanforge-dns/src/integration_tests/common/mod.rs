@@ -3,7 +3,7 @@
 #[cfg(any(feature = "dot", feature = "doq"))]
 pub mod tls;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
@@ -110,7 +110,7 @@ pub async fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContex
         rewrites,
         #[cfg(feature = "adblock")]
         filter,
-        resolving_ips: Arc::new(Mutex::new(HashSet::new())),
+        reverse_attempts: Mutex::new(HashMap::new()),
         compiled_ignore_clients: CompiledIgnoreClients::compile(&cfg_arc.query_log.ignore_clients),
     }
 }

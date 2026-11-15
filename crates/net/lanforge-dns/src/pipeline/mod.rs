@@ -20,9 +20,10 @@ use crate::server::DnsContext;
 use crate::utils::ip_to_arpa;
 use lanforge_core::context::LanforgeContext;
 use parking_lot::Mutex;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// Represents a DNS query request passing through the pipeline.
 #[derive(Clone)]
@@ -178,27 +179,50 @@ fn classify_transient_origin(ip: IpAddr) -> TransientOrigin {
     }
 }
 
+/// A client its reverse resolver did not name is asked about again after this long.
+const REVERSE_RETRY: Duration = Duration::from_mins(5);
+/// Attempts kept before the expired ones are swept.
+const REVERSE_ATTEMPTS_SWEEP: usize = 1024;
+
 fn handle_reverse_dns_trigger(ctx: &DnsContext, client_ip: IpAddr) {
     if let Some(resolver) = ctx.recursive.reverse_route(client_ip)
-        && ctx.local.ctx.get_transient_host(&client_ip).is_none()
-        && ctx.resolving_ips.lock().insert(client_ip)
+        && !ctx
+            .local
+            .ctx
+            .with_state(|s| s.transient_hosts.contains_key(&client_ip))
+        && claim_reverse_lookup(&ctx.reverse_attempts, client_ip, Instant::now())
     {
         let ctx_core = ctx.local.ctx.clone();
-        let resolving_ips = Arc::clone(&ctx.resolving_ips);
         tokio::spawn(async move {
-            resolve_reverse_ptr_background(ctx_core, resolving_ips, client_ip, resolver).await;
+            resolve_reverse_ptr_background(ctx_core, client_ip, resolver).await;
         });
     }
+}
+
+/// Whether a lookup of `ip` may start now: one per [`REVERSE_RETRY`] window, in flight or not.
+fn claim_reverse_lookup(
+    attempts: &Mutex<HashMap<IpAddr, Instant>>,
+    ip: IpAddr,
+    now: Instant,
+) -> bool {
+    let mut attempts = attempts.lock();
+    let recent = |at: &Instant| now.duration_since(*at) < REVERSE_RETRY;
+    if attempts.get(&ip).is_some_and(recent) {
+        return false;
+    }
+    if attempts.len() >= REVERSE_ATTEMPTS_SWEEP {
+        attempts.retain(|_, at| recent(at));
+    }
+    attempts.insert(ip, now);
+    true
 }
 
 /// Names a client from its reverse resolver's PTR answer (a transient host).
 async fn resolve_reverse_ptr_background(
     ctx_core: LanforgeContext,
-    resolving_ips: Arc<Mutex<HashSet<IpAddr>>>,
     ip: IpAddr,
     mgr: Arc<UpstreamManager>,
 ) {
-    // 2. Perform reverse PTR query
     let arpa_name = ip_to_arpa(ip);
     let mut query = DnsMessage::new();
     query.header.rd = true;
@@ -259,6 +283,4 @@ async fn resolve_reverse_ptr_background(
             );
         }
     }
-
-    resolving_ips.lock().remove(&ip);
 }

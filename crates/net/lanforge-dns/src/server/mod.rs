@@ -18,10 +18,10 @@ use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::{
     DnsRecordType, FilterMatch, QueryLogEntry, QueryResult, TransportProtocol,
 };
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// Shared, immutable service state for the DNS hot path.
 pub struct DnsContext {
@@ -43,8 +43,8 @@ pub struct DnsContext {
     #[cfg(feature = "adblock")]
     pub filter: Option<Arc<AdBlocker>>,
 
-    /// Client addresses whose name is being looked up through their reverse resolver.
-    pub resolving_ips: Arc<parking_lot::Mutex<HashSet<IpAddr>>>,
+    /// When each client was last looked up through its reverse resolver.
+    pub reverse_attempts: parking_lot::Mutex<HashMap<IpAddr, Instant>>,
 
     // Pre-compiled query log client ignore filters
     pub compiled_ignore_clients: CompiledIgnoreClients,

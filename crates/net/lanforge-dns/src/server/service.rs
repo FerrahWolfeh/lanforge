@@ -69,7 +69,7 @@ use lanforge_types::system::{
     DegradedReason, DormantReason, PppoeSessionState, ServiceId, ServiceState,
 };
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::num::NonZero;
@@ -222,7 +222,7 @@ impl DnsService {
             rewrites,
             #[cfg(feature = "adblock")]
             filter,
-            resolving_ips: Arc::new(parking_lot::Mutex::new(HashSet::new())),
+            reverse_attempts: parking_lot::Mutex::new(HashMap::new()),
             compiled_ignore_clients: CompiledIgnoreClients::compile(
                 &self.cfg.query_log.ignore_clients,
             ),
