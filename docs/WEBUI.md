@@ -66,7 +66,7 @@ A global event listener consumes `GET /api/v1/events` using Server-Sent Events (
 | Route | Module | Key Capabilities |
 |:------|:-------|:-----------------|
 | `/` | **Dashboard** | Router health, interface vitals, WAN/LAN status banners, and live bandwidth throughput. |
-| `/network/devices` | **Device Inventory** | Connected device table, MAC OUI vendor resolution, whois detail dialogs, and static promotion. |
+| `/network/devices` | **Device Inventory** | Connected device table, MAC OUI vendor resolution, whois detail dialogs, static promotion, adblock groups and linked addresses (a device's tailnet addresses, counted as it in DNS stats). |
 | `/network/hosts` | **Static Hosts** | Fixed IP reservations and manual host mappings. |
 | `/network/pppoe` | **PPPoE WAN** | WAN session state, IPCP/IPv6CP negotiation, LCP echo keepalives, and hardware acceleration tabs. |
 | `/network/ra` | **IPv6 Router Advertisements** | SLAAC prefixes, RDNSS/DNSSL settings, and unsolicited RA triggers. |

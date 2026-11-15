@@ -80,6 +80,8 @@ lanforge devices purge <mac-or-name>   # Remove device and its dynamic DNS recor
 lanforge devices adblock tablet        # Adblock groups that name the device, and its bypass
 lanforge devices adblock tablet --join kids --leave teens   # Join/leave groups (as dev:<name>)
 lanforge devices adblock tablet --bypass                    # Never filter it (--no-bypass undoes)
+lanforge devices link phone 100.64.0.6 fd7a:115c:a1e0::1537:ab07  # Its tailnet addresses count as it
+lanforge devices unlink phone 100.64.0.6                    # (DNS stats, dev: adblock groups only)
 ```
 
 ### `host` *(alias: `hosts`)*

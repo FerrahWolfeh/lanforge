@@ -5,15 +5,50 @@ use lanforge_api::api::{
     ProtocolStatEntry, QueryRateEntry, QueryTypeEntry, Response, TopClientEntry, TopDomainEntry,
 };
 use lanforge_api::config_file::NamedUpstream;
+use lanforge_core::context::state::State;
+use lanforge_db_core::DbError;
+use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::{
     DnsRecordType, DnsRequest, DnsResponse, UpstreamHealthSnapshot, UpstreamStatus,
     upstream::{UpstreamAddr, UpstreamMode, UpstreamProtocol, UpstreamTarget},
 };
-use std::collections::hash_map::Entry;
 use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr},
 };
+
+/// Folds per-address client rows (`address, queries, blocked`, busiest first) into one row per
+/// device, its LAN and linked addresses together, and keeps the `limit` busiest. An address no
+/// device is known for stays a row of its own.
+fn per_device(state: &State, rows: Vec<(String, u64, u64)>, limit: usize) -> Vec<TopClientEntry> {
+    let mut out: Vec<TopClientEntry> = Vec::new();
+    let mut row_of: HashMap<MacAddr, usize> = HashMap::new();
+    for (ip, count, blocked) in rows {
+        let (mac, hostname) = ip
+            .parse::<IpAddr>()
+            .map_or((None, None), |addr| state.client_identity(addr, None));
+        if let Some(&i) = mac.as_ref().and_then(|m| row_of.get(m)) {
+            let row = &mut out[i];
+            row.count += count;
+            row.blocked_count += blocked;
+            row.addresses.push(ip);
+            continue;
+        }
+        if let Some(mac) = mac {
+            row_of.insert(mac, out.len());
+        }
+        out.push(TopClientEntry {
+            addresses: vec![ip.clone()],
+            ip,
+            hostname,
+            count,
+            blocked_count: blocked,
+        });
+    }
+    out.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.ip.cmp(&b.ip)));
+    out.truncate(limit);
+    out
+}
 
 impl ClientContext {
     /// Snapshot of DNS resolver statistics.
@@ -181,9 +216,13 @@ impl ClientContext {
         };
 
         let client_clone = client.clone();
+        // Every client address: rows are folded per device below, then cut to `limit`.
         let data = match storage
             .call(move |s: &lanforge_db_core::Stores| {
-                s.log().get_dns_analytics(limit, client_clone.as_deref())
+                let mut data = s.log().get_dns_analytics(limit, client_clone.as_deref())?;
+                data.top_clients = s.log().get_dns_top_clients(usize::MAX)?;
+                data.top_blocked_clients = s.log().get_dns_top_blocked_clients(usize::MAX)?;
+                Ok::<_, DbError>(data)
             })
             .await
         {
@@ -195,22 +234,18 @@ impl ClientContext {
             }
         };
 
-        let client_hostnames: HashMap<IpAddr, Option<String>> = self.ctx.with_state(|state| {
-            let mut map = HashMap::new();
-            for ip_str in data
-                .top_clients
-                .iter()
-                .map(|(ip, _, _)| ip)
-                .chain(data.top_blocked_clients.iter().map(|(ip, _)| ip))
-            {
-                if let Ok(parsed_ip) = ip_str.parse::<IpAddr>()
-                    && let Entry::Vacant(e) = map.entry(parsed_ip)
-                {
-                    let hostname = state.client_identity(parsed_ip, None).1;
-                    e.insert(hostname);
-                }
-            }
-            map
+        let (top_clients, top_blocked_clients) = self.ctx.with_state(|state| {
+            (
+                per_device(state, data.top_clients, limit),
+                per_device(
+                    state,
+                    data.top_blocked_clients
+                        .into_iter()
+                        .map(|(ip, count)| (ip, count, count))
+                        .collect(),
+                    limit,
+                ),
+            )
         });
 
         Response::DnsAnalytics(Box::new(DnsAnalyticsResponse {
@@ -242,22 +277,7 @@ impl ClientContext {
                     outcome_types: b.outcome_types,
                 })
                 .collect(),
-            top_clients: data
-                .top_clients
-                .into_iter()
-                .map(|(ip, count, blocked_count)| {
-                    let hostname = ip
-                        .parse::<IpAddr>()
-                        .ok()
-                        .and_then(|addr| client_hostnames.get(&addr).cloned().flatten());
-                    TopClientEntry {
-                        ip,
-                        hostname,
-                        count,
-                        blocked_count,
-                    }
-                })
-                .collect(),
+            top_clients,
             protocol_stats: {
                 let total: u64 = data.protocol_stats.iter().map(|(_, c)| *c).sum();
                 data.protocol_stats
@@ -278,22 +298,7 @@ impl ClientContext {
                 .into_iter()
                 .map(|(domain, count)| TopDomainEntry { domain, count })
                 .collect(),
-            top_blocked_clients: data
-                .top_blocked_clients
-                .into_iter()
-                .map(|(ip, count)| {
-                    let hostname = ip
-                        .parse::<IpAddr>()
-                        .ok()
-                        .and_then(|addr| client_hostnames.get(&addr).cloned().flatten());
-                    TopClientEntry {
-                        ip,
-                        hostname,
-                        count,
-                        blocked_count: count,
-                    }
-                })
-                .collect(),
+            top_blocked_clients,
             blocked_query_rate: data
                 .blocked_query_rate
                 .into_iter()

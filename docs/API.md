@@ -37,6 +37,7 @@ Endpoints supporting event streaming implement the **HybridStream** contract:
 | Method | Parameters | Return Type | Description |
 |:-------|:-----------|:------------|:------------|
 | `list_devices` | `query: DeviceListQuery` | `DevicesResponse` | Lists discovered network devices with pagination and filters. |
+| `device_linked_addresses_set` | `mac: MacAddr`, `addresses: Vec<IpAddr>` | `SimpleSuccess` | Replaces the addresses linked to a device (tailnet / VPN): counted as the device in DNS stats and `dev:` adblock selectors only. |
 | `whois` | `target: String` (MAC, IP, hostname) | `WhoisResponse` | Returns detailed identity, lease history, and SLAAC addresses. |
 | `wol` | `target: String` (MAC or hostname) | `SimpleSuccess` | Dispatches a Wake-on-LAN Ethernet magic packet. |
 | `purge` | `mac: MacAddr` | `SimpleSuccess` | Removes a device from active state and storage, clearing dynamic DNS mappings. |

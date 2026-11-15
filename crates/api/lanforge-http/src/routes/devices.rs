@@ -3,11 +3,12 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use lanforge_api::api::{HttpPaginatedResponse, Response, group_devices};
 use lanforge_types::identifiers::MacAddr;
 use serde::Deserialize;
+use std::net::IpAddr;
 
 use crate::routes::{create_client_ctx, failure_to_http};
 use crate::server::AppState;
@@ -30,6 +31,7 @@ pub fn router() -> Router<AppState> {
         .route("/transient", get(handle_transient_devices))
         .route("/{target}", get(handle_whois).delete(handle_purge))
         .route("/{target}/wol", post(handle_wake))
+        .route("/{mac}/linked", put(handle_linked_set))
 }
 
 async fn handle_list_devices(
@@ -101,4 +103,22 @@ async fn handle_purge(
 async fn handle_transient_devices(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(ctx.handle_transient_host_list().await, TransientHosts)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LinkedAddressesRequest {
+    pub addresses: Vec<IpAddr>,
+}
+
+async fn handle_linked_set(
+    State(state): State<AppState>,
+    Path(mac): Path<MacAddr>,
+    Json(payload): Json<LinkedAddressesRequest>,
+) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(
+        ctx.handle_device_linked_addresses_set(mac, payload.addresses)
+            .await,
+        Success => NoContent
+    )
 }

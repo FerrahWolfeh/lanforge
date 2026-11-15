@@ -2,6 +2,7 @@ use color_eyre::Result;
 use colored::Colorize;
 use std::cmp::Reverse;
 use std::collections::HashSet;
+use std::net::IpAddr;
 use std::str::FromStr;
 
 use lanforge_api::api::{
@@ -55,6 +56,20 @@ pub enum DevicesSubcommand {
     },
     /// Show or change the adblock groups a device is in, and whether adblock bypasses it
     Adblock(DeviceAdblockArgs),
+    /// Link addresses the device uses outside the LAN (its tailnet address): DNS stats and
+    /// `dev:` adblock groups count them as the device
+    Link(DeviceLinkArgs),
+    /// Unlink addresses from a device
+    Unlink(DeviceLinkArgs),
+}
+
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+pub struct DeviceLinkArgs {
+    /// MAC address, IP address or hostname of the device
+    pub target: String,
+    /// The addresses, e.g. the device's tailnet IPv4 and IPv6
+    #[arg(required = true)]
+    pub addresses: Vec<IpAddr>,
 }
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
@@ -114,6 +129,10 @@ impl DevicesArgs {
             Some(DevicesSubcommand::Show { target }) => show_device(client, printer, target).await,
             Some(DevicesSubcommand::Purge { mac }) => purge_device(client, printer, mac).await,
             Some(DevicesSubcommand::Adblock(args)) => device_adblock(client, printer, args).await,
+            Some(DevicesSubcommand::Link(args)) => device_link(client, printer, args, true).await,
+            Some(DevicesSubcommand::Unlink(args)) => {
+                device_link(client, printer, args, false).await
+            }
             None => {
                 let args = ListArgs {
                     filter: self.filter,
@@ -356,6 +375,19 @@ fn render_device_details(whois: &WhoisResponse, printer: &Printer) {
         }
     }
 
+    if !dev.linked_addresses.is_empty() {
+        let linked: Vec<String> = dev
+            .linked_addresses
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        println!(
+            "    {:<20} {}",
+            "Linked Addresses:".dimmed(),
+            linked.join(", ").cyan()
+        );
+    }
+
     let origin_str = if dev.origin.is_static() {
         "Static Host Reservation ★".yellow().to_string()
     } else {
@@ -392,6 +424,30 @@ async fn purge_device(client: &LanforgeClient, printer: &Printer, mac_str: Strin
 
 /// Shows the adblock groups that name the device (`dev:` selectors) and its bypass, or, with
 /// `--join`/`--leave`/`--bypass`/`--no-bypass`, changes them and leaves the rest as it is.
+/// Adds (`link`) or removes the addresses linked to a device; the daemon checks them.
+async fn device_link(
+    client: &LanforgeClient,
+    printer: &Printer,
+    args: DeviceLinkArgs,
+    link: bool,
+) -> Result<()> {
+    let device = client.whois(args.target.clone()).await?.entry;
+    let mut addresses = device.linked_addresses;
+    if link {
+        addresses.extend(args.addresses);
+    } else {
+        addresses.retain(|a| !args.addresses.contains(a));
+    }
+    let resp = client
+        .device_linked_addresses_set(device.mac, addresses)
+        .await?;
+    if printer.json {
+        return printer.print_json(&resp);
+    }
+    printer.success(&resp.message);
+    Ok(())
+}
+
 async fn device_adblock(
     client: &LanforgeClient,
     printer: &Printer,

@@ -81,11 +81,16 @@ pub struct DnsAnalyticsResponse {
 /// A single entry in the top clients list.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct TopClientEntry {
+    /// The client's busiest address.
     pub ip: String,
     pub hostname: Option<String>,
     pub count: u64,
     #[serde(default)]
     pub blocked_count: u64,
+    /// Every address counted in this row, busiest first: one device's addresses (LAN and
+    /// linked) make one row.
+    #[serde(default)]
+    pub addresses: Vec<String>,
 }
 
 /// A response containing status for all configured DNS upstreams.

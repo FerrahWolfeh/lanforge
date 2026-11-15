@@ -125,6 +125,10 @@ pub struct DeviceEntry {
     /// Specific domains or wildcards to suppress from DNS query logs for this device.
     #[serde(default)]
     pub ignored_log_domains: Vec<String>,
+    /// Addresses linked to the device outside the LAN's assignment (its tailnet address): DNS
+    /// stats and `dev:` adblock selectors count them as the device.
+    #[serde(default)]
+    pub linked_addresses: Vec<IpAddr>,
 }
 
 /// A single IPv6 address entry with its type category.
