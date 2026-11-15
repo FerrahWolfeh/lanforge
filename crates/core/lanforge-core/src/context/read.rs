@@ -93,7 +93,8 @@ impl LanforgeContext {
     }
 
     /// The device a `dev:<name|mac>` reference names. A name matches a static host's name first
-    /// (the admin's, stable), then the hostname a device announces.
+    /// (the admin's, stable), then the device a forward or rewrite bound it to (see
+    /// `state/names.rs`), then the hostname a device announces.
     #[must_use]
     pub fn resolve_device(&self, id: &DeviceIdentifier) -> Option<MacAddr> {
         match id {
@@ -105,6 +106,7 @@ impl LanforgeContext {
                         .values()
                         .find(|d| d.is_static() && d.hostname.name.eq_ignore_ascii_case(name))
                         .map(|d| d.mac)
+                        .or_else(|| state.bound_device(&name.to_ascii_lowercase()))
                         .or_else(|| state.get_by_hostname(name).map(|d| d.mac))
                 })
                 .or_else(|| self.find_mac_by_hostname_jit(name, None)),

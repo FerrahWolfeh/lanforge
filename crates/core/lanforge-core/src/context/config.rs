@@ -644,6 +644,10 @@ impl LanforgeContext {
         );
 
         if !changed.is_empty() {
+            // Forwards and rewrites bind the names they target (see `state/names.rs`).
+            if changed.intersects(DomainSet::FIREWALL | DomainSet::DNS_REWRITES) {
+                self.refresh_name_references();
+            }
             // The firewall and traffic shaper recompile on these (their ruleset inputs).
             let bus = self.bus_ref();
             if changed.contains(DomainSet::FIREWALL) {

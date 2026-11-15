@@ -14,7 +14,9 @@ use lanforge_core::bus::EventBus;
 use lanforge_core::context::state::State;
 use lanforge_core::context::{ConfigPatch, LanforgeContext};
 use lanforge_core::logging::LogLevels;
-use lanforge_db::{LanforgeDb, LogDb, LogFilterStore, LogStore, PrefixStore, UserStore};
+use lanforge_db::{
+    LanforgeDb, LogDb, LogFilterStore, LogStore, NameBindingStore, PrefixStore, UserStore,
+};
 #[cfg(feature = "dhcp")]
 use lanforge_dhcp::v4::sanity::derive_dhcp_defaults_from_v4;
 use lanforge_discovery::refresh_interface;
@@ -199,6 +201,11 @@ impl Bootstrapper {
         }
         ctx.provide_shared(log_levels);
         Self::populate_context(&ctx, &cfg, &db);
+        // Before `[hosts]` and any service: a bound name must not be up for grabs at start.
+        match db.load_name_bindings() {
+            Ok(bindings) => ctx.restore_name_bindings(bindings),
+            Err(e) => warn!("Could not read the saved name bindings: {e}"),
+        }
         // `[hosts]` is the static hosts' only source: the table follows it.
         if let Some(hosts) = cfg.static_hosts.as_ref() {
             let issues = log_issues(ctx.apply_static_hosts(hosts));
@@ -207,6 +214,12 @@ impl Bootstrapper {
                 all.extend(issues);
                 ctx.set_config_issues(all);
             }
+        }
+        // Binds the names the file's forwards and rewrites target; saved here, the DbWorker
+        // that saves later changes is not running yet.
+        ctx.refresh_name_references();
+        if let Err(e) = db.save_name_bindings(&ctx.name_bindings()) {
+            warn!("Could not save the name bindings: {e}");
         }
 
         #[cfg(feature = "dns")]

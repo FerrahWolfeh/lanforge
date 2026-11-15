@@ -51,6 +51,10 @@ pub enum NetworkChange {
 
     /// A hostname hint was learned via DHCP.
     HostnameHint { hostname: String },
+
+    /// The device announced a hostname a port forward or DNS rewrite binds to another device
+    /// (`holder`); it was not taken.
+    HostnameRefused { hostname: String, holder: MacAddr },
 }
 
 impl NetworkChange {
@@ -71,7 +75,8 @@ impl NetworkChange {
             | Self::NdpActivity { .. }
             | Self::StatusChanged { .. }
             | Self::IpOffline { .. }
-            | Self::HostnameHint { .. } => false,
+            | Self::HostnameHint { .. }
+            | Self::HostnameRefused { .. } => false,
         }
     }
 

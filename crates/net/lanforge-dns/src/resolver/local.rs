@@ -145,6 +145,10 @@ impl LocalResolver {
             {
                 return Some(*mac);
             }
+            // A name a forward or rewrite targets stays with its device (`state/names.rs`).
+            if let Some(mac) = state.bound_device(hostname) {
+                return Some(mac);
+            }
             if let Some(mac) = state.indices.name_index.get(hostname).copied() {
                 return Some(mac);
             }

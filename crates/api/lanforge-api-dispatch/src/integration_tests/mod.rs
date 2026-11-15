@@ -14,6 +14,7 @@ mod error_kinds_query;
 mod error_kinds_rewrite;
 mod error_kinds_setup;
 mod error_kinds_stats;
+mod firewall_interfaces;
 mod log_level;
 mod reload;
 mod stop_impact;

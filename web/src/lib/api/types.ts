@@ -369,6 +369,9 @@ export function formatEventPayload(
 				if (changeKind === 'HostnameHint' && inner?.hostname) {
 					return `Hostname updated for ${devLabel}: ${inner.hostname}`;
 				}
+				if (changeKind === 'HostnameRefused' && inner?.hostname) {
+					return `Hostname "${inner.hostname}" refused for ${devLabel}: a port forward or DNS rewrite binds it to ${inner.holder} (delete that device or drop the reference to free it)`;
+				}
 				if (changeKind === 'DuidAssociated' && inner?.duid) {
 					return `DUID associated with ${devLabel}: ${inner.duid}`;
 				}
@@ -1276,7 +1279,6 @@ export interface PppoeNftablesConfig {
 	bypass_dns: boolean;
 	bypass_vowifi: boolean;
 	masquerade: boolean;
-	custom_rules_file: string | null;
 	lan_ifaces?: string[];
 }
 

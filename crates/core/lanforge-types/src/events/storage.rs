@@ -8,6 +8,10 @@ pub enum StorageEvent {
     DbReset,
     DbResetCompleted,
     TableDirty,
-    DbWrite { devices: usize },
+    DbWrite {
+        devices: usize,
+    },
     SaveTrafficHistory(Vec<TrafficHistorySample>),
+    /// The names bound to devices changed (`LanforgeContext::name_bindings`): save them.
+    NameBindingsChanged,
 }

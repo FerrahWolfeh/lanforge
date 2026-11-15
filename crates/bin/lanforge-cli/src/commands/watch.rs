@@ -250,6 +250,11 @@ fn render_device_event(time_str: &str, evt: &DeviceEvent, printer: &Printer, ver
                 }
                 NetworkChange::IpDeleted { ip } => format!("IP removed: {ip}").red().to_string(),
                 NetworkChange::IpOffline { ip } => format!("IP offline: {ip}").dimmed().to_string(),
+                NetworkChange::HostnameRefused { hostname, holder } => {
+                    format!("Hostname '{hostname}' refused: bound to {holder}")
+                        .red()
+                        .to_string()
+                }
             };
 
             print_log(

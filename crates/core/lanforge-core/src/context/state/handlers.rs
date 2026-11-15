@@ -204,15 +204,11 @@ impl State {
     }
 
     pub(crate) fn handle_hostname_hint_dhcp(&mut self, mac: MacAddr, hostname: &str) -> EventVec {
-        self.mutate_device(mac, |dev| {
-            dev.apply_hostname_hint(hostname, HostnameOrigin::Dhcp)
-        })
+        self.claim_hostname(mac, hostname, HostnameOrigin::Dhcp)
     }
 
     pub(crate) fn handle_hostname_hint_mdns(&mut self, mac: MacAddr, hostname: &str) -> EventVec {
-        self.mutate_device(mac, |dev| {
-            dev.apply_hostname_hint(hostname, HostnameOrigin::Mdns)
-        })
+        self.claim_hostname(mac, hostname, HostnameOrigin::Mdns)
     }
 
     pub(crate) fn handle_duid_associated(
@@ -277,7 +273,11 @@ impl State {
         if let Some(dev) = self.devices.remove(&mac) {
             self.unindex_device(&dev);
             self.rebuild_static_registry();
-            return vec![LanforgeEvent::Device(DeviceEvent::Purged { mac })].into();
+            let mut events: EventVec =
+                vec![LanforgeEvent::Device(DeviceEvent::Purged { mac })].into();
+            // Deleting a device is how the admin frees the names bound to it.
+            events.extend(self.unbind_names_of(mac));
+            return events;
         }
         EventVec::new()
     }

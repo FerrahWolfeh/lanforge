@@ -1,4 +1,7 @@
-use crate::bus::{EventBus, FirewallEvent, LanforgeEvent, SystemEvent};
+use crate::bus::{
+    DeviceEvent, EventBus, EventVec, FirewallEvent, LanforgeEvent, NetworkChange, SystemEvent,
+};
+use crate::context::ConfigPatch;
 use crate::context::LanforgeContext;
 use crate::context::state::State;
 use crate::error::CoreError;
@@ -8,9 +11,11 @@ use lanforge_types::network::firewall::{DynamicPortRequest, FirewallConfig, L4Pr
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::system::{Cap, ServiceId, ServiceState, SystemStatus};
 use lanforge_types::update::DeviceUpdate;
+use std::iter;
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::task::yield_now;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -386,4 +391,252 @@ fn resolve_device_prefers_the_static_hosts_name() {
     assert_eq!(ctx.resolve_device(&DeviceIdentifier::Mac(nas)), Some(nas));
     let unknown: DeviceIdentifier = "printer".parse().unwrap();
     assert_eq!(ctx.resolve_device(&unknown), None);
+}
+
+fn hint(ctx: &LanforgeContext, mac: MacAddr, name: &str) -> EventVec {
+    ctx.apply_with_events(DeviceUpdate::DhcpHostnameHint {
+        mac,
+        hostname: name.to_string(),
+    })
+}
+
+fn refused_by(events: &EventVec) -> Option<MacAddr> {
+    events.iter().find_map(|e| match e {
+        LanforgeEvent::Device(DeviceEvent::NetworkUpdate { change, .. }) => match &**change {
+            NetworkChange::HostnameRefused { holder, .. } => Some(*holder),
+            _ => None,
+        },
+        _ => None,
+    })
+}
+
+fn hostname_of(ctx: &LanforgeContext, mac: MacAddr) -> String {
+    ctx.get_device(&mac)
+        .map_or_else(String::new, |d| d.hostname.name.clone())
+}
+
+fn resolved(ctx: &LanforgeContext, name: &str) -> Option<MacAddr> {
+    ctx.resolve_device(&name.parse().unwrap())
+}
+
+/// A port forward to `dev:<name>`, through the entry point the API and reload use.
+fn forward_to(ctx: &LanforgeContext, names: &[&str]) {
+    use lanforge_types::network::firewall::PortForwardRule;
+
+    let mut fw = FirewallConfig::default();
+    for (i, name) in names.iter().enumerate() {
+        fw.port_forwards.push(PortForwardRule {
+            comment: None,
+            src_zone: "external".to_string(),
+            internal_ip: format!("dev:{name}").parse().unwrap(),
+            external_port: 8000 + u16::try_from(i).unwrap(),
+            internal_port: 8000 + u16::try_from(i).unwrap(),
+            protocol: L4Protocol::Tcp,
+            enable_hairpin: false,
+            family: None,
+        });
+    }
+    let _ = ctx.apply_config(ConfigPatch::new().with_firewall(fw));
+}
+
+const SERVER: MacAddr = MacAddr([2, 0, 0, 0, 0, 1]);
+const INTRUDER: MacAddr = MacAddr([2, 0, 0, 0, 0, 2]);
+
+fn new_ctx() -> LanforgeContext {
+    LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None)
+}
+
+/// A name nothing security-relevant targets keeps following whoever announces it: a phone that
+/// re-randomizes its MAC keeps its name (and its adblock group).
+#[test]
+fn an_unbound_name_follows_its_announcer() {
+    let ctx = new_ctx();
+    let _ = hint(&ctx, SERVER, "pixel");
+    let events = hint(&ctx, INTRUDER, "pixel");
+    assert_eq!(refused_by(&events), None);
+    assert_eq!(hostname_of(&ctx, INTRUDER), "pixel");
+    assert_eq!(resolved(&ctx, "pixel"), Some(INTRUDER));
+    assert!(ctx.name_bindings().is_empty());
+}
+
+/// Anyone on the LAN can announce any hostname. A device announcing the name a port forward
+/// targets took the forward (and its IPv6 pinhole); the forward binds the name to its device
+/// now, and another announcer is refused.
+#[test]
+fn a_forward_binds_its_name_and_refuses_other_announcers() {
+    let ctx = new_ctx();
+    let _ = hint(&ctx, SERVER, "servidor");
+    forward_to(&ctx, &["servidor"]);
+    assert_eq!(ctx.name_bindings().get("servidor"), Some(&SERVER));
+
+    let events = hint(&ctx, INTRUDER, "Servidor");
+    assert_eq!(refused_by(&events), Some(SERVER), "{events:?}");
+    assert_eq!(resolved(&ctx, "servidor"), Some(SERVER));
+    assert_ne!(hostname_of(&ctx, INTRUDER).to_lowercase(), "servidor");
+    assert_eq!(
+        ctx.read().bound_device("servidor"),
+        Some(SERVER),
+        "DNS path"
+    );
+
+    // DHCP renewals and mDNS announcements repeat the claim: reported once, still refused.
+    assert_eq!(refused_by(&hint(&ctx, INTRUDER, "servidor")), None);
+    let _ = ctx.apply(DeviceUpdate::MdnsHostnameHint {
+        mac: INTRUDER,
+        hostname: "servidor".to_string(),
+    });
+    assert_eq!(resolved(&ctx, "servidor"), Some(SERVER));
+    // The holder renewing its own name is no conflict.
+    assert_eq!(refused_by(&hint(&ctx, SERVER, "servidor")), None);
+}
+
+/// Mentioned before any device holds it: the first device announcing it gets it.
+#[test]
+fn a_name_referenced_first_binds_its_first_announcer() {
+    let ctx = new_ctx();
+    forward_to(&ctx, &["servidor"]);
+    assert!(ctx.name_bindings().is_empty());
+
+    let _ = hint(&ctx, SERVER, "servidor");
+    assert_eq!(ctx.name_bindings().get("servidor"), Some(&SERVER));
+    assert_eq!(refused_by(&hint(&ctx, INTRUDER, "servidor")), Some(SERVER));
+}
+
+/// A DNS rewrite to `dev:<name>` binds like a forward (its fallback too).
+#[test]
+fn a_dns_rewrite_binds_its_name() {
+    use lanforge_types::network::dns::DnsRecordType;
+    use lanforge_types::network::dns::adblock::{RewriteAnswer, RewriteRule};
+
+    let ctx = new_ctx();
+    let _ = hint(&ctx, SERVER, "pixie");
+    let _ = ctx.apply_config(ConfigPatch::new().with_dns_rewrites(vec![RewriteRule {
+        id: None,
+        domain: "*.eonteam.xyz".to_string(),
+        rtype: DnsRecordType::Device,
+        answer: "dev:pixie".parse::<RewriteAnswer>().unwrap(),
+    }]));
+    assert_eq!(ctx.name_bindings().get("pixie"), Some(&SERVER));
+    assert_eq!(refused_by(&hint(&ctx, INTRUDER, "pixie")), Some(SERVER));
+}
+
+/// Dropping the last reference frees the name: it follows announcers again.
+#[test]
+fn dropping_the_reference_unbinds_the_name() {
+    let ctx = new_ctx();
+    let _ = hint(&ctx, SERVER, "servidor");
+    forward_to(&ctx, &["servidor"]);
+    forward_to(&ctx, &[]);
+    assert!(ctx.name_bindings().is_empty());
+
+    assert_eq!(refused_by(&hint(&ctx, INTRUDER, "servidor")), None);
+    assert_eq!(resolved(&ctx, "servidor"), Some(INTRUDER));
+}
+
+/// Deleting the bound device frees the name; the forward still names it, so the next device
+/// announcing it is bound (a replaced server).
+#[test]
+fn deleting_the_bound_device_frees_its_name() {
+    let ctx = new_ctx();
+    let _ = hint(&ctx, SERVER, "servidor");
+    forward_to(&ctx, &["servidor"]);
+
+    let _ = ctx.apply(DeviceUpdate::HostRemoved { mac: SERVER });
+    assert!(ctx.name_bindings().is_empty());
+    assert_eq!(refused_by(&hint(&ctx, INTRUDER, "servidor")), None);
+    assert_eq!(ctx.name_bindings().get("servidor"), Some(&INTRUDER));
+}
+
+/// The bindings come back from redb before any announcement: a restart opens no race.
+#[test]
+fn restored_bindings_hold_before_any_announcement() {
+    let ctx = new_ctx();
+    ctx.restore_name_bindings(iter::once(("servidor".to_string(), SERVER)).collect());
+    forward_to(&ctx, &["servidor"]);
+    assert_eq!(refused_by(&hint(&ctx, INTRUDER, "servidor")), Some(SERVER));
+}
+
+/// The DNS fallback name (`dev:<fallback>` works too) binds like a hostname.
+#[test]
+fn a_bound_dns_fallback_is_refused_to_others() {
+    let ctx = new_ctx();
+    let _ = hint(&ctx, SERVER, "servidor");
+    let fallback = ctx.get_device(&SERVER).unwrap().dns_fallback.clone();
+    forward_to(&ctx, &[&fallback]);
+
+    assert_eq!(refused_by(&hint(&ctx, INTRUDER, &fallback)), Some(SERVER));
+}
+
+/// A static host's name is pinned by `[hosts]`: never bound, and still resolved first.
+#[test]
+fn a_static_hosts_name_is_not_bound() {
+    use lanforge_types::device::StaticHost;
+
+    let ctx = new_ctx();
+    let nas = MacAddr([2, 0, 0, 0, 5, 1]);
+    let issues = ctx.apply_static_hosts(&[StaticHost {
+        mac: nas,
+        hostname: "nas".to_string(),
+        v4: None,
+        v6: None,
+        boot_file: None,
+    }]);
+    assert!(issues.is_empty(), "{issues:?}");
+    forward_to(&ctx, &["nas"]);
+    assert!(ctx.name_bindings().is_empty());
+    let _ = hint(&ctx, INTRUDER, "nas");
+    assert_eq!(resolved(&ctx, "nas"), Some(nas));
+}
+
+/// A device dropping a name another device holds (an announcer that had it before the admin
+/// made it a static host) unindexed the holder: the DNS lost the static host's name.
+#[test]
+fn a_device_dropping_a_shared_name_keeps_the_holder_indexed() {
+    use lanforge_types::device::StaticHost;
+
+    let ctx = new_ctx();
+    let announcer = MacAddr([2, 0, 0, 0, 0, 9]);
+    let _ = hint(&ctx, announcer, "nas");
+    let nas = MacAddr([2, 0, 0, 0, 5, 1]);
+    let issues = ctx.apply_static_hosts(&[StaticHost {
+        mac: nas,
+        hostname: "nas".to_string(),
+        v4: None,
+        v6: None,
+        boot_file: None,
+    }]);
+    assert!(issues.is_empty(), "{issues:?}");
+    assert_eq!(ctx.get_by_hostname("nas").map(|d| d.mac), Some(nas));
+
+    let _ = hint(&ctx, announcer, "tablet");
+    assert_eq!(ctx.get_by_hostname("nas").map(|d| d.mac), Some(nas));
+}
+
+/// A device announcing a static host's name took the name index entry the DNS resolver reads
+/// (`nas.lan` answered the announcer) while `dev:nas` still found the static host.
+#[test]
+fn an_announcer_never_takes_a_static_hosts_dns_name() {
+    use lanforge_types::device::StaticHost;
+
+    let ctx = new_ctx();
+    let nas = MacAddr([2, 0, 0, 0, 5, 1]);
+    let issues = ctx.apply_static_hosts(&[StaticHost {
+        mac: nas,
+        hostname: "nas".to_string(),
+        v4: None,
+        v6: None,
+        boot_file: None,
+    }]);
+    assert!(issues.is_empty(), "{issues:?}");
+
+    let _ = hint(&ctx, INTRUDER, "NAS");
+    let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
+        mac: INTRUDER,
+        ip: Ipv4Addr::new(192, 168, 1, 66),
+        expires: SystemTime::now() + Duration::from_hours(1),
+    });
+    assert_eq!(ctx.get_by_hostname("nas").map(|d| d.mac), Some(nas));
+    // A full rebuild (boot, indexing switched on) keeps it too.
+    ctx.with_state_mut(State::rebuild_indices);
+    assert_eq!(ctx.get_by_hostname("nas").map(|d| d.mac), Some(nas));
 }

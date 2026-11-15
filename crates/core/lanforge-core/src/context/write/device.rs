@@ -2,8 +2,11 @@
 
 use crate::context::LanforgeContext;
 use lanforge_types::device::{Origin, StaticHost};
-use lanforge_types::identifiers::MacAddr;
+use lanforge_types::identifiers::{DeviceIdentifier, MacAddr};
+use lanforge_types::network::dns::adblock::RewriteAnswer;
+use lanforge_types::network::firewall::ForwardTarget;
 use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate};
+use std::collections::{BTreeMap, HashSet};
 use std::time::{Duration, SystemTime};
 
 #[cfg(test)]
@@ -74,7 +77,66 @@ impl LanforgeContext {
                 let _ = self.apply(DeviceUpdate::HostDemoted { mac: live.mac });
             }
         }
+        // A demoted host's name is no longer pinned by `[hosts]`: a reference binds it now,
+        // before any other device can announce it.
+        self.refresh_name_references();
         issues
+    }
+
+    /// The names `dev:<name>` port forwards, IPv6 pinholes and DNS rewrites target, lowercase.
+    /// Adblock references never bind (see `state/names.rs`).
+    fn referenced_device_names(&self) -> HashSet<String> {
+        let mut names = HashSet::new();
+        if let Some(fw) = self.get_firewall_config() {
+            for pf in &fw.port_forwards {
+                if let ForwardTarget::Device(DeviceIdentifier::Name(name)) = &pf.internal_ip {
+                    names.insert(name.to_ascii_lowercase());
+                }
+            }
+        }
+        self.with_config(|cfg| {
+            for rule in &cfg.dns_rewrites {
+                let mut answer = Some(&rule.answer);
+                while let Some(RewriteAnswer::Device {
+                    identifier,
+                    fallback,
+                }) = answer
+                {
+                    if let DeviceIdentifier::Name(name) = identifier {
+                        names.insert(name.to_ascii_lowercase());
+                    }
+                    answer = fallback.as_deref();
+                }
+            }
+        });
+        names
+    }
+
+    /// Binds the names the forwards and rewrites target now and unbinds the ones they dropped:
+    /// at start (after the saved bindings are restored), on every firewall or rewrite change
+    /// and after `[hosts]` changes.
+    pub fn refresh_name_references(&self) {
+        let names = self.referenced_device_names();
+        let events = self.with_state_mut(|state| state.set_name_references(names));
+        self.publish_events(&events);
+    }
+
+    /// Restores the name bindings saved in redb. Call it at start, before `[hosts]` and the
+    /// references are applied and before any service runs.
+    pub fn restore_name_bindings(&self, bindings: BTreeMap<String, MacAddr>) {
+        self.with_state_mut(|state| state.restore_name_bindings(bindings));
+    }
+
+    /// The names bound to devices (lowercase name → MAC), as redb keeps them.
+    #[must_use]
+    pub fn name_bindings(&self) -> BTreeMap<String, MacAddr> {
+        self.with_state(|state| {
+            state
+                .name_bindings
+                .iter()
+                .map(|(name, mac)| (name.clone(), *mac))
+                .collect()
+        })
     }
 
     /// Triggers the background garbage collection process.

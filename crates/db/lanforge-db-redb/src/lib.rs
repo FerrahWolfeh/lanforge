@@ -4,6 +4,7 @@
 pub mod device;
 pub mod log;
 pub mod log_filter;
+pub mod name_bindings;
 pub mod prefix;
 pub mod tables;
 pub mod user;
@@ -1006,7 +1007,8 @@ mod tests {
     /// last GUA prefix and the saved log filter are state, not among them.
     #[test]
     fn legacy_config_keys_are_listed_except_the_state_keys() {
-        use lanforge_db_core::{ConfigKey, LogFilterStore, PrefixStore};
+        use lanforge_db_core::{ConfigKey, LogFilterStore, NameBindingStore, PrefixStore};
+        use lanforge_types::identifiers::MacAddr;
         use lanforge_types::network::Ipv6Prefix;
 
         let db = RedbDatabase::open_temp().unwrap();
@@ -1014,9 +1016,41 @@ mod tests {
         db.save_last_gua_prefix(Some(Ipv6Prefix::from_addr("2001:db8::".parse().unwrap())))
             .unwrap();
         db.save_log_filter(Some(&"debug".parse().unwrap())).unwrap();
+        db.save_name_bindings(
+            &[("nas".to_string(), MacAddr([2, 0, 0, 0, 5, 1]))]
+                .into_iter()
+                .collect(),
+        )
+        .unwrap();
         assert!(db.legacy_config_keys().unwrap().is_empty());
         db.put(ConfigKey::<u32>::new("dhcp_options"), &1).unwrap();
         assert_eq!(db.legacy_config_keys().unwrap(), vec!["dhcp_options"]);
+    }
+
+    #[test]
+    fn the_name_bindings_are_saved_replaced_and_cleared() {
+        use lanforge_db_core::NameBindingStore;
+        use lanforge_types::identifiers::MacAddr;
+        use std::collections::BTreeMap;
+
+        let db = RedbDatabase::open_temp().unwrap();
+        assert!(db.load_name_bindings().unwrap().is_empty());
+        let one: BTreeMap<String, MacAddr> =
+            [("servidor".to_string(), MacAddr([2, 0, 0, 0, 0, 1]))]
+                .into_iter()
+                .collect();
+        db.save_name_bindings(&one).unwrap();
+        assert_eq!(db.load_name_bindings().unwrap(), one);
+        let two: BTreeMap<String, MacAddr> = [
+            ("pixie".to_string(), MacAddr([2, 0, 0, 0, 0, 3])),
+            ("servidor".to_string(), MacAddr([2, 0, 0, 0, 0, 4])),
+        ]
+        .into_iter()
+        .collect();
+        db.save_name_bindings(&two).unwrap();
+        assert_eq!(db.load_name_bindings().unwrap(), two);
+        db.save_name_bindings(&BTreeMap::new()).unwrap();
+        assert!(db.load_name_bindings().unwrap().is_empty());
     }
 
     #[test]

@@ -209,6 +209,16 @@ impl ClientContext {
     }
 
     pub async fn handle_update_firewall_config(&self, cfg: FirewallConfig) -> Response {
+        // The same pre-flight checks as propose/commit: this route used to apply unchecked.
+        let report = self.ctx.check_firewall_candidate(&cfg);
+        if !report.valid {
+            return Response::Rejected {
+                error: format!(
+                    "Firewall configuration not saved: {}",
+                    report.errors.join("; ")
+                ),
+            };
+        }
         let persisted = match self.persist_firewall(&cfg) {
             Ok(p) => p,
             Err(e) => return e.response_in("Firewall configuration not saved"),

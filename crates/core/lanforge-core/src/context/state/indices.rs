@@ -32,14 +32,36 @@ impl Indices {
         self.ip_index.shrink_to_fit();
     }
 
-    pub fn index_device(&mut self, mac: MacAddr, dev: &Device) {
+    /// Removes `name` only if it points at `mac`: a device losing a name another device holds
+    /// must not unindex the holder.
+    fn release_name(&mut self, name: &str, mac: MacAddr) {
+        if self.name_index.get(name) == Some(&mac) {
+            self.name_index.remove(name);
+        }
+    }
+
+    /// Indexes `dev` under `mac`. A name follows the last device indexed with it, except that a
+    /// non-static device never takes a static host's name (`is_static` tells which MACs are):
+    /// the admin named that host in `[hosts]`, and `dev:<name>` already resolves it first.
+    pub fn index_device(
+        &mut self,
+        mac: MacAddr,
+        dev: &Device,
+        is_static: impl Fn(&MacAddr) -> bool,
+    ) {
         if !dev.hostname.name.is_empty() {
             let key = if dev.hostname.name.bytes().any(|b| b.is_ascii_uppercase()) {
                 dev.hostname.name.to_ascii_lowercase()
             } else {
                 dev.hostname.name.clone()
             };
-            self.name_index.insert(key, mac);
+            let static_holder = self
+                .name_index
+                .get(&key)
+                .is_some_and(|held| *held != mac && is_static(held));
+            if dev.is_static() || !static_holder {
+                self.name_index.insert(key, mac);
+            }
         }
         self.name_index.insert(dev.dns_fallback.clone(), mac);
 
@@ -60,13 +82,12 @@ impl Indices {
     pub fn unindex_device(&mut self, dev: &Device) {
         if !dev.hostname.name.is_empty() {
             if dev.hostname.name.bytes().any(|b| b.is_ascii_uppercase()) {
-                self.name_index
-                    .remove(&dev.hostname.name.to_ascii_lowercase());
+                self.release_name(&dev.hostname.name.to_ascii_lowercase(), dev.mac);
             } else {
-                self.name_index.remove(dev.hostname.name.as_str());
+                self.release_name(dev.hostname.name.as_str(), dev.mac);
             }
         }
-        self.name_index.remove(dev.dns_fallback.as_str());
+        self.release_name(dev.dns_fallback.as_str(), dev.mac);
 
         if let Some(duid) = &dev.duid {
             self.duid_index.remove(duid);

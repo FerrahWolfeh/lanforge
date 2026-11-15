@@ -1,12 +1,12 @@
 use lanforge_types::identifiers::DeviceIdentifier;
 use lanforge_types::network::firewall::{
-    DynamicPortRequest, FirewallConfig, FirewallMode, FirewallPolicy, ForwardAddrs, ForwardTarget,
-    L4Protocol, PortForwardRule,
+    DynamicPortRequest, FirewallConfig, FirewallMode, FirewallPolicy, FirewallZone, ForwardAddrs,
+    ForwardTarget, L4Protocol, PortForwardRule,
 };
 use nftables::batch::Batch;
 use nftables::expr::{
     CT, Expression, Fib, FibFlag, FibResult, Meta, MetaKey, NamedExpression, Payload, PayloadField,
-    TcpOption,
+    Prefix, TcpOption,
 };
 use nftables::schema::{Chain, FlowTable, FlushObject, NfCmd, NfListObject, Nftables, Rule, Table};
 use nftables::stmt::{Flow, Limit, Mangle, Match, NAT, NATFamily, Operator, SetOp, Statement};
@@ -15,6 +15,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::iter;
 use std::net::{IpAddr, Ipv4Addr};
+use tracing::warn;
 
 fn is_external_zone(name: &str) -> bool {
     name == "external" || name == "wan"
@@ -117,9 +118,26 @@ impl<'a> RulesetBuilder<'a> {
         for zone in &self.cfg.zones {
             if zone.name == zone_name {
                 for iface in &zone.interfaces {
-                    if !iface.starts_with("ifb") && !ifaces.contains(iface) {
-                        ifaces.push(iface.clone());
+                    if iface.starts_with("ifb") || ifaces.contains(iface) {
+                        continue;
                     }
+                    // nft refuses the whole ruleset for a bare `*`: the firewall would keep an
+                    // old ruleset forever. Left out, and refused by the API's pre-flight check.
+                    if let Some(issue) = FirewallZone::pattern_issue(iface) {
+                        warn!(zone = %zone.name, interface = %iface, issue, "Firewall zone interface left out");
+                        continue;
+                    }
+                    // Only a zone facing the WAN may hold it: in any other zone it would get the
+                    // zone's policy, the DNS/IKE bypasses and DNAT acceptance (`ppp*` in
+                    // `internal` opened the WAN). The pattern is left out while it matches.
+                    if !zone.faces_wan()
+                        && let Some(wan) = self.active_wan
+                        && FirewallZone::pattern_matches(iface, wan)
+                    {
+                        warn!(zone = %zone.name, interface = %iface, wan, "Firewall zone interface matches the WAN; left out");
+                        continue;
+                    }
+                    ifaces.push(iface.clone());
                 }
                 // Auto-bind active WAN interface to external zone
                 if (zone.name == "external" || zone.name == "wan")
@@ -135,12 +153,6 @@ impl<'a> RulesetBuilder<'a> {
                 {
                     ifaces.push(lan.to_string());
                 }
-                // Auto-bind podman* container wildcard to trusted zone if missing
-                if (zone.name == "trusted" || zone.name == "containers")
-                    && !ifaces.iter().any(|i| i == "podman*")
-                {
-                    ifaces.push("podman*".to_string());
-                }
             }
         }
         ifaces
@@ -150,8 +162,10 @@ impl<'a> RulesetBuilder<'a> {
     #[must_use]
     pub fn resolve_internal_interfaces(&self) -> Vec<String> {
         let mut ifaces = Vec::new();
+        // By what the zone does, not its name: an uplink zone called `isp` got the bypasses
+        // (an open resolver on the WAN) and DNAT acceptance.
         for zone in &self.cfg.zones {
-            if zone.name != "external" && zone.name != "wan" {
+            if !zone.faces_wan() {
                 for iface in self.resolve_zone_interfaces(&zone.name) {
                     if !iface.is_empty() && !ifaces.contains(&iface) {
                         ifaces.push(iface);
@@ -462,7 +476,29 @@ impl<'a> RulesetBuilder<'a> {
             }
         }
 
-        // Rule: DHCPv6 Client (UDP 546) on WAN for ISP Prefix Delegation (IA_PD)
+        Self::build_input_dhcpv6_client(batch, table);
+    }
+
+    /// `DHCPv6` client replies (the ISP's prefix delegation, `IA_PD`): IPv6 only, server port
+    /// 547 to client port 546, to a link-local address. A client sends from its link-local
+    /// address (RFC 8415 §16), so servers and relays answer there, whatever their own source
+    /// address; and no router forwards a packet to a link-local address, so nothing beyond the
+    /// link can reach the client port. Replies to a client's unicast request are `established`.
+    /// The rule accepted UDP 546 on every interface and family, from anywhere.
+    #[allow(clippy::ptr_arg)]
+    fn build_input_dhcpv6_client(batch: &mut Batch<'static>, table: &Cow<'static, str>) {
+        let port = |field: &'static str, number: u32| {
+            Statement::Match(Match {
+                left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                    PayloadField {
+                        protocol: "udp".into(),
+                        field: field.into(),
+                    },
+                ))),
+                right: Expression::Number(number),
+                op: Operator::EQ,
+            })
+        };
         batch.add(Self::make_rule(
             table,
             "input",
@@ -470,13 +506,18 @@ impl<'a> RulesetBuilder<'a> {
                 Statement::Match(Match {
                     left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
                         PayloadField {
-                            protocol: "udp".into(),
-                            field: "dport".into(),
+                            protocol: "ip6".into(),
+                            field: "daddr".into(),
                         },
                     ))),
-                    right: Expression::Number(546),
+                    right: Expression::Named(NamedExpression::Prefix(Prefix {
+                        addr: Box::new(Expression::String("fe80::".into())),
+                        len: 10,
+                    })),
                     op: Operator::EQ,
                 }),
+                port("sport", 547),
+                port("dport", 546),
                 Statement::Accept(None),
             ],
         ));
@@ -1338,8 +1379,15 @@ impl<'a> RulesetBuilder<'a> {
         cfg.default_input_policy = FirewallPolicy::Drop;
         cfg.default_forward_policy = FirewallPolicy::Drop;
         cfg.port_forwards.clear();
-        cfg.forwardings.retain(|f| !is_external_zone(&f.from));
-        for zone in cfg.zones.iter_mut().filter(|z| is_external_zone(&z.name)) {
+        let wan_zones: Vec<String> = cfg
+            .zones
+            .iter()
+            .filter(|z| z.faces_wan())
+            .map(|z| z.name.clone())
+            .collect();
+        let faces_wan = |name: &str| is_external_zone(name) || wan_zones.iter().any(|z| z == name);
+        cfg.forwardings.retain(|f| !faces_wan(&f.from));
+        for zone in cfg.zones.iter_mut().filter(|z| z.faces_wan()) {
             zone.open_ports.clear();
             zone.input_policy = FirewallPolicy::Drop;
             zone.forward_policy = FirewallPolicy::Drop;
@@ -1347,7 +1395,7 @@ impl<'a> RulesetBuilder<'a> {
         let dynamic_ports: Vec<DynamicPortRequest> = self
             .dynamic_ports
             .iter()
-            .filter(|p| !is_external_zone(&p.zone))
+            .filter(|p| !faces_wan(&p.zone))
             .cloned()
             .collect();
 

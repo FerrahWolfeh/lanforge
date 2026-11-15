@@ -694,7 +694,8 @@ fn test_sanity_no_interface_less_accept_reaches_wan() {
         let allowed = expr.contains("\"established\"")
             || expr.contains("\"icmp\"")
             || expr.contains("\"icmpv6\"")
-            || expr.contains("\"right\":546}");
+            // DHCPv6 client replies, only to a link-local address (no router forwards those).
+            || (expr.contains("\"right\":546}") && expr.contains("\"fe80::\""));
         if !allowed {
             offenders.push(format!("{chain}: {expr}"));
         }
@@ -768,5 +769,186 @@ fn test_dnat_only_for_the_routers_own_addresses() {
     assert!(
         open.is_empty(),
         "DNAT without a local-destination match: {open:#?}"
+    );
+}
+
+fn default_with_internal(ifaces: &[&str]) -> FirewallConfig {
+    let mut cfg = FirewallConfig::default();
+    cfg.zones
+        .iter_mut()
+        .find(|z| z.name == "internal")
+        .unwrap()
+        .interfaces
+        .extend(ifaces.iter().map(ToString::to_string));
+    cfg
+}
+
+/// `ppp*` in `internal` is a prefix match that takes `ppp0`: it gave the WAN the internal
+/// zone's accept policy, the DNS/IKE bypasses, DNAT acceptance and intra-zone forwarding to the
+/// LAN (every LAN IPv6 host open to the internet). A config from the file reaches the compiler
+/// without the API's pre-flight check, so the compiler leaves the pattern out itself.
+#[test]
+fn test_sanity_non_wan_zone_pattern_matching_wan_left_out() {
+    let cfg = default_with_internal(&["ppp*", "br0"]);
+    let ruleset = RulesetBuilder::new(&cfg)
+        .with_active_wan(Some("ppp0"))
+        .with_primary_lan(Some("lan0"))
+        .build();
+    let json = serde_json::to_string(&ruleset).unwrap();
+    assert!(
+        !json.contains("\"ppp*\""),
+        "a pattern taking the WAN reached the ruleset"
+    );
+    assert!(json.contains("\"br0\""), "the zone's other interfaces stay");
+    assert!(json.contains("\"lan0\""), "the LAN stays internal");
+}
+
+/// Without a WAN up nothing can be taken; the pattern compiles and is left out again when the
+/// WAN comes up (the firewall recompiles on `SessionUp`).
+#[test]
+fn test_sanity_wildcard_kept_while_no_wan_is_up() {
+    let cfg = default_with_internal(&["ppp*"]);
+    let json = serde_json::to_string(&RulesetBuilder::new(&cfg).build()).unwrap();
+    assert!(json.contains("\"ppp*\""));
+}
+
+/// A bare `*` makes nft refuse the whole ruleset (the firewall then keeps an older one).
+#[test]
+fn test_sanity_bare_star_and_empty_interface_left_out() {
+    let cfg = default_with_internal(&["*", ""]);
+    let ruleset = RulesetBuilder::new(&cfg)
+        .with_active_wan(Some("ppp0"))
+        .with_primary_lan(Some("lan0"))
+        .build();
+    let json = serde_json::to_string(&ruleset).unwrap();
+    assert!(!json.contains("\"*\""), "bare `*` reached the ruleset");
+    assert!(
+        !json.contains("\"iifname\"}},\"right\":\"\""),
+        "empty name reached the ruleset"
+    );
+}
+
+/// DHCPv6 client port: UDP 546 was accepted on every interface and both families, from
+/// anywhere (the lockdown table too). Only IPv6 replies from port 547 to a link-local address
+/// remain: what a DHCPv6 server or relay sends a client (RFC 8415 §16), unreachable from beyond
+/// the link.
+#[test]
+fn test_sanity_dhcpv6_client_port_only_to_link_local() {
+    let cfg = FirewallConfig::default();
+    let builder = RulesetBuilder::new(&cfg)
+        .with_active_wan(Some("ppp0"))
+        .with_primary_lan(Some("lan0"));
+    for ruleset in [builder.build(), builder.build_lockdown()] {
+        let v = serde_json::to_value(&ruleset).unwrap();
+        let rules: Vec<String> = v["nftables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|cmd| cmd.get("add").and_then(|a| a.get("rule")))
+            .map(|rule| rule["expr"].to_string())
+            .filter(|expr| expr.contains("\"right\":546}"))
+            .collect();
+        assert_eq!(rules.len(), 1, "{rules:?}");
+        let rule = &rules[0];
+        assert!(
+            rule.contains("\"ip6\"") && rule.contains("\"daddr\""),
+            "{rule}"
+        );
+        assert!(
+            rule.contains("\"addr\":\"fe80::\"") && rule.contains("\"len\":10"),
+            "{rule}"
+        );
+        assert!(rule.contains("\"right\":547}"), "server port: {rule}");
+    }
+}
+
+/// `podman*` was put back into `trusted` (accept input, routed to the LAN) when the admin had
+/// removed it: any container on the router got the router and the LAN. The default zones still
+/// list it; a file without it keeps it out.
+#[test]
+fn test_sanity_podman_stays_out_of_trusted_when_removed() {
+    let mut cfg = FirewallConfig::default();
+    cfg.zones
+        .iter_mut()
+        .find(|z| z.name == "trusted")
+        .unwrap()
+        .interfaces
+        .retain(|i| i != "podman*");
+    let running = cfg.effective(None, false, "lan0");
+    let ruleset = RulesetBuilder::new(&running)
+        .with_active_wan(Some("ppp0"))
+        .with_primary_lan(Some("lan0"))
+        .build();
+    let json = serde_json::to_string(&ruleset).unwrap();
+    assert!(!json.contains("podman"), "podman came back");
+    assert!(json.contains("\"tailscale0\""));
+}
+
+/// The default config with its `external` zone renamed `isp`: an uplink by what it does
+/// (masquerade), not by name.
+fn uplink_named_isp() -> FirewallConfig {
+    let mut cfg = FirewallConfig::default();
+    for zone in &mut cfg.zones {
+        if zone.name == "external" {
+            zone.name = "isp".into();
+            zone.interfaces = vec!["ppp0".into()];
+        }
+    }
+    for fwd in &mut cfg.forwardings {
+        for end in [&mut fwd.from, &mut fwd.to] {
+            if end == "external" {
+                *end = "isp".into();
+            }
+        }
+    }
+    cfg
+}
+
+/// An uplink zone not called `external` counted as internal: its WAN interface got the DNS
+/// and IKE bypasses (an open resolver) and DNAT acceptance. Then the WAN guard took the WAN out
+/// of it, and with it the masquerade (no internet). It is a zone facing the WAN now.
+#[test]
+fn test_sanity_uplink_zone_with_another_name_faces_the_wan() {
+    let cfg = uplink_named_isp();
+    let builder = RulesetBuilder::new(&cfg)
+        .with_active_wan(Some("ppp0"))
+        .with_primary_lan(Some("lan0"));
+    assert!(
+        !builder
+            .resolve_internal_interfaces()
+            .iter()
+            .any(|i| i == "ppp0"),
+        "the uplink must not count as internal"
+    );
+    assert_eq!(
+        builder.resolve_zone_interfaces("isp"),
+        vec!["ppp0".to_string()]
+    );
+
+    let v = serde_json::to_value(builder.build()).unwrap();
+    let rules: Vec<String> = v["nftables"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|cmd| cmd.get("add").and_then(|a| a.get("rule")))
+        .map(ToString::to_string)
+        .collect();
+    assert!(
+        rules
+            .iter()
+            .any(|r| r.contains("\"ppp0\"") && r.contains("masquerade")),
+        "the uplink keeps its masquerade"
+    );
+    assert!(
+        !rules.iter().any(|r| r.contains("\"ppp0\"")
+            && r.contains("\"right\":53}")
+            && r.contains("\"accept\"")),
+        "no DNS bypass on the uplink"
+    );
+    assert!(
+        !rules
+            .iter()
+            .any(|r| r.contains("\"ppp0\"") && r.contains("\"dnat\"") && r.contains("\"accept\"")),
+        "no DNAT acceptance on the uplink"
     );
 }
