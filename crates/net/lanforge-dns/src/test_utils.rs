@@ -1,6 +1,6 @@
 //! Test utilities and fluent builders for `lanforge-dns`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -111,8 +111,7 @@ pub fn create_test_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> Arc<DnsC
         rewrites,
         #[cfg(feature = "adblock")]
         filter,
-        reverse_managers: Arc::new(parking_lot::RwLock::new(HashMap::new())),
-        resolving_ips: Arc::new(parking_lot::Mutex::new(HashSet::new())),
+        reverse_attempts: parking_lot::Mutex::new(HashMap::new()),
         compiled_ignore_clients: CompiledIgnoreClients::compile(&cfg_arc.query_log.ignore_clients),
     })
 }

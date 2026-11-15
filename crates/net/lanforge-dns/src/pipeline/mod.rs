@@ -15,15 +15,15 @@ use crate::pipeline::middleware::AdblockMiddleware;
 use crate::pipeline::middleware::{
     CacheMiddleware, LocalResolverMiddleware, RewriteMiddleware, UpstreamMiddleware,
 };
-use crate::resolver::recursive::{DnsCache, UpstreamManager};
+use crate::resolver::recursive::UpstreamManager;
 use crate::server::DnsContext;
 use crate::utils::ip_to_arpa;
 use lanforge_core::context::LanforgeContext;
-use lanforge_types::network::dns::upstream::UpstreamTarget;
-use parking_lot::{Mutex, RwLock};
-use std::collections::{HashMap, HashSet};
+use parking_lot::Mutex;
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// Represents a DNS query request passing through the pipeline.
 #[derive(Clone)]
@@ -179,86 +179,50 @@ fn classify_transient_origin(ip: IpAddr) -> TransientOrigin {
     }
 }
 
+/// A client its reverse resolver did not name is asked about again after this long.
+const REVERSE_RETRY: Duration = Duration::from_mins(5);
+/// Attempts kept before the expired ones are swept.
+const REVERSE_ATTEMPTS_SWEEP: usize = 1024;
+
 fn handle_reverse_dns_trigger(ctx: &DnsContext, client_ip: IpAddr) {
-    if let Some(resolver) = ctx.local.ctx.find_reverse_resolver(client_ip)
-        && ctx.local.ctx.get_transient_host(&client_ip).is_none()
+    if let Some(resolver) = ctx.recursive.reverse_route(client_ip)
+        && !ctx
+            .local
+            .ctx
+            .with_state(|s| s.transient_hosts.contains_key(&client_ip))
+        && claim_reverse_lookup(&ctx.reverse_attempts, client_ip, Instant::now())
     {
-        let should_resolve = {
-            let mut resolving = ctx.resolving_ips.lock();
-            if resolving.contains(&client_ip) {
-                false
-            } else {
-                resolving.insert(client_ip);
-                true
-            }
-        };
-
-        if should_resolve {
-            let ctx_core = ctx.local.ctx.clone();
-            let reverse_managers = Arc::clone(&ctx.reverse_managers);
-            let resolving_ips = Arc::clone(&ctx.resolving_ips);
-            let cache = Arc::clone(&ctx.cache);
-
-            tokio::spawn(async move {
-                resolve_reverse_ptr_background(
-                    ctx_core,
-                    reverse_managers,
-                    resolving_ips,
-                    cache,
-                    client_ip,
-                    resolver,
-                )
-                .await;
-            });
-        }
+        let ctx_core = ctx.local.ctx.clone();
+        tokio::spawn(async move {
+            resolve_reverse_ptr_background(ctx_core, client_ip, resolver).await;
+        });
     }
 }
 
+/// Whether a lookup of `ip` may start now: one per [`REVERSE_RETRY`] window, in flight or not.
+fn claim_reverse_lookup(
+    attempts: &Mutex<HashMap<IpAddr, Instant>>,
+    ip: IpAddr,
+    now: Instant,
+) -> bool {
+    let mut attempts = attempts.lock();
+    let recent = |at: &Instant| now.duration_since(*at) < REVERSE_RETRY;
+    if attempts.get(&ip).is_some_and(recent) {
+        return false;
+    }
+    if attempts.len() >= REVERSE_ATTEMPTS_SWEEP {
+        attempts.retain(|_, at| recent(at));
+    }
+    attempts.insert(ip, now);
+    true
+}
+
+/// Names a client from its reverse resolver's PTR answer (a transient host).
 async fn resolve_reverse_ptr_background(
     ctx_core: LanforgeContext,
-    reverse_managers: Arc<RwLock<HashMap<UpstreamTarget, Arc<UpstreamManager>>>>,
-    resolving_ips: Arc<Mutex<HashSet<IpAddr>>>,
-    cache: Arc<DnsCache>,
     ip: IpAddr,
-    resolver: UpstreamTarget,
+    mgr: Arc<UpstreamManager>,
 ) {
-    // 1. Get or create UpstreamManager
-    let mgr = {
-        let read_guard = reverse_managers.read();
-        read_guard.get(&resolver).cloned()
-    };
-
-    let mgr = match mgr {
-        Some(m) => m,
-        None => {
-            // Reverse resolvers are addresses (the file form refuses host names).
-            let Some(addr) = resolver.addr.ip() else {
-                resolving_ips.lock().remove(&ip);
-                return;
-            };
-            let new_mgr = match UpstreamManager::new(&resolver, addr, cache).await {
-                Ok(new_mgr) => new_mgr,
-                Err(e) => {
-                    tracing::error!(
-                        "❌ DNS: Failed to initialize reverse resolver UpstreamManager for {}: {}",
-                        resolver,
-                        e
-                    );
-                    resolving_ips.lock().remove(&ip);
-                    return;
-                }
-            };
-            let mut write_guard = reverse_managers.write();
-            if let Some(m) = write_guard.get(&resolver) {
-                Arc::clone(m)
-            } else {
-                write_guard.insert(resolver.clone(), Arc::clone(&new_mgr));
-                new_mgr
-            }
-        }
-    };
-
-    // 2. Perform reverse PTR query
     let arpa_name = ip_to_arpa(ip);
     let mut query = DnsMessage::new();
     query.header.rd = true;
@@ -285,8 +249,8 @@ async fn resolve_reverse_ptr_background(
                 }
 
                 if let Some(name) = resolved_name {
-                    // Normalize the hostname: strip trailing dot if present
-                    let name = name.strip_suffix('.').unwrap_or(&name).to_string();
+                    // The raw host name: `archie.tailnet.ts.net.` names the client `archie`.
+                    let name = name.split('.').next().unwrap_or_default().to_string();
                     if !name.is_empty() {
                         let origin = classify_transient_origin(ip);
                         let hostname = Hostname {
@@ -314,11 +278,9 @@ async fn resolve_reverse_ptr_background(
             tracing::warn!(
                 "Reverse resolution failed for {} via resolver {}: {:?}",
                 ip,
-                resolver,
+                mgr.target,
                 e
             );
         }
     }
-
-    resolving_ips.lock().remove(&ip);
 }

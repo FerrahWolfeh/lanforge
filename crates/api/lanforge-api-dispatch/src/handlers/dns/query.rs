@@ -104,13 +104,10 @@ impl ClientContext {
                         .into_iter()
                         .map(|q| {
                             let (mac, src_hostname) = match q.src_mac {
-                                Some(mac) => {
-                                    let hostname = super::resolve_mac_hostname(state, mac);
-                                    (Some(mac), hostname)
-                                }
+                                Some(mac) => state.client_identity(q.src_ip, Some(mac)),
                                 None => ip_cache
                                     .entry(q.src_ip)
-                                    .or_insert_with(|| super::resolve_ip_identity(state, q.src_ip))
+                                    .or_insert_with(|| state.client_identity(q.src_ip, None))
                                     .clone(),
                             };
                             DnsQueryLogEntry {

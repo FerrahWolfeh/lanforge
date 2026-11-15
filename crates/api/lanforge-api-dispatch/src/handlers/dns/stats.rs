@@ -206,7 +206,7 @@ impl ClientContext {
                 if let Ok(parsed_ip) = ip_str.parse::<IpAddr>()
                     && let Entry::Vacant(e) = map.entry(parsed_ip)
                 {
-                    let hostname = super::resolve_ip_identity(state, parsed_ip).1;
+                    let hostname = state.client_identity(parsed_ip, None).1;
                     e.insert(hostname);
                 }
             }

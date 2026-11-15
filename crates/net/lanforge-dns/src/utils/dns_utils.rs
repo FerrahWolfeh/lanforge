@@ -23,6 +23,45 @@ pub fn parse_arpa(name: &str) -> Option<IpAddr> {
     }
 }
 
+/// The address prefix a reverse name stands for, partial names included
+/// (`64.100.in-addr.arpa` = `100.64.0.0` and 16 bits); the bits past the prefix are zero.
+#[must_use]
+pub fn parse_arpa_prefix(labels: WireLabelIter<'_>) -> Option<(IpAddr, u8)> {
+    let mut parts: [&[u8]; 34] = [b""; 34];
+    let mut count = 0;
+    for l in labels {
+        *parts.get_mut(count)? = l;
+        count += 1;
+    }
+    let mut rev = parts[..count].iter().rev();
+    if !rev.next()?.eq_ignore_ascii_case(b"arpa") {
+        return None;
+    }
+    let family = rev.next()?;
+    if family.eq_ignore_ascii_case(b"in-addr") {
+        let mut octets = [0u8; 4];
+        let mut bits = 0;
+        for (i, label) in rev.enumerate() {
+            *octets.get_mut(i)? = parse_octet(label)?;
+            bits += 8;
+        }
+        return Some((IpAddr::V4(Ipv4Addr::from(octets)), bits));
+    }
+    if family.eq_ignore_ascii_case(b"ip6") {
+        let mut addr = 0u128;
+        let mut bits = 0;
+        for (i, label) in rev.enumerate() {
+            if i == 32 {
+                return None;
+            }
+            addr |= u128::from(parse_nibble(label)?) << (124 - 4 * i);
+            bits += 4;
+        }
+        return Some((IpAddr::V6(Ipv6Addr::from(addr)), bits));
+    }
+    None
+}
+
 #[inline]
 fn parse_octet(label: &[u8]) -> Option<u8> {
     if label.is_empty() || label.len() > 3 {

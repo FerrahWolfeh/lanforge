@@ -1,7 +1,7 @@
 use std::fs;
 #[cfg(feature = "adblock")]
 use std::iter;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -1875,4 +1875,75 @@ async fn a_fresh_query_is_in_the_log_at_once() {
     };
     assert_eq!(log.total, 1);
     assert_eq!(&*log.entries[0].domain, "example.org");
+}
+
+/// A client without a device (a tailnet peer querying over `tailscale0`) is named in the query
+/// log from its transient host (the reverse resolver's PTR answer). It used to show the bare
+/// address: only devices with a MAC were looked up.
+#[tokio::test]
+async fn query_log_names_a_client_from_its_transient_host() {
+    use lanforge_types::device::TransientOrigin;
+    use lanforge_types::network::dns::{QueryLogEntry, QueryResult, TransportProtocol};
+    use lanforge_types::network::{Hostname, HostnameOrigin};
+    use lanforge_types::update::TransientHostUpdate;
+
+    let client = init_test_context().await;
+    let storage = loop {
+        if let Some(s) = client.ctx.storage_handle() {
+            break s;
+        }
+        yield_now().await;
+    };
+    storage
+        .call(|s: &Stores| s.db.is_provisioned())
+        .await
+        .unwrap();
+    sleep(Duration::from_millis(20)).await;
+    let peer: IpAddr = "100.64.0.5".parse().unwrap();
+    let _ = client
+        .ctx
+        .apply(DeviceUpdate::TransientHostResolved(Box::new(
+            TransientHostUpdate {
+                ip: peer,
+                hostname: Hostname {
+                    name: "archie".to_string(),
+                    origin: HostnameOrigin::Static,
+                },
+                origin: TransientOrigin::Tailscale,
+            },
+        )));
+
+    let _ = client
+        .ctx
+        .bus()
+        .publish(LanforgeEvent::Dns(DnsEvent::QueryResolved(Arc::new(
+            QueryLogEntry {
+                timestamp: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+                src_ip: peer,
+                domain: Arc::from("example.org"),
+                upstream_us: 0,
+                qtype: DnsRecordType::A,
+                result: QueryResult::Forwarded,
+                cached: false,
+                src_mac: None,
+                answer: None,
+                protocol: TransportProtocol::Udp,
+                filter: None,
+                coalesce_id: None,
+                repeats: 1,
+                upstream: None,
+            },
+        ))));
+    sleep(Duration::from_millis(50)).await;
+
+    let res = client
+        .handle_dns_query_log(None, None, None, None, None, false, None)
+        .await;
+    let Response::DnsQueryLog(log) = res else {
+        panic!("{res:?}");
+    };
+    assert_eq!(log.entries[0].src_hostname.as_deref(), Some("archie"));
 }

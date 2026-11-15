@@ -25,6 +25,14 @@ impl LocalResolverMiddleware {
         if ctx
             .local
             .resolve_local_wire(req.data, req.header, req.question, has_upstreams, resp)
+            || ctx.local.reply_private_reverse(
+                req.data,
+                req.header,
+                req.question,
+                &ctx.recursive,
+                has_upstreams,
+                resp,
+            )
         {
             ctx.stats.inc_auth();
 

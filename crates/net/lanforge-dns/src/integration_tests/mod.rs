@@ -27,6 +27,7 @@ mod pipeline;
 mod reload;
 mod resolution;
 mod restart_counters;
+mod reverse;
 mod rewrite_matching;
 mod rewrite_semantics;
 mod rewrites;

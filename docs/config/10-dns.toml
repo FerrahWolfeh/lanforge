@@ -34,7 +34,8 @@ addresses = ["tls://dns.google", "https://dns.quad9.net/dns-query"]
 addresses = ["udp://10.0.0.1:53"]
 domain = "corp.example"
 
-# PTR queries for a subnet go to its resolver.
+# PTR queries for a subnet's addresses go to its resolver (the most specific subnet wins);
+# a client in the subnet without a device shows up by the host name it answers.
 [dns.reverse]
 "10.0.0.0/8" = "udp://10.0.0.1:53"
 

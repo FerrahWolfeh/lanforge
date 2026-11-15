@@ -1,17 +1,7 @@
 use super::common::*;
-use crate::resolver::recursive::cache::{CacheEntryKind, CacheKey};
-use lanforge_dns_wire::{WireEncoder, WireResponseScanner};
-use lanforge_types::device::TransientOrigin;
-use lanforge_types::network::dns::upstream::{UpstreamAddr, UpstreamProtocol, UpstreamTarget};
 use lanforge_types::network::dns::{
-    DnsClass, DnsMessage, DnsRData, DnsRecord, DnsRecordType, DnsResponseCode, adblock::RewriteRule,
+    DnsRData, DnsRecordType, DnsResponseCode, adblock::RewriteRule,
 };
-use lanforge_types::network::{DnsReverseResolver, IpSubnet};
-use std::net::{IpAddr, SocketAddr};
-use std::str::FromStr;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::time::sleep;
 
 #[tokio::test]
 async fn pipeline_nxdomain_basic() {
@@ -171,79 +161,4 @@ async fn pipeline_cached_block() {
     )
     .await;
     assert!(res3.is_err());
-}
-
-#[tokio::test]
-async fn pipeline_transient_ip_reverse_dns_cached() {
-    let ctx_instance = init_test_context();
-    let cfg = mock_config();
-
-    // 1. Setup a DnsReverseResolver rule for 100.64.0.0/10
-    let resolver_target = UpstreamTarget {
-        addr: UpstreamAddr::Ip(SocketAddr::from(([127, 0, 0, 1], 9999))),
-        protocol: UpstreamProtocol::Udp,
-        hostname: None,
-        path: None,
-        domain: None,
-    };
-    let subnet = IpSubnet::from_str("100.64.0.0/10").unwrap();
-    let resolver_rule = DnsReverseResolver {
-        subnet,
-        resolver: resolver_target,
-    };
-    ctx_instance.add_reverse_resolver(resolver_rule);
-
-    let dns_ctx = mock_dns_context(ctx_instance, cfg).await;
-
-    // 2. Mock query and PTR answer that we insert into cache
-    let query = DnsPacketBuilder::query_ptr("100.64.0.5".parse().unwrap()).build_message();
-    let query_bytes = WireEncoder::new().encode_message(&query);
-    let question = lanforge_dns_wire::WireQuestion::parse(&query_bytes).unwrap();
-
-    let mut resp_msg = DnsMessage::new();
-    resp_msg.header.qr = true;
-    resp_msg.header.qdcount = 1;
-    resp_msg.header.ancount = 1;
-    resp_msg.questions.push(query.questions[0].clone());
-    resp_msg.answers.push(DnsRecord {
-        name: Arc::clone(&query.questions[0].name),
-        rtype: DnsRecordType::PTR,
-        rclass: DnsClass::IN,
-        ttl: 30,
-        rdata: DnsRData::PTR(Arc::from("cached-transient.tailscale.")),
-    });
-    let resp_bytes = WireEncoder::new().encode_message(&resp_msg);
-
-    let scanner = WireResponseScanner::new(&resp_bytes);
-    let (offsets, min_ttl) = scanner.scan_ttls();
-
-    let key = CacheKey::from_question(&question);
-    dns_ctx
-        .cache
-        .insert(key, resp_bytes, offsets, min_ttl, CacheEntryKind::Answer);
-
-    // 3. Send a dummy query with source IP = 100.64.0.5
-    let client_ip = "100.64.0.5".parse::<IpAddr>().unwrap();
-    let dummy_bytes = DnsPacketBuilder::query("nonexistent.lan", DnsRecordType::A)
-        .with_id(0x1111)
-        .build_bytes();
-    let mut resp_buf = Vec::new();
-
-    let has_resp = process_query_test(&dummy_bytes, &dns_ctx, client_ip, &mut resp_buf)
-        .await
-        .unwrap();
-    assert!(has_resp);
-
-    // 4. Poll until the background task resolves the transient IP
-    let mut resolved = false;
-    for _ in 0..50 {
-        if let Some(host) = dns_ctx.local.ctx.get_transient_host(&client_ip) {
-            assert_eq!(host.hostname.name, "cached-transient.tailscale");
-            assert_eq!(host.origin, TransientOrigin::Tailscale);
-            resolved = true;
-            break;
-        }
-        sleep(Duration::from_millis(10)).await;
-    }
-    assert!(resolved, "Transient host resolution in background failed");
 }
