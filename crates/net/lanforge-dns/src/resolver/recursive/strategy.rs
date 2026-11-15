@@ -25,6 +25,9 @@ use tokio::time::{Instant, sleep};
 
 pub use lanforge_types::network::dns::UpstreamMode;
 
+/// Labels a DNS name can hold (RFC 1035 §2.3.4: 255 octets).
+const MAX_LABELS: usize = 127;
+
 static COALESCE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 type InFlightTx = Sender<Result<(Vec<u8>, bool, bool, u64, Option<Arc<str>>), String>>;
@@ -257,13 +260,15 @@ impl UpstreamStrategy {
             return None;
         }
 
-        let mut qlabels: [&[u8]; 16] = [b""; 16];
+        // A name has at most 127 labels (255 octets); an `ip6.arpa` name alone has 34.
+        let mut qlabels: [&[u8]; MAX_LABELS] = [b""; MAX_LABELS];
         let mut qcount = 0;
         for l in question.labels() {
-            if qcount < 16 {
-                qlabels[qcount] = l;
-                qcount += 1;
+            if qcount == MAX_LABELS {
+                return None;
             }
+            qlabels[qcount] = l;
+            qcount += 1;
         }
 
         for route in routes.iter() {
