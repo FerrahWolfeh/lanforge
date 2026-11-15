@@ -61,8 +61,8 @@ pub use engine::WriteTx;
 pub use error::LanforgeDbError;
 pub use lanforge_db_core::{
     ApiTokenEntry, ApiTokenStore, AuthStore, ConfigKey, ConfigStore, DatabaseStore, DbError,
-    DeviceStore, LogFilterStore, LogStore, PrefixStore, StateStore, StaticHostEntry, Stores,
-    TelemetryStore, UserEntry, UserStore, config_keys, sanitize_db_url,
+    DeviceStore, LogFilterStore, LogStore, NameBindingStore, PrefixStore, StateStore,
+    StaticHostEntry, Stores, TelemetryStore, UserEntry, UserStore, config_keys, sanitize_db_url,
 };
 pub use lanforge_db_redb::{RedbDatabase, redb};
 pub use log_engine::LogDb;

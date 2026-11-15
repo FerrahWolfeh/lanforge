@@ -5,6 +5,7 @@ pub mod handlers;
 pub mod indices;
 #[cfg(test)]
 pub mod jit_tests;
+pub mod names;
 pub mod network;
 #[cfg(test)]
 pub mod tests;
@@ -22,7 +23,7 @@ use lanforge_types::update::{
 };
 use lanforge_types::utils::network::ip_matches_prefix;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str;
 use std::sync::Arc;
@@ -190,6 +191,16 @@ pub struct State {
     pub transient_hosts: HashMap<IpAddr, TransientHost>,
     #[serde(skip)]
     pub static_registry: Arc<StaticRegistry>,
+    /// Names `dev:<name>` port forwards, pinholes and DNS rewrites target (lowercase).
+    #[serde(skip)]
+    pub name_references: HashSet<String>,
+    /// Referenced names bound to the MAC that held them at their first mention (lowercase name
+    /// → MAC); kept in redb. See `names.rs`.
+    #[serde(skip)]
+    pub name_bindings: HashMap<String, MacAddr>,
+    /// The last bound name refused to each device, so a repeated claim is reported once.
+    #[serde(skip)]
+    pub hostname_refusals: HashMap<MacAddr, String>,
 }
 
 impl State {

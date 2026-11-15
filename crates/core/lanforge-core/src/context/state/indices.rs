@@ -32,6 +32,14 @@ impl Indices {
         self.ip_index.shrink_to_fit();
     }
 
+    /// Removes `name` only if it points at `mac`: a device losing a name another device holds
+    /// must not unindex the holder.
+    fn release_name(&mut self, name: &str, mac: MacAddr) {
+        if self.name_index.get(name) == Some(&mac) {
+            self.name_index.remove(name);
+        }
+    }
+
     pub fn index_device(&mut self, mac: MacAddr, dev: &Device) {
         if !dev.hostname.name.is_empty() {
             let key = if dev.hostname.name.bytes().any(|b| b.is_ascii_uppercase()) {
@@ -60,13 +68,12 @@ impl Indices {
     pub fn unindex_device(&mut self, dev: &Device) {
         if !dev.hostname.name.is_empty() {
             if dev.hostname.name.bytes().any(|b| b.is_ascii_uppercase()) {
-                self.name_index
-                    .remove(&dev.hostname.name.to_ascii_lowercase());
+                self.release_name(&dev.hostname.name.to_ascii_lowercase(), dev.mac);
             } else {
-                self.name_index.remove(dev.hostname.name.as_str());
+                self.release_name(dev.hostname.name.as_str(), dev.mac);
             }
         }
-        self.name_index.remove(dev.dns_fallback.as_str());
+        self.release_name(dev.dns_fallback.as_str(), dev.mac);
 
         if let Some(duid) = &dev.duid {
             self.duid_index.remove(duid);

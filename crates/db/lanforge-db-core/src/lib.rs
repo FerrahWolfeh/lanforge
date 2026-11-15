@@ -14,6 +14,7 @@ use lanforge_types::network::{
 use lanforge_types::storage::DnsAnalyticsData;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io;
 use std::marker::PhantomData;
@@ -256,15 +257,25 @@ impl<T: ?Sized> Debug for ConfigKey<T> {
 
 pub mod config_keys {
     use super::ConfigKey;
+    use lanforge_types::identifiers::MacAddr;
     use lanforge_types::logging::LogFilter;
     use lanforge_types::network::Ipv6Prefix;
+    use std::collections::BTreeMap;
 
     pub const LAST_GUA_PREFIX: ConfigKey<Ipv6Prefix> = ConfigKey::new("last_gua_prefix");
     /// The log filter saved through the API (a logging switch: state, not file config).
     pub const LOG_FILTER: ConfigKey<LogFilter> = ConfigKey::new("log_filter");
 
+    /// Names `dev:<name>` port forwards and DNS rewrites bound to a device (lowercase name →
+    /// MAC): state learned at the first mention, so a restart opens no race for the name.
+    pub const NAME_BINDINGS: ConfigKey<BTreeMap<String, MacAddr>> = ConfigKey::new("name_bindings");
+
     /// The keys of the config table still in use; any other was left by an older binary.
-    pub const IN_USE: [&str; 2] = [LAST_GUA_PREFIX.name(), LOG_FILTER.name()];
+    pub const IN_USE: [&str; 3] = [
+        LAST_GUA_PREFIX.name(),
+        LOG_FILTER.name(),
+        NAME_BINDINGS.name(),
+    ];
 }
 
 pub use config_keys::*;
@@ -365,6 +376,14 @@ pub trait LogFilterStore: Send + Sync {
 
     /// Saves `filter`; `None` removes it.
     fn save_log_filter(&self, filter: Option<&LogFilter>) -> Result<(), DbError>;
+}
+
+/// The names bound to devices (see `NAME_BINDINGS`), kept across restarts.
+pub trait NameBindingStore: Send + Sync {
+    fn load_name_bindings(&self) -> Result<BTreeMap<String, MacAddr>, DbError>;
+
+    /// Replaces the saved bindings with `bindings`.
+    fn save_name_bindings(&self, bindings: &BTreeMap<String, MacAddr>) -> Result<(), DbError>;
 }
 
 /// Handles storage and administration of user accounts.
