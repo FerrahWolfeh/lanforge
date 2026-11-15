@@ -49,8 +49,8 @@ use lanforge_transport::TransportMetrics;
 #[cfg(feature = "adblock")]
 use lanforge_types::config::AdblockRules;
 use lanforge_types::config::{ChangeImpact, ConfigDomain, DnsListenConfig, SiteDomains};
-#[cfg(feature = "adblock")]
 use lanforge_types::network::DnsReverseResolver;
+#[cfg(feature = "adblock")]
 use lanforge_types::network::dns::adblock::AdblockPolicy;
 use lanforge_types::network::dns::{
     AdblockCheckResponse, DnsAdblockSourcesResponse, DnsAdblockStatusResponse, DnsCacheEntry,
