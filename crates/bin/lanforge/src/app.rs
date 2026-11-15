@@ -183,7 +183,7 @@ impl Daemon {
             async [ctx, cfg, db, log_db] => DbWorker::new(cfg.database.clone(), ctx, db, log_db),
 
             #[cfg(feature = "discovery")]
-            async [ctx, cfg] => MdnsProber::new(cfg.mdns_toml.clone(), ctx),
+            async [cfg] => MdnsProber::new(cfg.mdns_toml.clone()),
 
             // 2. Network Discovery & Interface Monitoring
             #[cfg(feature = "discovery")]
