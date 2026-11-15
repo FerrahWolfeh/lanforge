@@ -213,6 +213,18 @@ flowchart TD
     REC --> RESP["Success response"]
 ```
 
+A reverse name the LAN does not answer is routed in this order:
+
+1. A PTR for an address inside a `[dns.reverse]` subnet goes to that subnet's resolver (the most
+   specific subnet wins), e.g. `100.64.0.0/10` and `fd7a:115c:a1e0::/48` to Tailscale's
+   `100.100.100.100`.
+2. A conditional upstream (`domain = "10.in-addr.arpa"`) takes the names under its domain.
+3. Names in the reverse zones of private and special-use ranges (RFC 6303 §4, RFC 7793:
+   10/8, 172.16/12, 192.168/16, 100.64/10, 127/8, 169.254/16, 0/8, the documentation ranges,
+   `::`, `::1`, `fd00::/8`, `fe80::/10`, `2001:db8::/32`) are answered here as empty zones:
+   NXDOMAIN with the zone's SOA, NODATA at the zone apex. They never reach a public resolver.
+4. Anything else goes to the global upstreams.
+
 ### Device IP Collection
 
 The `collect_device_ips` method aggregates all known addresses for a device:

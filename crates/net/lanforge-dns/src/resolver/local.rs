@@ -5,19 +5,58 @@ use lanforge_types::device::Device;
 use lanforge_types::identifiers::{DeviceIdentifier, MacAddr};
 use smallvec::SmallVec;
 use std::borrow::Cow;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config::DnsConfig;
 use crate::error::DnsError;
-use crate::utils::{extract_local_hostname, fast_lowercase, parse_arpa, parse_arpa_wire};
+use crate::resolver::recursive::UpstreamStrategy;
+use crate::utils::{
+    extract_local_hostname, fast_lowercase, parse_arpa, parse_arpa_prefix, parse_arpa_wire,
+};
 use lanforge_core::context::LanforgeContext;
 use lanforge_dns_wire::{
     PtrResponseArgs, SoaResponseArgs, WireHeader, WireLabelIter, WireOptScanner, WireQuestion,
     WireResponseWriter,
 };
+use lanforge_types::network::IpSubnet;
 use lanforge_types::network::dns::{DnsClass, DnsRData, DnsRecord, DnsRecordType};
+
+/// Address ranges whose reverse zones are served here as empty zones (RFC 6303 §4: private,
+/// loopback, link-local, documentation, ULA; RFC 7793: shared address space 100.64.0.0/10).
+const PRIVATE_REVERSE_ZONES: [IpSubnet; 16] = [
+    v4(0, 0, 0, 0, 8),
+    v4(10, 0, 0, 0, 8),
+    v4(100, 64, 0, 0, 10),
+    v4(127, 0, 0, 0, 8),
+    v4(169, 254, 0, 0, 16),
+    v4(172, 16, 0, 0, 12),
+    v4(192, 0, 2, 0, 24),
+    v4(192, 168, 0, 0, 16),
+    v4(198, 51, 100, 0, 24),
+    v4(203, 0, 113, 0, 24),
+    v4(255, 255, 255, 255, 32),
+    v6(Ipv6Addr::UNSPECIFIED, 128),
+    v6(Ipv6Addr::LOCALHOST, 128),
+    v6(Ipv6Addr::new(0xfd00, 0, 0, 0, 0, 0, 0, 0), 8),
+    v6(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0), 10),
+    v6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0), 32),
+];
+
+const fn v4(a: u8, b: u8, c: u8, d: u8, prefix_len: u8) -> IpSubnet {
+    IpSubnet {
+        addr: IpAddr::V4(Ipv4Addr::new(a, b, c, d)),
+        prefix_len,
+    }
+}
+
+const fn v6(addr: Ipv6Addr, prefix_len: u8) -> IpSubnet {
+    IpSubnet {
+        addr: IpAddr::V6(addr),
+        prefix_len,
+    }
+}
 
 /// The site's domains as the hot path uses them: wire labels to match names under them, and the
 /// first one, which PTR answers name hosts in. Swapped whole when the site's domains change.
@@ -351,7 +390,8 @@ impl LocalResolver {
     /// A dotless name is looked up as a LAN host and never forwarded either (dnsmasq's
     /// `domain-needed`) — an `IoT` device looping on `:0` is answered here — except the root and TLD delegation lookups (NS/SOA/DS/DNSKEY of a name
     /// that is not a LAN host, e.g. `. NS`, `com. DS`). Reverse names (PTR) of LAN addresses
-    /// are answered when known, else forwarded.
+    /// are answered when known, else forwarded (private ranges: see
+    /// [`Self::reply_private_reverse`]).
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn resolve_local_wire(
         &self,
@@ -450,6 +490,56 @@ impl LocalResolver {
             return false;
         }
         reply(if known { 0 } else { 3 }, false, resp)
+    }
+
+    /// The empty-zone answer for a name in a private reverse zone ([`PRIVATE_REVERSE_ZONES`],
+    /// RFC 6303 §3) that no configured route takes: NXDOMAIN below the zone apex, NODATA at
+    /// it (its SOA answers), with the zone's SOA so resolvers cache it. `false` sends it on.
+    pub fn reply_private_reverse(
+        &self,
+        data: &[u8],
+        header: &WireHeader,
+        question: &WireQuestion<'_>,
+        routes: &UpstreamStrategy,
+        has_upstreams: bool,
+        resp: &mut Vec<u8>,
+    ) -> bool {
+        let Some((prefix, bits)) = parse_arpa_prefix(question.labels()) else {
+            return false;
+        };
+        // A zone is cut at a label boundary: an octet, or a nibble in `ip6.arpa`.
+        let unit = if prefix.is_ipv4() { 8 } else { 4 };
+        let Some(apex_bits) = PRIVATE_REVERSE_ZONES.iter().find_map(|zone| {
+            let apex_bits = zone.prefix_len.div_ceil(unit) * unit;
+            (bits >= apex_bits && zone.contains(prefix)).then_some(apex_bits)
+        }) else {
+            return false;
+        };
+        if routes.routes(question) {
+            return false;
+        }
+        let labels: Vec<&[u8]> = question.labels().collect();
+        let keep = usize::from(apex_bits / unit) + 2;
+        let zone = labels[labels.len() - keep..]
+            .iter()
+            .map(|l| String::from_utf8_lossy(l))
+            .collect::<Vec<_>>()
+            .join(".");
+        let at_apex = bits == apex_bits;
+        WireResponseWriter::write_soa_response(
+            SoaResponseArgs {
+                query_data: data,
+                question,
+                rcode: if at_apex { 0 } else { 3 },
+                zone: &zone,
+                ttl: self.cfg.ttl,
+                answer: at_apex && question.qtype() == u16::from(DnsRecordType::SOA),
+                edns: WireOptScanner::scan(data, header, question),
+                ra: has_upstreams,
+            },
+            resp,
+        );
+        true
     }
 
     /// The PTR answer for a reverse name of a LAN address, when the router knows it.

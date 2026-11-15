@@ -241,17 +241,18 @@ async fn lan_device_ptr_stays_local_inside_a_reverse_subnet() {
     ctx.terminate();
 }
 
-/// Removing a reverse resolver applies in place: its subnet goes back to the global upstreams.
+/// Removing a reverse resolver applies in place: its subnet goes back to the global upstreams
+/// (a public one: a private range is answered locally then).
 #[tokio::test]
 async fn reverse_resolver_change_applies_in_place() {
     let ctx = init_test_context();
     let global = PtrUpstream::spawn("global.example.").await;
     let tailnet = PtrUpstream::spawn("archie.tailnet.ts.net.").await;
     ctx.update_dns_upstreams(vec![global.target()]);
-    ctx.set_reverse_resolvers(vec![reverse("100.64.0.0/10", &tailnet)]);
+    ctx.set_reverse_resolvers(vec![reverse("44.0.0.0/8", &tailnet)]);
     let handle = serve(&ctx).await;
     assert_eq!(
-        extract_ptr(&query_ptr(&handle, "100.64.0.1").await),
+        extract_ptr(&query_ptr(&handle, "44.0.0.1").await),
         ["archie.tailnet.ts.net"]
     );
 
@@ -259,7 +260,7 @@ async fn reverse_resolver_change_applies_in_place() {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         // A different address each time: the first answer is cached.
-        let resp = query_ptr(&handle, "100.64.0.2").await;
+        let resp = query_ptr(&handle, "44.0.0.2").await;
         if extract_ptr(&resp) == ["global.example"] {
             break;
         }
@@ -322,5 +323,86 @@ async fn unanswered_client_is_not_looked_up_on_every_query() {
     sleep(Duration::from_millis(100)).await;
 
     assert_eq!(tailnet.queries(), 1);
+    ctx.terminate();
+}
+
+/// Sends a query of `qtype` for `name` and returns the answer.
+async fn query(handle: &InertHandle<SocketAddr>, name: &str, qtype: DnsRecordType) -> DnsMessage {
+    let client: SocketAddr = "192.168.1.100:54329".parse().expect("client address");
+    handle
+        .inject(DnsPacketBuilder::query(name, qtype).build_bytes(), client)
+        .await;
+    let (reply, _) = handle.recv_reply().await.expect("a reply");
+    parse_response(&reply).expect("a DNS response")
+}
+
+/// The SOA owner of a negative answer's authority section.
+fn soa_owner(resp: &DnsMessage) -> Option<String> {
+    resp.authorities
+        .iter()
+        .find(|r| r.rtype == DnsRecordType::SOA)
+        .map(|r| r.name.trim_end_matches('.').to_ascii_lowercase())
+}
+
+/// Reverse names of private and special-use addresses never leave the router (RFC 6303 §3,
+/// RFC 7793 for 100.64.0.0/10): with no reverse resolver for them they are NXDOMAIN here, with
+/// the zone's SOA. They used to go to the public upstreams.
+#[tokio::test]
+async fn private_reverse_names_are_answered_locally() {
+    let ctx = init_test_context();
+    let global = PtrUpstream::spawn("global.example.").await;
+    ctx.update_dns_upstreams(vec![global.target()]);
+    let handle = serve(&ctx).await;
+
+    for (ip, zone) in [
+        ("10.1.2.3", "10.in-addr.arpa"),
+        ("172.20.0.1", "20.172.in-addr.arpa"),
+        ("192.168.3.77", "168.192.in-addr.arpa"),
+        ("100.100.1.2", "100.100.in-addr.arpa"),
+        ("127.0.0.1", "127.in-addr.arpa"),
+        ("169.254.1.1", "254.169.in-addr.arpa"),
+        ("fd12:3456::1", "d.f.ip6.arpa"),
+        ("fe80::1", "8.e.f.ip6.arpa"),
+        ("2001:db8::1", "8.b.d.0.1.0.0.2.ip6.arpa"),
+    ] {
+        let resp = query_ptr(&handle, ip).await;
+        assert_eq!(resp.header.rcode, DnsResponseCode::NXDomain, "{ip}");
+        assert_eq!(soa_owner(&resp).as_deref(), Some(zone), "{ip}");
+    }
+    assert_eq!(global.queries(), 0);
+
+    // The zone apex exists (NODATA, its SOA answers); the names above it are not ours.
+    let apex = query(&handle, "64.100.in-addr.arpa", DnsRecordType::SOA).await;
+    assert_eq!(apex.header.rcode, DnsResponseCode::NoError);
+    assert_eq!(apex.answers.len(), 1);
+    query(&handle, "172.in-addr.arpa", DnsRecordType::NS).await;
+    assert_eq!(global.queries(), 1);
+    // Public addresses are still forwarded.
+    assert_eq!(
+        extract_ptr(&query_ptr(&handle, "8.8.4.4").await),
+        ["global.example"]
+    );
+    ctx.terminate();
+}
+
+/// A configured route for a private reverse zone wins over the local answer: a reverse
+/// resolver for the subnet, or a conditional upstream for the zone.
+#[tokio::test]
+async fn configured_routes_win_over_private_reverse_zones() {
+    let ctx = init_test_context();
+    let tailnet = PtrUpstream::spawn("archie.tailnet.ts.net.").await;
+    let corp = PtrUpstream::spawn("pc1.corp.example.").await;
+    ctx.update_dns_upstreams(vec![corp.target_for("10.in-addr.arpa")]);
+    ctx.set_reverse_resolvers(vec![reverse("100.64.0.0/10", &tailnet)]);
+    let handle = serve(&ctx).await;
+
+    assert_eq!(
+        extract_ptr(&query_ptr(&handle, "100.64.0.1").await),
+        ["archie.tailnet.ts.net"]
+    );
+    assert_eq!(
+        extract_ptr(&query_ptr(&handle, "10.1.2.3").await),
+        ["pc1.corp.example"]
+    );
     ctx.terminate();
 }

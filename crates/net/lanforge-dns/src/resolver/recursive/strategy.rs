@@ -205,6 +205,22 @@ impl UpstreamStrategy {
             .map(|r| Arc::clone(&r.upstream))
     }
 
+    /// Whether a configured route takes `question`: the reverse resolver of its PTR name's
+    /// address, or a conditional domain route.
+    pub fn routes(&self, question: &WireQuestion<'_>) -> bool {
+        self.reverse_upstream(question).is_some() || self.find_conditional_route(question).is_some()
+    }
+
+    /// The reverse resolver of a PTR question's address.
+    fn reverse_upstream(&self, question: &WireQuestion<'_>) -> Option<Arc<UpstreamManager>> {
+        if question.qtype() != u16::from(DnsRecordType::PTR)
+            || self.reverse_routes.read().is_empty()
+        {
+            return None;
+        }
+        parse_arpa_wire(question.labels()).and_then(|ip| self.reverse_route(ip))
+    }
+
     pub fn replace_fallback_upstreams(&self, fallbacks: Vec<Arc<UpstreamManager>>) {
         *self.fallback_upstreams.write() = Arc::from(fallbacks);
     }
@@ -424,11 +440,7 @@ impl UpstreamStrategy {
         question: &WireQuestion<'_>,
     ) -> Result<Resolved, DnsError> {
         // 1. A PTR name of an address in a `[dns.reverse]` subnet goes to its resolver.
-        if question.qtype() == u16::from(DnsRecordType::PTR)
-            && !self.reverse_routes.read().is_empty()
-            && let Some(upstream) =
-                parse_arpa_wire(question.labels()).and_then(|ip| self.reverse_route(ip))
-        {
+        if let Some(upstream) = self.reverse_upstream(question) {
             return self
                 .resolve_sequential(&[upstream], data, header, question)
                 .await;
