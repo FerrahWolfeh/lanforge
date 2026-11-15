@@ -9,7 +9,9 @@ use nftables::expr::{
     Prefix, TcpOption,
 };
 use nftables::schema::{Chain, FlowTable, FlushObject, NfCmd, NfListObject, Nftables, Rule, Table};
-use nftables::stmt::{Flow, Limit, Mangle, Match, NAT, NATFamily, Operator, SetOp, Statement};
+use nftables::stmt::{
+    Counter, Flow, Limit, Mangle, Match, NAT, NATFamily, Operator, SetOp, Statement,
+};
 use nftables::types::{NfChainPolicy, NfChainType, NfFamily, NfHook};
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -521,6 +523,105 @@ impl<'a> RulesetBuilder<'a> {
                 Statement::Accept(None),
             ],
         ));
+    }
+
+    /// Strict reverse-path filter (RFC 3704 §2.2, BCP 38) on every zone interface, the WAN
+    /// included: a packet whose source the router would not route back out of the interface it
+    /// came in on is spoofed and dropped. On the WAN the default route takes every internet
+    /// source, so what drops there is the LAN's own addresses (and delegated prefix) coming in
+    /// from outside. Raw priority: a spoofed packet never creates conntrack state.
+    ///
+    /// Two sources have no route by design and pass: `0.0.0.0` for a `DHCPv4` client's
+    /// broadcast to the server port (RFC 2131 §4.1), and `::` for `ICMPv6` only (duplicate
+    /// address detection, RFC 4862 §5.4.2; MLD reports before a link-local exists, RFC 3810
+    /// §5.2.13). Recent kernels let both through the `fib` lookup already (checked on 7.3);
+    /// the explicit rules keep that independent of the kernel version. Link-local sources pass
+    /// the lookup through the interface's `fe80::/64` route.
+    /// The check is skipped for the router's own traffic (`lo`) and for interfaces in no zone.
+    #[allow(clippy::ptr_arg)]
+    fn build_rpfilter_chain(&self, batch: &mut Batch<'static>, table: &Cow<'static, str>) {
+        let mut ifaces: Vec<String> = Vec::new();
+        for zone in &self.cfg.zones {
+            for iface in self.resolve_zone_interfaces(&zone.name) {
+                if !ifaces.contains(&iface) {
+                    ifaces.push(iface);
+                }
+            }
+        }
+        if ifaces.is_empty() {
+            return;
+        }
+
+        batch.add(NfListObject::Chain(Chain {
+            family: NfFamily::INet,
+            table: table.clone(),
+            name: "rpfilter".into(),
+            newname: None,
+            handle: None,
+            _type: Some(NfChainType::Filter),
+            hook: Some(NfHook::Prerouting),
+            prio: Some(-300),
+            dev: None,
+            policy: Some(NfChainPolicy::Accept),
+        }));
+
+        let field = |protocol: &'static str, field: &'static str, right: Expression<'static>| {
+            Statement::Match(Match {
+                left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                    PayloadField {
+                        protocol: protocol.into(),
+                        field: field.into(),
+                    },
+                ))),
+                right,
+                op: Operator::EQ,
+            })
+        };
+        batch.add(Self::make_rule(
+            table,
+            "rpfilter",
+            vec![
+                field("ip", "saddr", Expression::String("0.0.0.0".into())),
+                field("udp", "sport", Expression::Number(68)),
+                field("udp", "dport", Expression::Number(67)),
+                Statement::Accept(None),
+            ],
+        ));
+        batch.add(Self::make_rule(
+            table,
+            "rpfilter",
+            vec![
+                field("ip6", "saddr", Expression::String("::".into())),
+                Statement::Match(Match {
+                    left: Expression::Named(NamedExpression::Meta(Meta {
+                        key: MetaKey::L4proto,
+                    })),
+                    right: Expression::String("ipv6-icmp".into()),
+                    op: Operator::EQ,
+                }),
+                Statement::Accept(None),
+            ],
+        ));
+
+        for iface in &ifaces {
+            batch.add(Self::make_rule(
+                table,
+                "rpfilter",
+                vec![
+                    Self::iifname_is(iface),
+                    Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::Fib(Fib {
+                            result: FibResult::Oif,
+                            flags: [FibFlag::Saddr, FibFlag::Iif].into_iter().collect(),
+                        })),
+                        right: Expression::Boolean(false),
+                        op: Operator::EQ,
+                    }),
+                    Statement::Counter(Counter::Anonymous(None)),
+                    Statement::Drop(None),
+                ],
+            ));
+        }
     }
 
     #[allow(clippy::ptr_arg)]
@@ -1339,7 +1440,8 @@ impl<'a> RulesetBuilder<'a> {
 
         let has_mtu_fix = self.has_mtu_fix();
 
-        // 3. Chain INPUT (Host protection)
+        // 3. Anti-spoofing (reverse-path filter), then chain INPUT (host protection)
+        self.build_rpfilter_chain(&mut batch, &table);
         self.build_input_chain(&mut batch, &table, &internal_ifaces);
 
         // 4. Chain FORWARD (Gateway routing)

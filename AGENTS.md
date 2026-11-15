@@ -124,6 +124,7 @@ Inter-service communication is powered by a multi-topic broadcast bus:
 - **WAN Ingress Authorization**:
   - **Router Host Services**: Controlled strictly by Host Rules in the `external` zone (`input` chain).
   - **Internal LAN Services**: Controlled by explicit Port Forwarding rules (IPv4 DNAT) or IPv6 Pinholes (routed directly without NAT) matching specific target IP and port in the `forward` chain.
+- **Anti-Spoofing**: every zone interface (WAN included) gets a strict reverse-path filter in the `rpfilter` chain (raw prerouting). Only `0.0.0.0` → UDP 67 and `::` ICMPv6 are exempt; do not add interface-less exemptions.
 - **Unified Port Forwarding**: The WebUI manages both IPv4 DNAT and IPv6 routed pinholes in a single, unified interface with automatic device recognition, static lease pinning, and dual-stack rule creation.
 
 ## 5. Transport Layer & Inert Simulation (`lanforge-transport`)

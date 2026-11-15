@@ -1074,6 +1074,67 @@ async fn kernel_applier_installs_and_removes_the_table() {
     );
 }
 
+/// The kernel takes the reverse-path filter as compiled (`fib` lookup, `counter`, raw
+/// priority), for the WAN and the LAN, with the two exemptions ahead of the drops.
+#[tokio::test]
+#[ignore = "needs CAP_NET_ADMIN and nft (run inside `unshare -rn`)"]
+async fn kernel_takes_the_rpfilter_chain() {
+    let (ctx, bus) = create_test_context();
+    let mut cfg = FirewallConfig {
+        flow_offload: false, // a flowtable needs real devices
+        on_stop: FirewallStopAction::Remove,
+        ..Default::default()
+    };
+    for zone in &mut cfg.zones {
+        match zone.name.as_str() {
+            "internal" => zone.interfaces = vec!["lan0".into()],
+            "external" => zone.interfaces = vec!["ppp0".into()],
+            _ => {}
+        }
+    }
+    ctx.update_firewall_config(cfg);
+    let mut fw_sub = bus.subscribe_firewall();
+    let mut service = NftService::new();
+    service.init(&ctx).await.expect("init applies the ruleset");
+    wait_for_ruleset_applied(&mut fw_sub).await;
+
+    let out = Command::new("nft")
+        .args(["list", "chain", "inet", "lanforge", "rpfilter"])
+        .output()
+        .unwrap();
+    let list = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        list.contains("type filter hook prerouting priority raw; policy accept;"),
+        "{list}"
+    );
+    // Recent nft prints the existence test `oif missing` as `check missing`.
+    for iface in ["lan0", "ppp0"] {
+        let rule = |result: &str| {
+            format!(
+                "iifname \"{iface}\" fib saddr . iif {result} missing counter packets 0 bytes 0 drop"
+            )
+        };
+        assert!(
+            list.contains(&rule("oif")) || list.contains(&rule("check")),
+            "{list}"
+        );
+    }
+    assert!(
+        list.contains("ip saddr 0.0.0.0 udp sport 68 udp dport 67 accept"),
+        "{list}"
+    );
+    assert!(
+        list.contains("ip6 saddr :: meta l4proto ipv6-icmp accept"),
+        "{list}"
+    );
+    assert!(
+        list.find("0.0.0.0").unwrap() < list.find("drop").unwrap(),
+        "exemptions first: {list}"
+    );
+
+    service.cleanup(&ctx).await.expect("cleanup");
+}
+
 /// Refuses every batch while `failing` is set, like a kernel that rejects the ruleset.
 #[derive(Clone, Default)]
 struct FlakyNft {
