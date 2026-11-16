@@ -97,6 +97,64 @@
 	});
 </script>
 
+{#snippet actionsMenu(dev: DeviceEntry)}
+	<DropdownMenu.Root>
+		<DropdownMenu.Trigger
+			class="h-7 w-7 max-md:size-9 shrink-0 inline-flex items-center justify-center rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+		>
+			<MoreHorizontalIcon class="size-4" />
+		</DropdownMenu.Trigger>
+		<DropdownMenu.Content align="end" class="w-48 text-xs">
+			<DropdownMenu.Item onclick={() => onInspect(dev)} class="gap-2">
+				<SearchIcon class="size-3.5 text-sky-400" />
+				Inspect Details (Whois)
+			</DropdownMenu.Item>
+			{#if onWol}
+			<DropdownMenu.Item onclick={() => onWol(dev.mac)} class="gap-2">
+				<ZapIcon class="size-3.5 text-emerald-400" />
+				Send Wake-on-LAN
+			</DropdownMenu.Item>
+			{/if}
+			{#if onPromote}
+			<DropdownMenu.Item onclick={() => onPromote(dev)} class="gap-2">
+				<BookmarkIcon class="size-3.5 text-amber-400" />
+				Promote to Static Host
+			</DropdownMenu.Item>
+			{/if}
+			{#if onAdblock}
+			<DropdownMenu.Item onclick={() => onAdblock(dev)} class="gap-2">
+				<ShieldIcon class="size-3.5" />
+				Adblock groups...
+			</DropdownMenu.Item>
+			{/if}
+			{#if onLinked}
+			<DropdownMenu.Item onclick={() => onLinked(dev)} class="gap-2">
+				<LinkIcon class="size-3.5" />
+				Linked addresses...
+			</DropdownMenu.Item>
+			{/if}
+			<DropdownMenu.Separator />
+			<DropdownMenu.Item onclick={() => copyText(dev.mac, "MAC")} class="gap-2">
+				<CopyIcon class="size-3.5 text-muted-foreground" />
+				Copy MAC Address
+			</DropdownMenu.Item>
+			{#if dev.primary_v4 || dev.v4?.ip}
+				<DropdownMenu.Item onclick={() => copyText(dev.primary_v4 || dev.v4?.ip || "", "IPv4")} class="gap-2">
+					<CopyIcon class="size-3.5 text-muted-foreground" />
+					Copy IPv4 Address
+				</DropdownMenu.Item>
+			{/if}
+			{#if onPurge}
+			<DropdownMenu.Separator />
+			<DropdownMenu.Item onclick={() => onPurge(dev.mac)} class="gap-2 text-rose-500">
+				<Trash2Icon class="size-3.5" />
+				Purge Endpoint
+			</DropdownMenu.Item>
+			{/if}
+		</DropdownMenu.Content>
+	</DropdownMenu.Root>
+{/snippet}
+
 <DataTableCard
 	title="Network Devices"
 	icon={WifiIcon}
@@ -177,6 +235,52 @@
 			<span>Scan Network</span>
 		</Button>
 		{/if}
+	{/snippet}
+
+	{#snippet mobile()}
+		{#each paginatedDevices as dev (dev.mac)}
+			{@const v4 = dev.primary_v4 || dev.v4?.ip}
+			{@const v6 = dev.primary_v6 || dev.v6?.ip}
+			<div class="flex items-start gap-2 px-4 py-3">
+				<span
+					class={[
+						"mt-1.5 size-2 rounded-full shrink-0",
+						dev.online
+							? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]"
+							: "bg-zinc-600",
+					].join(" ")}
+					title={dev.online ? "Online" : "Offline"}
+				></span>
+				<button
+					class="flex flex-1 min-w-0 flex-col gap-0.5 text-left cursor-pointer"
+					onclick={() => onInspect(dev)}
+				>
+					<span class="flex items-baseline justify-between gap-2">
+						<span class="truncate text-sm font-semibold tracking-tight text-foreground">
+							{dev.hostname || "Unassigned Host"}
+						</span>
+						<span class="shrink-0 text-[11px] text-muted-foreground">
+							{formatLastSeen(dev.last_seen)}
+						</span>
+					</span>
+					{#if v4}
+						<span class="truncate font-mono text-xs text-emerald-400">{v4}</span>
+					{/if}
+					{#if v6}
+						<span class="truncate font-mono text-[11px] text-sky-400">{v6}</span>
+					{/if}
+					<span class="flex items-center gap-1.5 flex-wrap font-mono text-[11px] text-muted-foreground">
+						{dev.mac}
+						{#if dev.learning_method}
+							<Badge variant="outline" class="text-[10px] uppercase px-1.5 py-0">
+								{dev.learning_method}
+							</Badge>
+						{/if}
+					</span>
+				</button>
+				{@render actionsMenu(dev)}
+			</div>
+		{/each}
 	{/snippet}
 
 	{#snippet header()}
@@ -277,61 +381,7 @@
 
 			<!-- Actions Dropdown -->
 			<Table.Cell class="text-right font-sans">
-				<DropdownMenu.Root>
-					<DropdownMenu.Trigger
-						class="h-7 w-7 inline-flex items-center justify-center rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-					>
-						<MoreHorizontalIcon class="size-4" />
-					</DropdownMenu.Trigger>
-					<DropdownMenu.Content align="end" class="w-48 text-xs">
-						<DropdownMenu.Item onclick={() => onInspect(dev)} class="gap-2">
-							<SearchIcon class="size-3.5 text-sky-400" />
-							Inspect Details (Whois)
-						</DropdownMenu.Item>
-						{#if onWol}
-						<DropdownMenu.Item onclick={() => onWol(dev.mac)} class="gap-2">
-							<ZapIcon class="size-3.5 text-emerald-400" />
-							Send Wake-on-LAN
-						</DropdownMenu.Item>
-						{/if}
-						{#if onPromote}
-						<DropdownMenu.Item onclick={() => onPromote(dev)} class="gap-2">
-							<BookmarkIcon class="size-3.5 text-amber-400" />
-							Promote to Static Host
-						</DropdownMenu.Item>
-						{/if}
-						{#if onAdblock}
-						<DropdownMenu.Item onclick={() => onAdblock(dev)} class="gap-2">
-							<ShieldIcon class="size-3.5" />
-							Adblock groups...
-						</DropdownMenu.Item>
-						{/if}
-						{#if onLinked}
-						<DropdownMenu.Item onclick={() => onLinked(dev)} class="gap-2">
-							<LinkIcon class="size-3.5" />
-							Linked addresses...
-						</DropdownMenu.Item>
-						{/if}
-						<DropdownMenu.Separator />
-						<DropdownMenu.Item onclick={() => copyText(dev.mac, "MAC")} class="gap-2">
-							<CopyIcon class="size-3.5 text-muted-foreground" />
-							Copy MAC Address
-						</DropdownMenu.Item>
-						{#if dev.primary_v4 || dev.v4?.ip}
-							<DropdownMenu.Item onclick={() => copyText(dev.primary_v4 || dev.v4?.ip || "", "IPv4")} class="gap-2">
-								<CopyIcon class="size-3.5 text-muted-foreground" />
-								Copy IPv4 Address
-							</DropdownMenu.Item>
-						{/if}
-						{#if onPurge}
-						<DropdownMenu.Separator />
-						<DropdownMenu.Item onclick={() => onPurge(dev.mac)} class="gap-2 text-rose-500">
-							<Trash2Icon class="size-3.5" />
-							Purge Endpoint
-						</DropdownMenu.Item>
-						{/if}
-					</DropdownMenu.Content>
-				</DropdownMenu.Root>
+				{@render actionsMenu(dev)}
 			</Table.Cell>
 		</Table.Row>
 	{/each}

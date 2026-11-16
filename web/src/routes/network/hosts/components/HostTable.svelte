@@ -79,6 +79,42 @@
 	}
 </script>
 
+{#snippet actionsMenu(host: HostConfigEntry)}
+	<DropdownMenu.Root>
+		<DropdownMenu.Trigger
+			class="h-7 w-7 max-md:size-9 shrink-0 inline-flex items-center justify-center rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+		>
+			<MoreHorizontalIcon class="size-4" />
+		</DropdownMenu.Trigger>
+		<DropdownMenu.Content align="end" class="w-48 text-xs">
+			{#if canEdit}
+			<DropdownMenu.Item onclick={() => onEdit(host)} class="gap-2">
+				<PencilIcon class="size-3.5 text-amber-400" />
+				Edit Host Assignment
+			</DropdownMenu.Item>
+			<DropdownMenu.Separator />
+			{/if}
+			<DropdownMenu.Item onclick={() => copyText(host.mac, "MAC")} class="gap-2">
+				<CopyIcon class="size-3.5 text-muted-foreground" />
+				Copy MAC Address
+			</DropdownMenu.Item>
+			{#if host.v4_fixed || host.v4}
+				<DropdownMenu.Item onclick={() => copyText(host.v4_fixed || host.v4 || "", "Fixed IPv4")} class="gap-2">
+					<CopyIcon class="size-3.5 text-muted-foreground" />
+					Copy Fixed IPv4
+				</DropdownMenu.Item>
+			{/if}
+			{#if canEdit}
+			<DropdownMenu.Separator />
+			<DropdownMenu.Item onclick={() => onDelete(host.mac)} class="gap-2 text-rose-500">
+				<Trash2Icon class="size-3.5" />
+				Delete Static Host
+			</DropdownMenu.Item>
+			{/if}
+		</DropdownMenu.Content>
+	</DropdownMenu.Root>
+{/snippet}
+
 <DataTableCard
 	title="Static Hosts & Overrides"
 	icon={ServerIcon}
@@ -159,6 +195,31 @@
 		{/if}
 	{/snippet}
 
+	{#snippet mobile()}
+		{#each paginatedHosts as host (host.mac)}
+			<div class="flex items-start gap-2 px-4 py-3">
+				<div class="flex flex-1 min-w-0 flex-col gap-0.5">
+					<span class="flex items-center gap-1.5 min-w-0">
+						<span class="truncate text-sm font-semibold tracking-tight text-foreground">
+							{host.hostname || "—"}
+						</span>
+						<Badge variant="outline" class="shrink-0 text-[10px] uppercase font-mono px-1.5 py-0">
+							{host.origin || "Config"}
+						</Badge>
+					</span>
+					{#if host.v4_fixed || host.v4}
+						<span class="truncate font-mono text-xs text-emerald-400">{host.v4_fixed || host.v4}</span>
+					{/if}
+					{#if host.v6_suffix}
+						<span class="truncate font-mono text-[11px] text-sky-400">{host.v6_suffix}</span>
+					{/if}
+					<span class="font-mono text-[11px] text-muted-foreground">{host.mac}</span>
+				</div>
+				{@render actionsMenu(host)}
+			</div>
+		{/each}
+	{/snippet}
+
 	{#snippet header()}
 		<Table.Head>Hostname</Table.Head>
 		<Table.Head>Target MAC</Table.Head>
@@ -232,39 +293,7 @@
 
 			<!-- Actions Dropdown -->
 			<Table.Cell class="text-right font-sans">
-				<DropdownMenu.Root>
-					<DropdownMenu.Trigger
-						class="h-7 w-7 inline-flex items-center justify-center rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-					>
-						<MoreHorizontalIcon class="size-4" />
-					</DropdownMenu.Trigger>
-					<DropdownMenu.Content align="end" class="w-48 text-xs">
-						{#if canEdit}
-						<DropdownMenu.Item onclick={() => onEdit(host)} class="gap-2">
-							<PencilIcon class="size-3.5 text-amber-400" />
-							Edit Host Assignment
-						</DropdownMenu.Item>
-						<DropdownMenu.Separator />
-						{/if}
-						<DropdownMenu.Item onclick={() => copyText(host.mac, "MAC")} class="gap-2">
-							<CopyIcon class="size-3.5 text-muted-foreground" />
-							Copy MAC Address
-						</DropdownMenu.Item>
-						{#if host.v4_fixed || host.v4}
-							<DropdownMenu.Item onclick={() => copyText(host.v4_fixed || host.v4 || "", "Fixed IPv4")} class="gap-2">
-								<CopyIcon class="size-3.5 text-muted-foreground" />
-								Copy Fixed IPv4
-							</DropdownMenu.Item>
-						{/if}
-						{#if canEdit}
-						<DropdownMenu.Separator />
-						<DropdownMenu.Item onclick={() => onDelete(host.mac)} class="gap-2 text-rose-500">
-							<Trash2Icon class="size-3.5" />
-							Delete Static Host
-						</DropdownMenu.Item>
-						{/if}
-					</DropdownMenu.Content>
-				</DropdownMenu.Root>
+				{@render actionsMenu(host)}
 			</Table.Cell>
 		</Table.Row>
 	{/each}

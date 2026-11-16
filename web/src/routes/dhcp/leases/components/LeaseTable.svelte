@@ -96,6 +96,48 @@
 	}
 </script>
 
+{#snippet actionsMenu(lease: LeaseEntry)}
+	<DropdownMenu.Root>
+		<DropdownMenu.Trigger
+			class="h-7 w-7 max-md:size-9 shrink-0 inline-flex items-center justify-center rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+		>
+			<MoreHorizontalIcon class="size-4" />
+		</DropdownMenu.Trigger>
+		<DropdownMenu.Content align="end" class="w-48 text-xs">
+			{#if canEdit}
+			<DropdownMenu.Item onclick={() => onRenew(lease)} class="gap-2">
+				<RotateCcwIcon class="size-3.5 text-sky-400" />
+				Renew Lease
+			</DropdownMenu.Item>
+			<DropdownMenu.Item onclick={() => onPromote(lease)} class="gap-2">
+				<BookmarkPlusIcon class="size-3.5 text-amber-400" />
+				Convert to Static Host
+			</DropdownMenu.Item>
+			<DropdownMenu.Item onclick={() => onWol(lease.mac)} class="gap-2">
+				<ZapIcon class="size-3.5 text-emerald-400" />
+				Send Wake-on-LAN
+			</DropdownMenu.Item>
+			<DropdownMenu.Separator />
+			{/if}
+			<DropdownMenu.Item onclick={() => copyText(lease.mac, "MAC")} class="gap-2">
+				<CopyIcon class="size-3.5 text-muted-foreground" />
+				Copy MAC
+			</DropdownMenu.Item>
+			<DropdownMenu.Item onclick={() => copyText(lease.address, "IP")} class="gap-2">
+				<CopyIcon class="size-3.5 text-muted-foreground" />
+				Copy IP
+			</DropdownMenu.Item>
+			{#if canEdit}
+			<DropdownMenu.Separator />
+			<DropdownMenu.Item onclick={() => onRelease(lease)} class="gap-2 text-rose-500">
+				<Trash2Icon class="size-3.5" />
+				Release Lease
+			</DropdownMenu.Item>
+			{/if}
+		</DropdownMenu.Content>
+	</DropdownMenu.Root>
+{/snippet}
+
 <DataTableCard
 	title="Active DHCP Leases"
 	icon={NetworkIcon}
@@ -159,6 +201,45 @@
 				Prefixes
 			</button>
 		</div>
+	{/snippet}
+
+	{#snippet mobile()}
+		{#each paginatedLeases as lease (lease.mac + lease.address + lease.kind)}
+			{@const isExpiring = lease.remaining_secs > 0 && lease.remaining_secs < 3600}
+			{@const isExpired = lease.remaining_secs <= 0}
+			<div class="flex items-start gap-2 px-4 py-3">
+				<div class="flex flex-1 min-w-0 flex-col gap-0.5">
+					<span class="flex items-baseline justify-between gap-2">
+						<span class="truncate text-sm font-semibold tracking-tight text-foreground">
+							{lease.hostname || "—"}
+						</span>
+						<span
+							class={[
+								"shrink-0 font-mono text-[11px] font-medium",
+								isExpired ? "text-destructive" : isExpiring ? "text-amber-500" : "text-muted-foreground",
+							].join(" ")}
+						>
+							{formatDuration(lease.remaining_secs)}
+						</span>
+					</span>
+					<span
+						class={[
+							"truncate font-mono text-xs font-medium",
+							lease.kind === "v4" ? "text-emerald-400" : "text-sky-400",
+						].join(" ")}
+					>
+						{lease.kind === "v6_prefix" ? `${lease.address}/64` : lease.address}
+					</span>
+					<span class="flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
+						{lease.mac}
+						<Badge variant="outline" class="text-[10px] px-1.5 py-0">
+							{lease.kind === "v4" ? "IPv4" : lease.kind === "v6" ? "IPv6" : "IA_PD"}
+						</Badge>
+					</span>
+				</div>
+				{@render actionsMenu(lease)}
+			</div>
+		{/each}
 	{/snippet}
 
 	{#snippet header()}
@@ -247,45 +328,7 @@
 
 			<!-- Actions Dropdown -->
 			<Table.Cell class="text-right font-sans">
-				<DropdownMenu.Root>
-					<DropdownMenu.Trigger
-						class="h-7 w-7 inline-flex items-center justify-center rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-					>
-						<MoreHorizontalIcon class="size-4" />
-					</DropdownMenu.Trigger>
-					<DropdownMenu.Content align="end" class="w-48 text-xs">
-						{#if canEdit}
-						<DropdownMenu.Item onclick={() => onRenew(lease)} class="gap-2">
-							<RotateCcwIcon class="size-3.5 text-sky-400" />
-							Renew Lease
-						</DropdownMenu.Item>
-						<DropdownMenu.Item onclick={() => onPromote(lease)} class="gap-2">
-							<BookmarkPlusIcon class="size-3.5 text-amber-400" />
-							Convert to Static Host
-						</DropdownMenu.Item>
-						<DropdownMenu.Item onclick={() => onWol(lease.mac)} class="gap-2">
-							<ZapIcon class="size-3.5 text-emerald-400" />
-							Send Wake-on-LAN
-						</DropdownMenu.Item>
-						<DropdownMenu.Separator />
-						{/if}
-						<DropdownMenu.Item onclick={() => copyText(lease.mac, "MAC")} class="gap-2">
-							<CopyIcon class="size-3.5 text-muted-foreground" />
-							Copy MAC
-						</DropdownMenu.Item>
-						<DropdownMenu.Item onclick={() => copyText(lease.address, "IP")} class="gap-2">
-							<CopyIcon class="size-3.5 text-muted-foreground" />
-							Copy IP
-						</DropdownMenu.Item>
-						{#if canEdit}
-						<DropdownMenu.Separator />
-						<DropdownMenu.Item onclick={() => onRelease(lease)} class="gap-2 text-rose-500">
-							<Trash2Icon class="size-3.5" />
-							Release Lease
-						</DropdownMenu.Item>
-						{/if}
-					</DropdownMenu.Content>
-				</DropdownMenu.Root>
+				{@render actionsMenu(lease)}
 			</Table.Cell>
 		</Table.Row>
 	{/each}

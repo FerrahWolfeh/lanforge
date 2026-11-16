@@ -247,6 +247,94 @@
 
 </script>
 
+{#snippet actionsMenu(entry: DnsQueryLogEntry, domainClean: string, answerClean: string)}
+<DropdownMenu.Root>
+	<DropdownMenu.Trigger
+		class="h-7 w-7 max-md:size-9 shrink-0 inline-flex items-center justify-center rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+	>
+		<MoreHorizontalIcon class="h-4 w-4" />
+	</DropdownMenu.Trigger>
+	<DropdownMenu.Content
+		align="end"
+		class="w-44 text-xs"
+	>
+		<DropdownMenu.Item
+			onclick={() => inspectRecord(entry)}
+			class="gap-2"
+		>
+			<EyeIcon
+				class="h-3.5 w-3.5 text-primary"
+			/>
+			Inspect Log
+		</DropdownMenu.Item>
+		<DropdownMenu.Item
+			onclick={() =>
+				copyToClipboard(
+					domainClean,
+					"domain name",
+				)}
+			class="gap-2"
+		>
+			<CopyIcon
+				class="h-3.5 w-3.5 text-muted-foreground"
+			/>
+			Copy Domain
+		</DropdownMenu.Item>
+		<DropdownMenu.Item
+			onclick={() =>
+				copyToClipboard(
+					entry.src_ip,
+					"client IP",
+				)}
+			class="gap-2"
+		>
+			<CopyIcon
+				class="h-3.5 w-3.5 text-muted-foreground"
+			/>
+			Copy Client IP
+		</DropdownMenu.Item>
+		{#if canDnsWrite}
+		<DropdownMenu.Separator />
+		<DropdownMenu.Item
+			onclick={() =>
+				handleQuickBlock(domainClean)}
+			class="gap-2 text-rose-500"
+		>
+			<ShieldAlertIcon
+				class="h-3.5 w-3.5"
+			/>
+			Block Domain
+		</DropdownMenu.Item>
+		<DropdownMenu.Item
+			onclick={() =>
+				handleQuickAllow(domainClean)}
+			class="gap-2 text-emerald-500"
+		>
+			<ShieldCheckIcon
+				class="h-3.5 w-3.5"
+			/>
+			Allow Domain
+		</DropdownMenu.Item>
+		<DropdownMenu.Item
+			onclick={() =>
+				onAddRewrite(
+					domainClean,
+					answerClean !== "—"
+						? answerClean
+						: "",
+				)}
+			class="gap-2"
+		>
+			<ArrowRightLeftIcon
+				class="h-3.5 w-3.5 text-amber-500"
+			/>
+			Create Rewrite
+		</DropdownMenu.Item>
+		{/if}
+	</DropdownMenu.Content>
+</DropdownMenu.Root>
+{/snippet}
+
 <DataTableCard
 	title="DNS Query Log Entries"
 	icon={ListFilterIcon}
@@ -302,6 +390,53 @@
 				{/each}
 			</Select.Content>
 		</Select.Root>
+	{/snippet}
+
+	{#snippet mobile()}
+		{#each entries as entry, i (`${entry.timestamp}-${entry.src_ip}-${entry.domain}-${entry.qtype}-${i}`)}
+			{@const domainClean = cleanDomain(entry.domain)}
+			{@const answerClean = cleanAnswer(entry.answer)}
+			{@const style = typeVariants[entry.qtype] || "bg-secondary text-secondary-foreground border-border"}
+			{@const badgeInfo = getResultBadge(entry.result, entry.cached, entry.filter)}
+			<div
+				class="flex items-start gap-2 px-4 py-3 {entry.coalesce_id != null ? 'border-l-4 border-l-cyan-500/70' : ''}"
+			>
+				<button
+					class="flex flex-1 min-w-0 flex-col gap-1 text-left cursor-pointer"
+					onclick={() => inspectRecord(entry)}
+				>
+					<span class="flex items-baseline justify-between gap-2">
+						<span class="flex items-center gap-1.5 min-w-0">
+							{#if entry.result === "coalesced"}
+								<span class="shrink-0 font-mono text-[11px] text-cyan-600 dark:text-cyan-400">↳</span>
+							{/if}
+							<span class="truncate font-mono text-xs font-medium text-foreground">{domainClean}</span>
+							{#if entry.repeats > 1}
+								<span class="shrink-0 rounded border border-border bg-muted px-1 font-mono text-[10px] text-muted-foreground">
+									×{entry.repeats}
+								</span>
+							{/if}
+						</span>
+						<span class="shrink-0 font-mono text-[11px] text-muted-foreground">
+							{formatTime(entry.timestamp)}
+						</span>
+					</span>
+					<span class="flex items-center gap-1.5 flex-wrap text-[11px] text-muted-foreground">
+						<span class="truncate max-w-[45%] {entry.src_hostname ? 'text-foreground' : 'font-mono'}">
+							{entry.src_hostname || entry.src_ip}
+						</span>
+						<Badge variant="outline" class="px-1.5 py-0 text-[10px] font-mono border font-semibold {style}">
+							{entry.qtype}
+						</Badge>
+						<Badge variant="outline" class="px-1.5 py-0 text-[10px] font-mono border font-semibold {badgeInfo.class}">
+							{badgeInfo.label}
+						</Badge>
+						<span class="font-mono">{formatLatency(entry.upstream_us)}</span>
+					</span>
+				</button>
+				{@render actionsMenu(entry, domainClean, answerClean)}
+			</div>
+		{/each}
 	{/snippet}
 
 	{#snippet header()}
@@ -481,91 +616,7 @@
 								class="text-right"
 								onclick={(e) => e.stopPropagation()}
 							>
-								<DropdownMenu.Root>
-									<DropdownMenu.Trigger
-										class="h-7 w-7 inline-flex items-center justify-center rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-									>
-										<MoreHorizontalIcon class="h-4 w-4" />
-									</DropdownMenu.Trigger>
-									<DropdownMenu.Content
-										align="end"
-										class="w-44 text-xs"
-									>
-										<DropdownMenu.Item
-											onclick={() => inspectRecord(entry)}
-											class="gap-2"
-										>
-											<EyeIcon
-												class="h-3.5 w-3.5 text-primary"
-											/>
-											Inspect Log
-										</DropdownMenu.Item>
-										<DropdownMenu.Item
-											onclick={() =>
-												copyToClipboard(
-													domainClean,
-													"domain name",
-												)}
-											class="gap-2"
-										>
-											<CopyIcon
-												class="h-3.5 w-3.5 text-muted-foreground"
-											/>
-											Copy Domain
-										</DropdownMenu.Item>
-										<DropdownMenu.Item
-											onclick={() =>
-												copyToClipboard(
-													entry.src_ip,
-													"client IP",
-												)}
-											class="gap-2"
-										>
-											<CopyIcon
-												class="h-3.5 w-3.5 text-muted-foreground"
-											/>
-											Copy Client IP
-										</DropdownMenu.Item>
-										{#if canDnsWrite}
-										<DropdownMenu.Separator />
-										<DropdownMenu.Item
-											onclick={() =>
-												handleQuickBlock(domainClean)}
-											class="gap-2 text-rose-500"
-										>
-											<ShieldAlertIcon
-												class="h-3.5 w-3.5"
-											/>
-											Block Domain
-										</DropdownMenu.Item>
-										<DropdownMenu.Item
-											onclick={() =>
-												handleQuickAllow(domainClean)}
-											class="gap-2 text-emerald-500"
-										>
-											<ShieldCheckIcon
-												class="h-3.5 w-3.5"
-											/>
-											Allow Domain
-										</DropdownMenu.Item>
-										<DropdownMenu.Item
-											onclick={() =>
-												onAddRewrite(
-													domainClean,
-													answerClean !== "—"
-														? answerClean
-														: "",
-												)}
-											class="gap-2"
-										>
-											<ArrowRightLeftIcon
-												class="h-3.5 w-3.5 text-amber-500"
-											/>
-											Create Rewrite
-										</DropdownMenu.Item>
-										{/if}
-									</DropdownMenu.Content>
-								</DropdownMenu.Root>
+								{@render actionsMenu(entry, domainClean, answerClean)}
 							</Table.Cell>
 						</Table.Row>
 					{/each}
