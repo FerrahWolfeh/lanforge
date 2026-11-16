@@ -44,8 +44,9 @@
 	let pageIndex = $state(0);
 	let pageSize = $state(15);
 
+	// A filter change starts over at page 1. Live updates of the list must not move
+	// the page, or a refresh every few seconds throws the reader back to page 1.
 	$effect(() => {
-		hosts;
 		searchQuery;
 		pageIndex = 0;
 	});
@@ -65,6 +66,12 @@
 	const paginatedHosts = $derived(
 		filteredHosts.slice(pageIndex * pageSize, (pageIndex + 1) * pageSize)
 	);
+
+	// Keep the page in range when the list shrinks under it.
+	$effect(() => {
+		const lastPage = Math.max(0, Math.ceil(filteredHosts.length / pageSize) - 1);
+		if (pageIndex > lastPage) pageIndex = lastPage;
+	});
 
 	function copyText(text: string, label: string) {
 		navigator.clipboard.writeText(text);
