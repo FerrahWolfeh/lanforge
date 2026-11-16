@@ -137,6 +137,16 @@ pub struct Device {
     )]
     pub last_seen: SystemTime,
     pub status: DeviceStatus,
+    /// When the device was last observed on the network. Unlike `last_seen` (its liveness,
+    /// which drops to `UNIX_EPOCH` once its addresses expire or go offline), it never moves
+    /// back: "last seen" for people and the clock of the prune. `UNIX_EPOCH` = never/unknown.
+    /// Not serialized with the device: the stored record carries it in `last_seen`'s place.
+    #[serde(skip, default = "never")]
+    pub last_observed: SystemTime,
+}
+
+const fn never() -> SystemTime {
+    SystemTime::UNIX_EPOCH
 }
 
 impl Deref for Device {
@@ -160,6 +170,7 @@ impl Device {
             v6_prefixes: Vec::new(),
             last_seen: SystemTime::UNIX_EPOCH,
             status: DeviceStatus::Offline,
+            last_observed: SystemTime::UNIX_EPOCH,
         }
     }
 
@@ -172,6 +183,7 @@ impl Device {
             v6_prefixes: Vec::new(),
             last_seen: SystemTime::UNIX_EPOCH,
             status: DeviceStatus::Offline,
+            last_observed: SystemTime::UNIX_EPOCH,
         }
     }
 
@@ -671,14 +683,25 @@ impl Device {
     /// How long a named discovered device may stay without any address before it is pruned.
     pub const NAMED_RETENTION: Duration = Duration::from_hours(7 * 24);
 
+    /// Carries the liveness into `last_observed`; call after every change.
+    pub fn note_observation(&mut self) {
+        self.last_observed = self.last_observed.max(self.last_seen);
+    }
+
+    /// How long the device has not been observed at `now` (decades when never).
+    #[must_use]
+    pub fn unseen_for(&self, now: SystemTime) -> Duration {
+        now.duration_since(self.last_observed).unwrap_or_default()
+    }
+
     /// Whether the device holds any address or delegated prefix.
     #[must_use]
     pub const fn has_address(&self) -> bool {
         !matches!(self.v4, IPv4State::None) || !self.v6.is_empty() || !self.v6_prefixes.is_empty()
     }
 
-    /// How long this device may stay without an address before the automatic prune removes
-    /// it, or `None` if it is never pruned: static and system devices, devices that hold an
+    /// How long this device may stay unobserved (`last_observed`) and without an address
+    /// before the automatic prune removes it, or `None` if it is never pruned: static and system devices, devices that hold an
     /// address, and devices carrying admin settings.
     #[must_use]
     pub fn prune_retention(&self) -> Option<Duration> {

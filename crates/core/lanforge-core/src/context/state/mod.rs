@@ -28,7 +28,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 pub use self::cache::DiscoveryStore;
 pub use self::indices::Indices;
@@ -575,7 +575,13 @@ impl State {
         let was_status = dev.status;
 
         let change = f(&mut dev);
-        dev.status = dev.evaluate_status(SystemTime::now(), None);
+        let now = SystemTime::now();
+        dev.status = dev.evaluate_status(now, None);
+        dev.note_observation();
+        if old_arc.is_none() {
+            // Just noticed: its prune clock starts now, not at the epoch.
+            dev.last_observed = dev.last_observed.max(now);
+        }
 
         // Fast-path: no event from `f`, and device is completely unmodified
         if change.is_none() && old_arc.as_deref() == Some(&dev) {
@@ -716,48 +722,42 @@ impl State {
         }
     }
 
-    /// Advances every device's prune clock (dropping clocks of devices that are gone) and
-    /// reports whether [`Self::prune_zombies`] would remove anything.
-    #[must_use]
-    pub fn prune_due(&self, discovery: &DiscoveryStore, now: Instant) -> bool {
-        discovery
-            .prune_clock
-            .retain(|mac, _| self.devices.contains_key(mac));
-        let mut due = false;
-        for (mac, dev) in &self.devices {
-            due |= discovery.prune_expired(*mac, self.prune_retention(*mac, dev), now);
-        }
-        let wall = SystemTime::now();
-        due || self
-            .transient_hosts
-            .values()
-            .any(|host| Self::transient_is_stale(host, wall))
+    /// Whether `dev` has stayed unobserved past its retention at `now`. The clock is the
+    /// device's `last_observed`, kept in the database, so a daemon restart does not reset it.
+    fn prune_expired(&self, mac: MacAddr, dev: &Device, now: SystemTime) -> bool {
+        self.prune_retention(mac, dev)
+            .is_some_and(|retention| dev.unseen_for(now) >= retention)
     }
 
-    /// Removes the devices whose prune clock ran past their retention, stale discovery caches
-    /// and old transient hosts. Returns one `DeviceEvent::Purged` per removed device.
-    pub fn prune_zombies(&mut self, discovery: &DiscoveryStore, now: Instant) -> EventVec {
-        let mut removed = Vec::new();
-        let linked: HashSet<MacAddr> = self.linked_addresses.values().copied().collect();
-        self.devices.retain(|mac, dev| {
-            let retention = if linked.contains(mac) {
-                None
-            } else {
-                dev.prune_retention()
-            };
-            let expired = discovery.prune_expired(*mac, retention, now);
-            if expired {
-                discovery.prune_clock.remove(mac);
-                removed.push(*mac);
-            }
-            !expired
-        });
+    /// Whether [`Self::prune_zombies`] would remove anything at `now`.
+    #[must_use]
+    pub fn prune_due(&self, now: SystemTime) -> bool {
+        self.devices
+            .iter()
+            .any(|(mac, dev)| self.prune_expired(*mac, dev, now))
+            || self
+                .transient_hosts
+                .values()
+                .any(|host| Self::transient_is_stale(host, now))
+    }
+
+    /// Removes the devices unobserved past their retention, stale discovery caches and old
+    /// transient hosts. Returns one `DeviceEvent::Purged` per removed device.
+    pub fn prune_zombies(&mut self, discovery: &DiscoveryStore, now: SystemTime) -> EventVec {
+        let removed: Vec<MacAddr> = self
+            .devices
+            .iter()
+            .filter(|(mac, dev)| self.prune_expired(**mac, dev, now))
+            .map(|(mac, _)| *mac)
+            .collect();
+        for mac in &removed {
+            self.devices.remove(mac);
+        }
 
         discovery.prune_stale(Duration::from_hours(2));
 
-        let wall = SystemTime::now();
         self.transient_hosts
-            .retain(|_, host| !Self::transient_is_stale(host, wall));
+            .retain(|_, host| !Self::transient_is_stale(host, now));
 
         if removed.is_empty() {
             return EventVec::new();

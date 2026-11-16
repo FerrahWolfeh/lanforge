@@ -30,7 +30,7 @@ impl DeviceStore for RedbDatabase {
             let mut list = Vec::with_capacity(count);
             for item in table.iter()? {
                 let (_, val) = item?;
-                list.push(decode(val.value())?);
+                list.push(restored_device(decode(val.value())?));
             }
             Ok(list)
         })?;
@@ -91,7 +91,8 @@ impl DeviceStore for RedbDatabase {
 
             let updated_device = match table.get(device.mac.0)? {
                 Some(val) => {
-                    let mut existing: Device = decode(val.value())?;
+                    let mut existing = restored_device(decode(val.value())?);
+                    existing.last_observed = existing.last_observed.max(device.last_observed);
                     let id = existing.identity_mut();
                     id.hostname.clone_from(&device.hostname);
                     id.origin = device.origin;
@@ -250,7 +251,8 @@ impl DeviceStore for RedbDatabase {
                 }
                 let mut updated = None;
                 if let Some(val) = table.get(dev.mac.0)? {
-                    let mut existing: Device = decode(val.value())?;
+                    let mut existing = restored_device(decode(val.value())?);
+                    existing.last_observed = existing.last_observed.max(dev.last_observed);
                     let id = existing.identity_mut();
                     id.hostname.clone_from(&dev.hostname);
                     id.origin = dev.origin;
@@ -352,6 +354,13 @@ impl ConfigStore for RedbDatabase {
     }
 }
 
+/// A device read back from its stored form (see [`persistent_device`]).
+fn restored_device(mut device: Device) -> Device {
+    device.last_observed = device.last_seen;
+    device.last_seen = SystemTime::UNIX_EPOCH;
+    device
+}
+
 fn static_host_from_device(device: &Device) -> StaticHostEntry {
     StaticHostEntry {
         mac: device.mac,
@@ -386,9 +395,13 @@ fn static_host_to_device(host: StaticHostEntry) -> Device {
     device
 }
 
+/// The stored form of `device`. Its `last_seen` slot holds `last_observed` (liveness is not
+/// kept: a restored device starts offline); records written before held `UNIX_EPOCH` there.
 fn persistent_device(device: &Device) -> Option<Device> {
     let mut persistent = device.clone();
-    persistent.last_seen = SystemTime::UNIX_EPOCH;
+    persistent.last_seen = device.last_observed;
+    // Not serialized: cleared so the stored form compares equal to what decoding gives.
+    persistent.last_observed = SystemTime::UNIX_EPOCH;
     persistent.status = DeviceStatus::Offline;
     persistent.v4 = match &persistent.v4 {
         IPv4State::Dynamic(lease) => IPv4State::Dynamic(lease.clone()),

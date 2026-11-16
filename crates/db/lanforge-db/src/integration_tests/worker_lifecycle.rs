@@ -5,7 +5,7 @@ use std::fs;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use crate::config::DatabaseConfig;
 use crate::{DbWorker, DeviceStore, LanforgeDb, LogDb, Stores};
@@ -14,7 +14,7 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
 use lanforge_types::auth::{ApiScope, UserRole};
-use lanforge_types::device::{DeviceStatus, Origin};
+use lanforge_types::device::{Device, DeviceStatus, Origin};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::Dhcpv4Pool;
 use lanforge_types::network::dns::DnsRecordType;
@@ -603,4 +603,58 @@ async fn the_worker_persists_the_saved_log_filter() {
         .expect("worker shutdown timed out")
         .expect("worker task panicked")
         .expect("worker failed");
+}
+
+/// A device's last observation reaches the database on shutdown even if only activity (never
+/// saved on its own) moved it: the next boot prunes and shows "last seen" from it.
+#[tokio::test]
+async fn shutdown_saves_the_last_observation_of_every_device() {
+    let secs = |t: SystemTime| t.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+    let saved = SystemTime::UNIX_EPOCH + Duration::from_secs(1_794_000_000);
+    let later = saved + Duration::from_secs(3600);
+    let mac = MacAddr([0x02, 0, 0, 0, 0, 0x21]);
+    let mut dev = Device::new(mac);
+    dev.identity_mut().hostname = "tv".to_string().into();
+
+    // Saved at the last persistent change; traffic since moved it in memory only.
+    let db = Arc::new(LanforgeDb::open_in_memory().unwrap());
+    dev.last_observed = saved;
+    db.upsert_device(&dev).unwrap();
+    let mut state = State::new();
+    dev.last_observed = later;
+    state.insert_device(mac, dev);
+    let ctx = LanforgeContext::new(Arc::new(EventBus::new()), state, None);
+
+    let log_db = Arc::new(LogDb::open_in_memory());
+    let mut worker = DbWorker::new(
+        DatabaseConfig::default(),
+        ctx.clone(),
+        Arc::clone(&db),
+        log_db,
+    );
+    worker.init(&ctx).await.unwrap();
+    // As the supervisor runs it: `serve` until a Stop command, then `cleanup`.
+    let (cmd_tx, cmd_rx) = mpsc::channel(4);
+    let ctx_clone = ctx.clone();
+    let h = ServiceHandle::with_command_channel(ServiceId::Db, ctx_clone.clone(), cmd_rx);
+    let handle = tokio::spawn(async move {
+        let served = worker.serve(&ctx_clone, &h).await;
+        worker.cleanup(&ctx_clone).await.expect("cleanup");
+        served
+    });
+    let storage = ctx.storage_handle().expect("storage handle present");
+    let _ = storage
+        .call(|s: &Stores| s.db.is_provisioned())
+        .await
+        .expect("worker ready");
+
+    cmd_tx.send(ServiceCommand::Stop).await.expect("command");
+    timeout(Duration::from_secs(2), handle)
+        .await
+        .expect("join timeout")
+        .expect("join")
+        .expect("serve");
+
+    let stored = db.load_all_devices().unwrap();
+    assert_eq!(secs(stored[0].last_observed), secs(later));
 }

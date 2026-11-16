@@ -562,8 +562,11 @@ impl RedbDatabase {
 mod tests {
     use super::*;
     use lanforge_db_core::{DeviceStore, UserStore};
-    use lanforge_types::device::Device;
+    use lanforge_types::device::{Device, IPv4State};
     use lanforge_types::identifiers::MacAddr;
+    use std::net::Ipv4Addr;
+    use std::sync::Arc;
+    use std::time::{Duration, SystemTime};
 
     #[tokio::test]
     async fn test_redb_user_crud() {
@@ -608,6 +611,70 @@ mod tests {
 
         db.remove_device(mac).unwrap();
         assert_eq!(db.load_all_devices().unwrap().len(), 0);
+    }
+
+    /// A stored device keeps when it was last observed (in its record's `last_seen` slot, which
+    /// held only the epoch before) and comes back offline, its liveness reset. Without it the
+    /// prune clock and "last seen" restarted with every boot.
+    #[test]
+    fn stored_device_keeps_its_last_observation() {
+        let db = RedbDatabase::open_temp().unwrap();
+        let seen = SystemTime::UNIX_EPOCH + Duration::from_secs(1_794_000_000);
+        let mac = MacAddr([0x02, 0, 0, 0, 0, 0x11]);
+        let mut dev = Device::new(mac);
+        dev.identity_mut().hostname = "tv-cozinha".to_string().into();
+        dev.last_observed = seen;
+        dev.last_seen = seen;
+
+        db.upsert_device(&dev).unwrap();
+        let back = &db.load_all_devices().unwrap()[0];
+        assert_eq!(back.last_observed, seen);
+        assert_eq!(
+            back.last_seen,
+            SystemTime::UNIX_EPOCH,
+            "liveness is not restored"
+        );
+
+        // A base update (identity only) keeps the stored leases and the later observation.
+        let later = seen + Duration::from_secs(3600);
+        dev.last_observed = later;
+        dev.identity_mut().hostname = "tv".to_string().into();
+        db.upsert_base_device_only(&dev).unwrap();
+        db.batch_sync_devices(&[], &[Arc::new(dev.clone())], &[])
+            .unwrap();
+        let back = &db.load_all_devices().unwrap()[0];
+        assert_eq!(back.hostname, "tv".into());
+        assert_eq!(back.last_observed, later);
+
+        // An older observation in memory never moves the stored one back.
+        dev.last_observed = seen;
+        db.upsert_base_device_only(&dev).unwrap();
+        assert_eq!(db.load_all_devices().unwrap()[0].last_observed, later);
+    }
+
+    /// The runtime table (devices without a stored record, e.g. nameless ones) keeps the last
+    /// observation too; liveness comes back from the addresses' own timestamps.
+    #[test]
+    fn runtime_device_keeps_its_last_observation() {
+        let db = RedbDatabase::open_temp().unwrap();
+        let seen = SystemTime::UNIX_EPOCH + Duration::from_secs(1_794_000_000);
+        let mac = MacAddr([0x02, 0, 0, 0, 0, 0x12]);
+        let mut gone = Device::new(mac);
+        gone.last_observed = seen; // its address went offline: liveness at the epoch
+        let mut here = Device::new(MacAddr([0x02, 0, 0, 0, 0, 0x13]));
+        let ip = Ipv4Addr::new(192, 168, 1, 13);
+        here.v4 = IPv4State::Discovery(ip, seen);
+        here.last_seen = seen;
+        here.last_observed = seen;
+
+        db.sync_runtime_devices(&[Arc::new(gone), Arc::new(here)], &[])
+            .unwrap();
+        let back = db.load_runtime_devices().unwrap();
+        let gone = back.iter().find(|d| d.mac == mac).unwrap();
+        assert_eq!(gone.last_observed, seen);
+        assert_eq!(gone.last_seen, SystemTime::UNIX_EPOCH, "still offline");
+        let here = back.iter().find(|d| d.mac != mac).unwrap();
+        assert_eq!((here.last_observed, here.last_seen), (seen, seen));
     }
 
     #[tokio::test]

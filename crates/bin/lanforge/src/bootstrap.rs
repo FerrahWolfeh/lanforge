@@ -450,6 +450,8 @@ impl Bootstrapper {
                 for mut runtime in runtime_devices {
                     if let Some(persisted) = table.devices.get(&runtime.mac) {
                         let persistent = persisted.as_ref();
+                        // The later of the two records' last observations.
+                        runtime.last_observed = runtime.last_observed.max(persistent.last_observed);
                         runtime.identity = Arc::clone(&persistent.identity);
                         if matches!(persistent.v4, IPv4State::Dynamic(_)) {
                             runtime.v4 = persistent.v4.clone();

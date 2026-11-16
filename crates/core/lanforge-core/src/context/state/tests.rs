@@ -18,7 +18,7 @@ use std::iter;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 use tokio::sync::broadcast::Receiver;
 
 fn setup() -> LanforgeContext {
@@ -1509,9 +1509,16 @@ fn device(mac_last: u8, hostname: &str) -> (MacAddr, Device) {
     let mac = MacAddr([0x02, 0, 0, 0, 0, mac_last]);
     let mut dev = Device::new(mac);
     dev.identity_mut().hostname.name = hostname.to_string();
-    // The age of `last_seen` must not matter: it drops to the epoch once the addresses go.
+    // Liveness plays no part: it drops to the epoch once the addresses go.
     dev.last_seen = SystemTime::UNIX_EPOCH;
+    dev.last_observed = SystemTime::now();
     (mac, dev)
+}
+
+/// `dev` last observed at `when`.
+fn seen_at(mut dev: Device, when: SystemTime) -> Device {
+    dev.last_observed = when;
+    dev
 }
 
 fn purged(rx: &mut Receiver<TimedEvent>) -> Vec<MacAddr> {
@@ -1534,11 +1541,12 @@ fn prune_keeps_named_static_and_configured_devices_without_address() {
     classed_dev.identity_mut().class = DeviceClass::Printer;
     let (router, mut router_dev) = device(4, "router");
     router_dev.identity_mut().origin = Origin::System;
+    // A named device seen today stays; the others stay even never seen.
     for (mac, dev) in [
         (named, named_dev),
-        (host, host_dev),
-        (classed, classed_dev),
-        (router, router_dev),
+        (host, seen_at(host_dev, SystemTime::UNIX_EPOCH)),
+        (classed, seen_at(classed_dev, SystemTime::UNIX_EPOCH)),
+        (router, seen_at(router_dev, SystemTime::UNIX_EPOCH)),
     ] {
         ctx.insert_device(mac, dev);
     }
@@ -1553,12 +1561,12 @@ fn prune_keeps_named_static_and_configured_devices_without_address() {
 }
 
 #[test]
-fn prune_removes_a_nameless_device_after_a_day_without_address() {
+fn prune_removes_a_nameless_device_a_day_after_it_was_last_seen() {
     let ctx = setup();
+    let t0 = SystemTime::now();
     let (mac, dev) = device(1, "");
-    ctx.insert_device(mac, dev);
+    ctx.insert_device(mac, seen_at(dev, t0));
     let mut rx = ctx.bus().subscribe_device();
-    let t0 = Instant::now();
 
     assert!(ctx.prune_zombies_at(t0).is_empty());
     assert!(
@@ -1573,13 +1581,12 @@ fn prune_removes_a_nameless_device_after_a_day_without_address() {
 }
 
 #[test]
-fn prune_removes_a_named_device_after_a_week_without_address() {
+fn prune_removes_a_named_device_a_week_after_it_was_last_seen() {
     let ctx = setup();
+    let t0 = SystemTime::now();
     let (mac, dev) = device(1, "old-phone");
-    ctx.insert_device(mac, dev);
-    let t0 = Instant::now();
+    ctx.insert_device(mac, seen_at(dev, t0));
 
-    let _ = ctx.prune_zombies_at(t0);
     let _ = ctx.prune_zombies_at(t0 + Duration::from_hours(6 * 24));
     assert!(ctx.get_device(&mac).is_some());
 
@@ -1588,24 +1595,68 @@ fn prune_removes_a_named_device_after_a_week_without_address() {
     assert_eq!(events.len(), 1);
 }
 
+/// The retention runs from the last observation, which the database keeps: a device restored
+/// at boot that was last seen eight days ago goes on the first pass. The old clock lived in
+/// memory and started at the first pass after each boot, so with a restart every few days an
+/// abandoned device (the owner's kitchen TV) was never pruned.
 #[test]
-fn prune_clock_restarts_when_a_device_comes_back() {
+fn prune_clock_survives_a_restart() {
     let ctx = setup();
+    let now = SystemTime::now();
+    let (mac, dev) = device(1, "TV Cozinha");
+    ctx.insert_device(mac, seen_at(dev, now - Duration::from_hours(8 * 24)));
+
+    let events = ctx.prune_zombies_at(now);
+    assert_eq!(events.len(), 1, "abandoned for 8 days: pruned at once");
+    assert!(ctx.get_device(&mac).is_none());
+}
+
+/// A device with no recorded observation (a record from before the date was kept) counts as
+/// abandoned (owner decision): it goes on the first pass unless something keeps it.
+#[test]
+fn prune_takes_a_device_never_observed_at_once() {
+    let ctx = setup();
+    let (mac, dev) = device(1, "Mi9T-Mi9T");
+    ctx.insert_device(mac, seen_at(dev, SystemTime::UNIX_EPOCH));
+
+    let _ = ctx.prune_zombies();
+    assert!(ctx.get_device(&mac).is_none());
+}
+
+/// A device just noticed without an address (a DHCP name before the lease) is not taken for
+/// one never observed.
+#[test]
+fn prune_spares_a_device_just_noticed() {
+    let ctx = setup();
+    let mac = MacAddr([0x02, 0, 0, 0, 0, 9]);
+    let _ = ctx.apply(DeviceUpdate::DhcpHostnameHint {
+        mac,
+        hostname: "new-phone".to_string(),
+    });
+    assert!(
+        ctx.get_device(&mac).is_some(),
+        "the hint creates the device"
+    );
+
+    let _ = ctx.prune_zombies();
+    assert!(ctx.get_device(&mac).is_some());
+}
+
+#[test]
+fn prune_counts_from_the_last_time_a_device_was_seen() {
+    let ctx = setup();
+    let t0 = SystemTime::now();
     let (mac, dev) = device(1, "");
-    ctx.insert_device(mac, dev.clone());
-    let t0 = Instant::now();
-    let _ = ctx.prune_zombies_at(t0);
-
-    // Back on the network at 20 h: its clock stops.
-    let mut online = dev.clone();
-    online.v4 = IPv4State::Discovery(Ipv4Addr::new(192, 168, 1, 50), SystemTime::now());
+    // Holding an address: never pruned, however old its last observation.
+    let mut online = seen_at(dev.clone(), t0);
+    online.v4 = IPv4State::Discovery(Ipv4Addr::new(192, 168, 1, 50), t0);
     ctx.insert_device(mac, online);
-    let _ = ctx.prune_zombies_at(t0 + Duration::from_hours(20));
-
-    // Gone again at 22 h: a new day starts there.
-    ctx.insert_device(mac, dev);
-    let _ = ctx.prune_zombies_at(t0 + Duration::from_hours(22));
     let _ = ctx.prune_zombies_at(t0 + Duration::from_hours(30));
+    assert!(ctx.get_device(&mac).is_some());
+
+    // Address gone, last seen at 22 h: a day from there.
+    ctx.insert_device(mac, seen_at(dev, t0 + Duration::from_hours(22)));
+    let _ = ctx.prune_zombies_at(t0 + Duration::from_hours(45));
     assert!(ctx.get_device(&mac).is_some());
 
     let _ = ctx.prune_zombies_at(t0 + Duration::from_hours(46));
@@ -1619,15 +1670,38 @@ fn prune_never_removes_a_device_with_admin_settings() {
     logged_dev.identity_mut().ignore_dns_log = true;
     let (named, mut named_dev) = device(2, "");
     named_dev.identity_mut().dns_fallback = "laptop".to_string();
-    ctx.insert_device(logged, logged_dev);
-    ctx.insert_device(named, named_dev);
-    let t0 = Instant::now();
+    ctx.insert_device(logged, seen_at(logged_dev, SystemTime::UNIX_EPOCH));
+    ctx.insert_device(named, seen_at(named_dev, SystemTime::UNIX_EPOCH));
 
-    let _ = ctx.prune_zombies_at(t0);
-    let _ = ctx.prune_zombies_at(t0 + Duration::from_hours(365 * 24));
+    let _ = ctx.prune_zombies_at(SystemTime::now() + Duration::from_hours(365 * 24));
 
     assert!(ctx.get_device(&logged).is_some());
     assert!(ctx.get_device(&named).is_some());
+}
+
+/// "Last seen" outlives the addresses: when the neighbour entry fails the device goes
+/// offline (liveness at the epoch) but keeps the time it was last observed.
+#[test]
+fn last_observed_outlives_an_offline_address() {
+    let ctx = setup();
+    // Known from an earlier boot, never observed since.
+    let (mac, dev) = device(7, "tv");
+    ctx.insert_device(mac, seen_at(dev, SystemTime::UNIX_EPOCH));
+    let ip = Ipv4Addr::new(192, 168, 1, 77);
+    let before = SystemTime::now();
+    let _ = ctx.apply(DeviceUpdate::ArpSeen {
+        mac,
+        ip,
+        is_active: true,
+    });
+    let seen = ctx.get_device(&mac).unwrap().last_observed;
+    assert!(seen >= before);
+
+    let _ = ctx.apply(DeviceUpdate::IpOffline { ip: IpAddr::V4(ip) });
+    let dev = ctx.get_device(&mac).unwrap();
+    assert_eq!(dev.last_seen, SystemTime::UNIX_EPOCH, "liveness drops");
+    assert_eq!(dev.status, DeviceStatus::Offline);
+    assert_eq!(dev.last_observed, seen, "last seen is kept");
 }
 
 /// A device with linked addresses (its tailnet address) is kept like one with admin settings,
@@ -1636,7 +1710,7 @@ fn prune_never_removes_a_device_with_admin_settings() {
 fn linked_addresses_keep_their_device_and_go_with_it() {
     let ctx = setup();
     let (mac, dev) = device(1, "");
-    ctx.insert_device(mac, dev);
+    ctx.insert_device(mac, seen_at(dev, SystemTime::UNIX_EPOCH));
     let tailnet: IpAddr = "100.64.0.6".parse().unwrap();
     let _ = ctx.apply(DeviceUpdate::LinkedAddressesSet {
         mac,
@@ -1644,10 +1718,8 @@ fn linked_addresses_keep_their_device_and_go_with_it() {
     });
     assert_eq!(ctx.with_state(|s| s.client_device(tailnet)), Some(mac));
     assert_eq!(ctx.with_state(|s| s.get_mac_by_ip(tailnet)), None);
-    let t0 = Instant::now();
 
-    let _ = ctx.prune_zombies_at(t0);
-    let _ = ctx.prune_zombies_at(t0 + Device::ANONYMOUS_RETENTION);
+    let _ = ctx.prune_zombies();
     assert!(
         ctx.get_device(&mac).is_some(),
         "pruned with a linked address"

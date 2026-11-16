@@ -535,6 +535,9 @@ impl AsyncService for DbWorker {
         info!("Database worker flushing pending state and logs on cleanup...");
         let db = Arc::clone(&self.db);
         let log_db = Arc::clone(&self.log_db);
+        // Every device, so each keeps its last observation across a restart: activity alone
+        // never marks a device for saving.
+        self.full_flush_requested = true;
         self.flush_batch(&db, &log_db).await;
         Ok(())
     }

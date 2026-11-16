@@ -1,7 +1,7 @@
 use std::fs;
 #[cfg(feature = "adblock")]
 use std::iter;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -83,6 +83,45 @@ async fn test_dispatch_status() {
     let client_ctx = init_test_context().await;
     let res = client_ctx.handle_status().await;
     assert!(matches!(res, Response::Status(_)));
+}
+
+/// The device list's "last seen" is the last observation: a device whose address went
+/// offline keeps it (the CLI printed "20772d ago", the epoch, for every such device).
+#[tokio::test]
+async fn device_list_keeps_last_seen_of_an_offline_device() {
+    let client_ctx = init_test_context().await;
+    let mac = MacAddr([0x02, 0, 0, 0, 0, 0x31]);
+    let ip = Ipv4Addr::new(192, 168, 1, 31);
+    let before = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let _ = client_ctx.ctx.apply(DeviceUpdate::ArpSeen {
+        mac,
+        ip,
+        is_active: true,
+    });
+    let _ = client_ctx.ctx.apply(DeviceUpdate::DhcpHostnameHint {
+        mac,
+        hostname: "tv".to_string(),
+    });
+    let _ = client_ctx
+        .ctx
+        .apply(DeviceUpdate::IpOffline { ip: IpAddr::V4(ip) });
+
+    let Response::Devices(list) = client_ctx
+        .handle_devices(None, None, None, None, None, None)
+        .await
+    else {
+        panic!("Expected Response::Devices");
+    };
+    let entry = list.devices.iter().find(|d| d.mac == mac).expect("listed");
+    assert!(!entry.online);
+    assert!(
+        entry.last_seen >= before,
+        "last seen {} kept",
+        entry.last_seen
+    );
 }
 
 #[tokio::test]

@@ -10,7 +10,7 @@ use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::RaServerConfig;
 use lanforge_types::network::{DnsReverseResolver, IpSubnet, TrafficConfig};
-use std::time::Instant;
+use std::time::SystemTime;
 
 use crate::context::LanforgeContext;
 use crate::context::config::ConfigPatch;
@@ -87,18 +87,18 @@ impl LanforgeContext {
     ///
     /// [`Device::prune_retention`]: lanforge_types::device::Device::prune_retention
     ///
-    /// The retention clock lives in memory and starts when a prune pass first sees the device
-    /// without an address, so a daemon restart only delays a prune, never hastens one.
+    /// The retention runs from the device's `last_observed`, which the database keeps: a
+    /// daemon restart neither resets nor hastens it.
     #[must_use]
     pub fn prune_zombies(&self) -> EventVec {
-        self.prune_zombies_at(Instant::now())
+        self.prune_zombies_at(SystemTime::now())
     }
 
-    /// [`Self::prune_zombies`] at a given instant: the state is copied only when a pass has
+    /// [`Self::prune_zombies`] at a given time: the state is copied only when a pass has
     /// something to remove.
-    pub(crate) fn prune_zombies_at(&self, now: Instant) -> EventVec {
+    pub(crate) fn prune_zombies_at(&self, now: SystemTime) -> EventVec {
         let discovery = &self.inner.discovery;
-        if !self.with_state(|state| state.prune_due(discovery, now)) {
+        if !self.with_state(|state| state.prune_due(now)) {
             return EventVec::new();
         }
         let events = self.with_state_mut(|state| state.prune_zombies(discovery, now));
