@@ -1,5 +1,6 @@
 <script lang="ts">
 	import * as Card from "$lib/components/ui/card";
+	import * as AlertDialog from "$lib/components/ui/alert-dialog";
 	import { Button } from "$lib/components/ui/button";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import FileTextIcon from "@lucide/svelte/icons/file-text";
@@ -25,6 +26,13 @@
 		onLogClean?: () => void;
 		onOpenWipeDialog?: () => void;
 	} = $props();
+
+	let confirming = $state<"prune" | "logs" | null>(null);
+
+	function confirmed() {
+		if (confirming === "prune") onPrune();
+		else if (confirming === "logs") onLogClean();
+	}
 </script>
 
 <div class="flex flex-col gap-6">
@@ -52,7 +60,7 @@
 					variant="outline"
 					size="sm"
 					class="w-full gap-2 text-xs"
-					onclick={onPrune}
+					onclick={() => (confirming = "prune")}
 					disabled={pruning}
 				>
 					<Trash2Icon class={pruning ? "animate-spin size-4" : "size-4"} />
@@ -83,7 +91,7 @@
 					variant="outline"
 					size="sm"
 					class="w-full gap-2 text-xs"
-					onclick={onLogClean}
+					onclick={() => (confirming = "logs")}
 					disabled={logCleaning}
 				>
 					<FileTextIcon class={logCleaning ? "animate-spin size-4" : "size-4"} />
@@ -118,3 +126,30 @@
 		</Card.Content>
 	</Card.Root>
 </div>
+
+<AlertDialog.Root open={confirming !== null} onOpenChange={(o) => { if (!o) confirming = null; }}>
+	<AlertDialog.Content class="rounded-lg">
+		<AlertDialog.Header>
+			<AlertDialog.Title class="text-base font-bold text-foreground">
+				{confirming === "prune" ? "Prune inactive devices?" : "Clear log buffers?"}
+			</AlertDialog.Title>
+			<AlertDialog.Description class="text-xs">
+				{#if confirming === "prune"}
+					Dynamic devices without hostnames, active leases, or recent activity will be permanently removed.
+				{:else}
+					DNS query records and system event logs will be permanently erased.
+				{/if}
+				This cannot be undone.
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel class="cursor-pointer text-xs">Cancel</AlertDialog.Cancel>
+			<AlertDialog.Action
+				class="cursor-pointer text-xs bg-destructive text-destructive-foreground hover:bg-destructive/90"
+				onclick={confirmed}
+			>
+				{confirming === "prune" ? "Prune" : "Clear"}
+			</AlertDialog.Action>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>

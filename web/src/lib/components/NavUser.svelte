@@ -47,6 +47,14 @@
 	let confirmPassword = $state("");
 	let changingPassword = $state(false);
 
+	$effect(() => {
+		if (!isPasswdOpen) {
+			currentPassword = "";
+			newPassword = "";
+			confirmPassword = "";
+		}
+	});
+
 	async function handleChangePassword(e: SubmitEvent) {
 		e.preventDefault();
 		if (!currentPassword) {

@@ -23,11 +23,11 @@
 	let confirmPassword = $state("");
 	let isSubmitting = $state(false);
 
+	// Fresh fields on open, and no password left in memory after close.
 	$effect(() => {
-		if (open) {
-			newPassword = "";
-			confirmPassword = "";
-		}
+		void open;
+		newPassword = "";
+		confirmPassword = "";
 	});
 
 	async function handleSubmit() {

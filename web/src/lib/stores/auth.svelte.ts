@@ -3,7 +3,7 @@
  * Uses Svelte 5 runes wrapped in a reactive class pattern.
  */
 
-import { me, setClientToken } from '$lib/api/client';
+import { ApiError, me, setClientToken } from '$lib/api/client';
 import type { Permission, UserInfo } from '$lib/api/types';
 
 const TOKEN_KEY = 'lf_session';
@@ -44,14 +44,17 @@ function createAuthStore() {
 			setClientToken(t);
 		},
 
-		async fetchUser() {
-			if (!token) return;
+		/** Loads the profile; false when it could not be loaded (the session is kept unless rejected). */
+		async fetchUser(): Promise<boolean> {
+			if (!token) return false;
 			loading = true;
 			try {
 				user = await me();
-			} catch {
-				// token may have expired
-				this.clear();
+				return true;
+			} catch (err) {
+				// Only a rejected token ends the session; a network or server error must not.
+				if (err instanceof ApiError && err.status === 401) this.clear();
+				return false;
 			} finally {
 				loading = false;
 			}

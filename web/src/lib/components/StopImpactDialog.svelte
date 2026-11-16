@@ -22,6 +22,8 @@
 		if (result.affected.length === 0 && !result.warning) return true;
 		impact = result;
 		open = true;
+		// A second prompt while one is open supersedes it.
+		resolve?.(false);
 		return new Promise((r) => (resolve = r));
 	}
 

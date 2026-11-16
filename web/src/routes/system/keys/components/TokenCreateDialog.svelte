@@ -21,17 +21,22 @@
 		onCreated: (token: AuthToken) => void;
 	} = $props();
 
+	function defaultScopes(): Record<string, boolean> {
+		return {
+			admin: true,
+			monitoring: false,
+			device_write: false,
+			dns_query: false,
+			upstream_write: false,
+			config_write: false
+		};
+	}
+
 	let formName = $state("");
 	let formExpiryPreset = $state<"never" | "7d" | "30d" | "90d" | "1y">("30d");
-	let formScopes = $state<Record<string, boolean>>({
-		admin: true,
-		monitoring: false,
-		device_write: false,
-		dns_query: false,
-		upstream_write: false,
-		config_write: false
-	});
+	let formScopes = $state<Record<string, boolean>>(defaultScopes());
 	let isSubmitting = $state(false);
+	const hasScope = $derived(Object.values(formScopes).some(Boolean));
 
 	const availableScopes = [
 		{
@@ -70,14 +75,7 @@
 		if (open) {
 			formName = "";
 			formExpiryPreset = "30d";
-			formScopes = {
-				admin: true,
-				monitoring: false,
-				device_write: false,
-				dns_query: false,
-				upstream_write: false,
-				config_write: false
-			};
+			formScopes = defaultScopes();
 		}
 	});
 
@@ -114,6 +112,10 @@
 			toast.error("Please enter a name or identifier for the key.");
 			return;
 		}
+		if (!hasScope) {
+			toast.error("Select at least one scope.");
+			return;
+		}
 
 		isSubmitting = true;
 		try {
@@ -124,10 +126,6 @@
 				for (const [scope, enabled] of Object.entries(formScopes)) {
 					if (enabled) selectedScopes.push(scope);
 				}
-			}
-
-			if (selectedScopes.length === 0) {
-				selectedScopes.push("admin");
 			}
 
 			const payload: GenerateTokenRequest = {
@@ -243,6 +241,9 @@
 							{/if}
 						{/each}
 					</div>
+					{#if !hasScope}
+						<p class="text-xs text-destructive">Select at least one scope.</p>
+					{/if}
 				</Field.FieldSet>
 			</Field.FieldGroup>
 
@@ -259,7 +260,7 @@
 				<Button
 					type="submit"
 					class="rounded-md cursor-pointer text-xs bg-primary text-primary-foreground hover:bg-primary/90"
-					disabled={isSubmitting || !formName.trim()}
+					disabled={isSubmitting || !formName.trim() || !hasScope}
 				>
 					{#if isSubmitting}
 						<Loader2Icon data-icon="inline-start" class="animate-spin" />

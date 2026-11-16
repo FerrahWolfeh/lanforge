@@ -5,6 +5,7 @@
 	import { auth } from "$lib/stores/auth.svelte";
 	import { login, ApiError } from "$lib/api/client";
 	import { goto } from "$app/navigation";
+	import { toast } from "svelte-sonner";
 	import ModeToggle from "$lib/components/ModeToggle.svelte";
 
 	import WifiIcon from "@lucide/svelte/icons/wifi";
@@ -51,7 +52,9 @@
 
 			const res = await login(req);
 			auth.setToken(res.token);
-			await auth.fetchUser();
+			if (!(await auth.fetchUser()) && auth.authenticated) {
+				toast.error("Signed in, but the user profile could not be loaded.");
+			}
 			goto("/");
 		} catch (err) {
 			if (err instanceof ApiError) {

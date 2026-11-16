@@ -33,8 +33,10 @@
 	import Loader2Icon from "@lucide/svelte/icons/loader-2";
 	import CpuIcon from "@lucide/svelte/icons/cpu";
 
+	import * as AlertDialog from "$lib/components/ui/alert-dialog";
 	import StopImpactDialog from "$lib/components/StopImpactDialog.svelte";
 	let stopDialog = $state<StopImpactDialog>();
+	let restartConfirmId = $state<string | null>(null);
 
 	// Reload and service control are admin-only on the server.
 	const isAdmin = $derived(auth.can("admin"));
@@ -86,7 +88,16 @@
 		}
 	}
 
-	async function executeAction(id: string, action: "Start" | "Stop" | "Restart") {
+	async function executeAction(
+		id: string,
+		action: "Start" | "Stop" | "Restart",
+		confirmed = false
+	) {
+		// Restarting PPPoE drops the WAN session: ask first.
+		if (action === "Restart" && id === "pppoe" && !confirmed) {
+			restartConfirmId = id;
+			return;
+		}
 		if (action === "Stop") {
 			try {
 				if (!(await stopDialog?.confirmStop(id))) return;
@@ -427,3 +438,34 @@
 </div>
 
 <StopImpactDialog bind:this={stopDialog} />
+
+<AlertDialog.Root
+	open={restartConfirmId !== null}
+	onOpenChange={(o) => {
+		if (!o) restartConfirmId = null;
+	}}
+>
+	<AlertDialog.Content class="rounded-lg">
+		<AlertDialog.Header>
+			<AlertDialog.Title class="text-base font-bold text-foreground">
+				Restart PPPoE?
+			</AlertDialog.Title>
+			<AlertDialog.Description class="text-xs">
+				The WAN session will disconnect and reconnect. Internet access drops for the whole network until it is back up.
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel class="cursor-pointer text-xs">Cancel</AlertDialog.Cancel>
+			<AlertDialog.Action
+				class="cursor-pointer text-xs bg-destructive text-destructive-foreground hover:bg-destructive/90"
+				onclick={() => {
+					const id = restartConfirmId;
+					restartConfirmId = null;
+					if (id) executeAction(id, "Restart", true);
+				}}
+			>
+				Restart
+			</AlertDialog.Action>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>

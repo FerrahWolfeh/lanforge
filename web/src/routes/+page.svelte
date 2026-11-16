@@ -209,15 +209,7 @@
 		if (!statusData) return null;
 		const problems = banners.filter(isProblem);
 		const issues = statusData.config_issues ?? [];
-		const running = banners.filter(isRunning).length;
-		const off = banners.length - running - problems.length;
-		if (problems.length === 0 && issues.length === 0) {
-			return {
-				tone: "ok",
-				title: "All good. ",
-				text: `${running} services running${off > 0 ? `, ${off} switched off` : ""} · ${onlineDevicesCount} devices online`,
-			};
-		}
+		if (problems.length === 0 && issues.length === 0) return null;
 		const parts = problems.map((b) => `${getServiceMeta(b.id, b.name).name}: ${reasonOf(b)}`);
 		if (issues.length > 0) parts.push(`${issues.length} configuration ${issues.length === 1 ? "issue" : "issues"} (listed above)`);
 		const count = parts.length;

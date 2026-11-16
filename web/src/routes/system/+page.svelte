@@ -51,12 +51,14 @@
 	let reloading = $state(false);
 	let scanning = $state(false);
 
-	async function loadStatus() {
+	async function loadStatus(): Promise<boolean> {
 		loading = true;
 		try {
 			data = await status();
+			return true;
 		} catch {
 			toast.error("Could not fetch system status");
+			return false;
 		} finally {
 			loading = false;
 		}
@@ -66,8 +68,7 @@
 		scanning = true;
 		try {
 			await scan();
-			await loadStatus();
-			toast.success("System status refreshed");
+			if (await loadStatus()) toast.success("System status refreshed");
 		} catch {
 			toast.error("Failed to refresh status");
 		} finally {

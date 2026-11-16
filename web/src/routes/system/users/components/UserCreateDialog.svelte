@@ -29,6 +29,9 @@
 			password = "";
 			confirmPassword = "";
 			role = "operator";
+		} else {
+			password = "";
+			confirmPassword = "";
 		}
 	});
 

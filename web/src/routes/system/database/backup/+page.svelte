@@ -5,6 +5,7 @@
 		exportSystemConfigToml,
 		importSystemConfig,
 	} from "$lib/api/client";
+	import * as AlertDialog from "$lib/components/ui/alert-dialog";
 	import type {
 		SystemConfigExport,
 		SystemConfigImportResponse,
@@ -22,6 +23,7 @@
 	let importOverwrite = $state(false);
 	let importResult = $state<SystemConfigImportResponse | null>(null);
 	let showImportResultDialog = $state(false);
+	let confirmOverwriteOpen = $state(false);
 
 	async function handleExport() {
 		exporting = true;
@@ -83,6 +85,11 @@
 		}
 	}
 
+	function requestImport() {
+		if (importOverwrite && selectedFile) confirmOverwriteOpen = true;
+		else handleImport();
+	}
+
 	async function handleImport() {
 		if (!selectedFile) {
 			toast.error("Please select a JSON configuration file to import.");
@@ -139,7 +146,7 @@
 	onExportToml={handleExportToml}
 	onExportJson={handleExport}
 	onFileSelected={handleFileSelected}
-	onImport={handleImport}
+	onImport={requestImport}
 />
 
 <!-- Import Results Dialog -->
@@ -147,3 +154,25 @@
 	bind:open={showImportResultDialog}
 	result={importResult}
 />
+
+<AlertDialog.Root bind:open={confirmOverwriteOpen}>
+	<AlertDialog.Content class="rounded-lg">
+		<AlertDialog.Header>
+			<AlertDialog.Title class="text-base font-bold text-foreground">
+				Overwrite existing records?
+			</AlertDialog.Title>
+			<AlertDialog.Description class="text-xs">
+				Importing with "Overwrite Existing Records" replaces the current records with the contents of the file. This cannot be undone.
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel class="cursor-pointer text-xs">Cancel</AlertDialog.Cancel>
+			<AlertDialog.Action
+				class="cursor-pointer text-xs bg-destructive text-destructive-foreground hover:bg-destructive/90"
+				onclick={handleImport}
+			>
+				Import and Overwrite
+			</AlertDialog.Action>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>
