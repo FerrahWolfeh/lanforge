@@ -126,10 +126,8 @@ export interface DbStatus {
 }
 
 export interface ResourceUsage {
-	memory_rss_bytes?: number;
-	memory_vms_bytes?: number;
-	rss_bytes?: number;
-	vms_bytes?: number;
+	memory_rss_bytes: number;
+	memory_vms_bytes: number;
 }
 
 export interface TransportSnapshot {

@@ -386,11 +386,7 @@
 							/>
 						</dt>
 						<dd class="font-mono text-xs font-medium">
-							{formatBytes(
-								data.resources.memory_rss_bytes ??
-									data.resources.rss_bytes ??
-									0,
-							)}
+							{formatBytes(data.resources.memory_rss_bytes)}
 						</dd>
 					</div>
 					<div class="flex justify-between items-center py-0.5">
@@ -402,11 +398,7 @@
 							/>
 						</dt>
 						<dd class="font-mono text-xs font-medium">
-							{formatBytes(
-								data.resources.memory_vms_bytes ??
-									data.resources.vms_bytes ??
-									0,
-							)}
+							{formatBytes(data.resources.memory_vms_bytes)}
 						</dd>
 					</div>
 				</dl>
