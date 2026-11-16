@@ -1,15 +1,10 @@
 <script lang="ts">
 	import { Button } from "$lib/components/ui/button";
-	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
-	import ShieldOffIcon from "@lucide/svelte/icons/shield-off";
 	import AlertTriangleIcon from "@lucide/svelte/icons/alert-triangle";
 	import ZapIcon from "@lucide/svelte/icons/zap";
 	import LayersIcon from "@lucide/svelte/icons/layers";
-	import ActivityIcon from "@lucide/svelte/icons/activity";
-	import CpuIcon from "@lucide/svelte/icons/cpu";
 	import StatCard from "$lib/components/StatCard.svelte";
 	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
-	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
 	import type { FirewallStatus } from "$lib/api/types";
 
 	interface Props {
@@ -23,12 +18,6 @@
 
 	let { status, loading, activeTxId, rollbackSecsLeft, onAbort, onConfirmNow }: Props = $props();
 
-	function formatSecsAgo(secs: number | null): string {
-		if (secs === null) return "Never";
-		if (secs < 60) return `${secs}s ago`;
-		if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
-		return `${Math.floor(secs / 3600)}h ago`;
-	}
 </script>
 
 <div class="flex flex-col gap-4 w-full">
@@ -79,88 +68,23 @@
 		</div>
 	{/if}
 
-	<!-- 3-Card Stats Grid -->
-	<StatCardGrid cols={3}>
-		<!-- Card 1: Operation Mode -->
+	<StatCardGrid cols={2}>
 		<StatCard
-			label="Operation Mode"
-			value={status ? (status.mode === "full" ? "Standalone" : status.mode === "minimal" ? "Coexistence" : "Disabled") : "—"}
-			icon={status?.mode === "full" ? ShieldCheckIcon : ShieldOffIcon}
-			color={status?.mode === "full" ? "emerald" : status?.mode === "minimal" ? "primary" : "zinc"}
-			badge={status ? {
-				text: status.mode === "full" ? "Authoritative" : status.mode === "minimal" ? "Coexistence" : "Disabled",
-				variant: status.mode === "full" ? "online" : status.mode === "minimal" ? "warning" : "dormant",
-				showDot: true
-			} : undefined}
-			subtext={status ? (status.mode === "full" ? "Authoritative standalone gateway" : status.mode === "minimal" ? "Helper table with system firewall" : "Kernel nftables unmanaged") : "Firewall status unavailable"}
-			loading={loading && !status}
-		>
-			{#snippet footer()}
-				<StatCardFooterItem
-					label="Engine"
-					value={status?.enabled ? "Active" : "Inactive"}
-					color={status?.enabled ? "text-emerald-500" : "text-muted-foreground"}
-				/>
-				<StatCardFooterItem
-					label="Active WAN"
-					value={status?.active_wan ?? "Auto-detect"}
-					color="text-sky-400"
-				/>
-			{/snippet}
-		</StatCard>
-
-		<!-- Card 2: Active Rules & Ports -->
-		<StatCard
-			label="Filtering Rules"
+			label="Rules"
 			value={status ? status.rules_count : "—"}
 			icon={LayersIcon}
 			color="sky"
-			subtext={status ? (status.default_drop_active ? "Default Drop policy active" : "Default Accept policy") : "Rules unavailable"}
+			subtext={status ? `${status.open_ports_count} open ports · anything else is ${status.default_drop_active ? "dropped" : "accepted"}` : "Rules unavailable"}
 			loading={loading && !status}
-		>
-			{#snippet footer()}
-				<StatCardFooterItem label="Open Ports" value={status ? status.open_ports_count : "—"} />
-				<StatCardFooterItem
-					label="Default Policy"
-					value={status ? (status.default_drop_active ? "DROP" : "ACCEPT") : "—"}
-					color={status?.default_drop_active ? "text-emerald-500" : "text-amber-500"}
-				/>
-			{/snippet}
-		</StatCard>
+		/>
 
-		<!-- Card 3: Flowtable Offload -->
 		<StatCard
-			label="Flowtable Offload"
-			value={status ? (status.flow_offload_suspended ? "Suspended" : status.flow_offload_active ? "Accelerated" : "Disabled") : "—"}
+			label="Flow Offload"
+			value={status ? (status.flow_offload_suspended ? "Paused" : status.flow_offload_active ? "On" : "Off") : "—"}
 			icon={ZapIcon}
 			color={status?.flow_offload_suspended ? "amber" : status?.flow_offload_active ? "emerald" : "zinc"}
-			badge={status ? {
-				text: status.flow_offload_suspended
-					? "Suspended (SQM Active)"
-					: status.flow_offload_active
-						? "Hardware / Fast-Path"
-						: "Disabled",
-				variant: status.flow_offload_suspended
-					? "warning"
-					: status.flow_offload_active
-						? "online"
-						: "dormant",
-				showDot: true
-			} : undefined}
-			subtext={status ? (status.flow_offload_suspended ? "Bypassed so CAKE can schedule packets" : status.flow_offload_active ? "Line-rate fast-path bypass" : "Standard routing stack traversal") : "Offload status unavailable"}
+			subtext={status ? (status.flow_offload_suspended ? "Paused so CAKE can shape the traffic" : status.flow_offload_active ? "Established connections skip the full routing path" : "Every packet takes the full routing path") : "Offload status unavailable"}
 			loading={loading && !status}
-		>
-			{#snippet footer()}
-				<StatCardFooterItem
-					label="Fast-Path"
-					value={status?.flow_offload_suspended ? "Suspended (SQM)" : status?.flow_offload_active ? "Enabled" : "Disabled"}
-					color={status?.flow_offload_suspended ? "text-amber-400" : status?.flow_offload_active ? "text-emerald-500" : "text-muted-foreground"}
-				/>
-				<StatCardFooterItem
-					label="Bypass Mode"
-					value={status?.flow_offload_suspended ? "CAKE Queue" : "L3 / L4 Netlink"}
-				/>
-			{/snippet}
-		</StatCard>
+		/>
 	</StatCardGrid>
 </div>

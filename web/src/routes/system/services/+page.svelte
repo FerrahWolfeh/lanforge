@@ -15,9 +15,6 @@
 	import { formatBytes } from "$lib/utils";
 
 	import ServerIcon from "@lucide/svelte/icons/server";
-	import CircleCheckIcon from "@lucide/svelte/icons/circle-check";
-	import PowerOffIcon from "@lucide/svelte/icons/power-off";
-	import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import RotateCwIcon from "@lucide/svelte/icons/rotate-cw";
 	import PlayIcon from "@lucide/svelte/icons/play";
@@ -29,9 +26,6 @@
 	import LayersIcon from "@lucide/svelte/icons/layers";
 	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
 	import PageHeader from "$lib/components/PageHeader.svelte";
-	import StatCard from "$lib/components/StatCard.svelte";
-	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
-	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
 
 	const systemTabs: NavTabItem[] = [
 		{ label: "System Status", href: "/system", icon: ServerIcon },
@@ -240,94 +234,6 @@
 	<!-- System Diagnostics Sub-Navigation Tabs -->
 	<NavTabs tabs={systemTabs} ariaLabel="System diagnostics navigation" />
 
-	<!-- Top Metric Summary Cards -->
-	<StatCardGrid cols={4}>
-		<!-- Total Services -->
-		<StatCard
-			label="Total Services"
-			value={loading ? "—" : totalCount}
-			icon={ServerIcon}
-			color="primary"
-			subtext="Managed background daemons"
-			{loading}
-		>
-			{#snippet footer()}
-				<StatCardFooterItem label="Orchestrator" value="Supervisor" />
-				<StatCardFooterItem label="Topology" value="Modular Daemons" />
-			{/snippet}
-		</StatCard>
-
-		<!-- Online Services -->
-		<StatCard
-			label="Online / Active"
-			value={loading ? "—" : onlineCount}
-			icon={CircleCheckIcon}
-			color="emerald"
-			badge={{
-				text: "Active",
-				variant: "online",
-				showDot: true
-			}}
-			subtext={`${onlineCount} running daemons`}
-			{loading}
-		>
-			{#snippet footer()}
-				<StatCardFooterItem
-					label="Health Ratio"
-					value={`${Math.round((onlineCount / (totalCount || 1)) * 100)}%`}
-					color="text-emerald-500"
-				/>
-				<StatCardFooterItem label="State" value="Active / Healthy" color="text-emerald-500" />
-			{/snippet}
-		</StatCard>
-
-		<!-- Inactive Services -->
-		<StatCard
-			label="Inactive / Standby"
-			value={loading ? "—" : inactiveCount}
-			icon={PowerOffIcon}
-			color="zinc"
-			subtext="Disabled or dormant modules"
-			{loading}
-		>
-			{#snippet footer()}
-				<StatCardFooterItem label="Resources" value="Zero Overhead" />
-				<StatCardFooterItem label="Schedule" value="On-Demand" />
-			{/snippet}
-		</StatCard>
-
-		<!-- Degraded / Error Services -->
-		<StatCard
-			label="Degraded / Error"
-			value={loading ? "—" : errorCount}
-			icon={TriangleAlertIcon}
-			color={errorCount > 0 ? "rose" : "zinc"}
-			badge={errorCount > 0 ? {
-				text: "Fault Detected",
-				variant: "error",
-				showDot: true
-			} : {
-				text: "0 Faults",
-				variant: "online",
-				showDot: true
-			}}
-			subtext={errorCount > 0 ? "Fault backoff detected" : "All daemons operating smoothly"}
-			{loading}
-		>
-			{#snippet footer()}
-				<StatCardFooterItem
-					label="Faults"
-					value={errorCount}
-					color={errorCount > 0 ? "text-destructive" : "text-muted-foreground"}
-				/>
-				<StatCardFooterItem
-					label="Backoff State"
-					value={errorCount > 0 ? "Retrying" : "None"}
-					color={errorCount > 0 ? "text-destructive" : "text-emerald-500"}
-				/>
-			{/snippet}
-		</StatCard>
-	</StatCardGrid>
 
 	<!-- Filter & Search Toolbar -->
 	<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

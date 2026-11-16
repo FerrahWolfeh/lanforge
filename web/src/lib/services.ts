@@ -154,6 +154,36 @@ const SERVICE_REGISTRY: Record<string, Omit<ServiceMeta, 'id'>> = {
 		icon: CpuIcon,
 		canControl: false
 	},
+	nft: {
+		name: 'Firewall',
+		tag: 'nftables',
+		proto: 'Netlink',
+		description: 'Filters traffic in and out of the router: zones, NAT and port forwards',
+		configHref: '/firewall',
+		configLabel: 'Firewall Settings',
+		icon: ShieldCheckIcon,
+		canControl: true
+	},
+	interfaces: {
+		name: 'Interface Monitor',
+		tag: 'Netlink',
+		proto: 'Netlink',
+		description: 'Watches the router\'s interfaces and their addresses',
+		configHref: '/system',
+		configLabel: 'System Status',
+		icon: NetworkIcon,
+		canControl: true
+	},
+	wan: {
+		name: 'WAN Monitor',
+		tag: 'WAN',
+		proto: 'Netlink',
+		description: 'Tracks whether the internet connection is up',
+		configHref: '/network/traffic',
+		configLabel: 'Traffic & SQM',
+		icon: GlobeIcon,
+		canControl: true
+	},
 	traffic: {
 		name: 'Traffic & SQM',
 		tag: 'Bufferbloat / CAKE',
@@ -209,8 +239,8 @@ export function getServiceMeta(id?: string, name?: string): ServiceMeta {
 	return {
 		id: id || cleanName.toLowerCase().replace(/\s+/g, '-'),
 		name: cleanName,
-		tag: 'Background Service',
-		proto: 'Tokio Async',
+		tag: 'Service',
+		proto: '',
 		description: 'Background service',
 		configHref: '/system',
 		configLabel: 'System Status',

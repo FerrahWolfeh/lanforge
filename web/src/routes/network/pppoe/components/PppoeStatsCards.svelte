@@ -62,10 +62,10 @@
 <StatCardGrid cols={3}>
 	<!-- Card 1: Session State -->
 	<StatCard
-		label="Session State"
+		label="Session"
 		popover={{
-			title: "PPPoE Session Lifecycle",
-			description: "Point-to-Point Protocol over Ethernet session state negotiated with carrier access concentrator.",
+			title: "PPPoE session",
+			description: "The login session with your ISP. While it is down there is no internet.",
 		}}
 		badge={{
 			text: status?.state ? status.state.replace(/_/g, " ") : "Offline",
@@ -87,13 +87,13 @@
 					<span class="text-base text-amber-400 font-bold">Authenticating...</span>
 				{:else if status?.state === "discovering"}
 					<RadioIcon class="size-5 text-cyan-500 shrink-0 animate-pulse" />
-					<span class="text-base text-cyan-400 font-bold">Discovering BNG...</span>
+					<span class="text-base text-cyan-400 font-bold">Looking for the ISP…</span>
 				{:else if status?.state === "waiting_for_carrier"}
 					<AlertCircleIcon class="size-5 text-amber-500 shrink-0" />
 					<span class="text-base text-amber-400 font-bold">Waiting for Carrier</span>
 				{:else if status?.state === "waiting_for_terminal"}
 					<RefreshCwIcon class="size-5 text-amber-500 shrink-0 animate-spin" />
-					<span class="text-base text-amber-400 font-bold">Waiting for ONT...</span>
+					<span class="text-base text-amber-400 font-bold">Waiting for the ONT…</span>
 				{:else}
 					<XCircleIcon class="size-5 text-muted-foreground shrink-0" />
 					<span class="text-base text-muted-foreground font-normal">{status && !status.enabled ? "Disabled" : "Disconnected"}</span>
@@ -108,12 +108,12 @@
 
 	<!-- Card 2: Assigned WAN IP Lease -->
 	<StatCard
-		label="Assigned IP Lease"
+		label="Public Address"
 		icon={GlobeIcon}
 		color="emerald"
 		popover={{
-			title: "IPCP Network Layer",
-			description: "Public IPv4 address and peer gateway allocated by broadband ISP.",
+			title: "Public address",
+			description: "The IPv4 address the ISP gave this session, and its gateway.",
 		}}
 		badge={status?.local_ip ? { text: "IPCP Active", variant: "online" } : undefined}
 	>
@@ -137,12 +137,12 @@
 
 	<!-- Card 3: Access Concentrator -->
 	<StatCard
-		label="Access Concentrator"
+		label="ISP Server"
 		icon={ServerIcon}
 		color="indigo"
 		popover={{
-			title: "Carrier Access Concentrator",
-			description: "Remote ISP broadband terminal responding to PPPoE discovery (PADI/PADO) packets.",
+			title: "ISP server (access concentrator)",
+			description: "The ISP box that answered this router's PPPoE discovery.",
 		}}
 		badge={{
 			text: formatAuthMethod(status?.auth ?? config?.auth ?? formAuth),

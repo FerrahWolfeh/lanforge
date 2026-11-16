@@ -169,13 +169,9 @@
 
 	const statCards = $derived([
 		{
-			label: "Active Devices",
-			value: devicesData
-				? `${onlineDevicesCount} / ${totalDevicesCount}`
-				: null,
-			subtext: devicesData
-				? `${onlineDevicesCount} online on LAN`
-				: "LAN host activity",
+			label: "Devices Online",
+			value: devicesData ? onlineDevicesCount.toString() : null,
+			subtext: devicesData ? `of ${totalDevicesCount} known` : "",
 			icon: WifiIcon,
 			color: "emerald" as const,
 			href: "/network/devices",
@@ -183,7 +179,7 @@
 		{
 			label: "DHCP Leases",
 			value: leasesData ? leasesData.length.toString() : null,
-			subtext: "Active IPv4/v6 leases",
+			subtext: "IPv4 and IPv6, reservations not included",
 			icon: NetworkIcon,
 			color: "teal" as const,
 			href: "/dhcp/leases",
@@ -192,8 +188,8 @@
 			label: "DNS Queries",
 			value: dnsData ? dnsData.total_requests.toLocaleString() : null,
 			subtext: dnsData
-				? `${dnsData.cache_hits.toLocaleString()} cache hits`
-				: "Total requests",
+				? `Since the daemon started · ${dnsData.cache_hits.toLocaleString()} from cache`
+				: "",
 			icon: GlobeIcon,
 			color: "sky" as const,
 			sparklineData: dnsSparkline,
@@ -201,13 +197,13 @@
 			href: "/dns/resolver",
 		},
 		{
-			label: "Firewall Conntrack",
+			label: "Connections",
 			value: conntrack
 				? `${conntrack.active_connections.toLocaleString()} / ${conntrack.max_connections.toLocaleString()}`
 				: null,
 			subtext: conntrack
-				? `${conntrack.utilization_percent.toFixed(1)}% session capacity`
-				: "Active stateful sessions",
+				? `${conntrack.utilization_percent.toFixed(1)}% of the connection table`
+				: "",
 			icon: ShieldCheckIcon,
 			color: "violet" as const,
 			href: "/firewall",

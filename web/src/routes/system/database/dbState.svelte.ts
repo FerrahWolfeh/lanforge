@@ -38,10 +38,6 @@ class DbStateManager {
 		);
 	});
 
-	engineLabel = $derived(
-		this.isInMemory ? "Volatile / In-Memory" : "Persistent (redb)",
-	);
-
 	isHealthy = $derived.by(() => {
 		if (!this.metrics) return true;
 		if (typeof this.metrics.last_error === "boolean") {

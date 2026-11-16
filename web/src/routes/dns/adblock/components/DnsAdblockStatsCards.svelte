@@ -2,7 +2,6 @@
 	import DatabaseIcon from "@lucide/svelte/icons/database";
 	import ShieldAlertIcon from "@lucide/svelte/icons/shield-alert";
 	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
-	import BanIcon from "@lucide/svelte/icons/ban";
 	import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
 	import StatCard from "$lib/components/StatCard.svelte";
 	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
@@ -75,44 +74,24 @@
 		return `${Math.floor(diff / 86400)}d ago`;
 	}
 
-	function formatBlockingMode(mode?: string): { display: string; desc: string } {
-		switch (mode) {
-			case "null_ip":
-				return { display: "0.0.0.0 / ::", desc: "Returns Null IP sinkhole" };
-			case "custom_ip":
-				return { display: "Custom IP", desc: "Redirects to local block page" };
-			case "refused":
-				return { display: "REFUSED", desc: "Responds with RCODE Refused" };
-			case "nxdomain":
-			default:
-				return { display: "NXDOMAIN", desc: "Responds that domain does not exist" };
-		}
-	}
-
-	const modeInfo = $derived(formatBlockingMode(status?.blocking_mode));
 </script>
 
-<StatCardGrid cols={4}>
+<StatCardGrid cols={3}>
 	<!-- Card 1: Queries Blocked & Block Rate (Unified) -->
 	<StatCard
 		label="Blocked Queries (24h)"
 		value={loading && !analytics && !stats ? null : blockedQueries.toLocaleString()}
 		subtext={loading && !analytics && !stats
-			? "Awaiting DNS telemetry..."
-			: `Out of ${totalQueries.toLocaleString()} lookups in last 24h`}
+			? "Loading…"
+			: `${blockPercentage} of ${totalQueries.toLocaleString()} queries in the last 24 hours`}
 		icon={ShieldAlertIcon}
 		color="rose"
 		{loading}
 		popover={{
-			title: "Blocked Ad & Tracker Queries (24h Window)",
+			title: "Blocked queries (24h)",
 			description: stats
 				? `Blocked in last 24h: ${blockedQueries.toLocaleString()} (${blockPercentage}). Lifetime blocked since startup: ${stats.blocked_queries.toLocaleString()}.`
-				: "Real-time DNS queries intercepted by the adblocking engine and sinkholed before reaching WAN upstreams.",
-		}}
-		badge={{
-			text: `${blockPercentage} Blocked`,
-			variant: blockedQueries > 0 ? "rose" : "zinc",
-			showDot: blockedQueries > 0,
+				: "Queries answered by adblock instead of an upstream server.",
 		}}
 	>
 		<div class="h-1.5 w-full overflow-hidden rounded-full bg-muted mt-2">
@@ -128,11 +107,6 @@
 				value={loading && !analytics && !stats ? "—" : `${allowedQueries.toLocaleString()} (${allowedPercentage})`}
 				color="text-emerald-400"
 			/>
-			<StatCardFooterItem
-				label="Drop Rate"
-				value={blockPercentage}
-				color="text-rose-400"
-			/>
 		{/snippet}
 	</StatCard>
 
@@ -140,22 +114,18 @@
 	<StatCard
 		label="Domains on Blocklist"
 		value={status ? blocklistDomains.toLocaleString() : null}
-		subtext={`${sourceCount} subscription sources compiled`}
+		subtext={`From ${sourceCount} ${sourceCount === 1 ? "list" : "lists"} and your rules`}
 		icon={DatabaseIcon}
 		color="indigo"
 		{loading}
 		popover={{
-			title: "Compiled Blocklist Rules",
-			description: "Active threat intelligence, ad, and tracker domains compiled into memory from remote subscriptions and local rules.",
-		}}
-		badge={{
-			text: `${sourceCount} ${sourceCount === 1 ? 'Source' : 'Sources'}`,
-			variant: sourceCount > 0 ? "indigo" : "zinc",
+			title: "Blocklist",
+			description: "Domains blocked for every device, from the subscribed lists and the global rules file.",
 		}}
 	>
 		{#snippet footer()}
 			<StatCardFooterItem
-				label="Last Sync"
+				label="Last Update"
 				value={formatTimeAgo(status?.last_update)}
 				color="text-foreground"
 			/>
@@ -165,68 +135,31 @@
 					href="/dns/adblock/lists"
 					class="text-[11px] text-primary hover:underline font-medium flex items-center gap-0.5 truncate"
 				>
-					<span>Manage Sources</span>
+					<span>Lists</span>
 					<ArrowRightIcon class="size-3 shrink-0" />
 				</a>
 			</div>
 		{/snippet}
 	</StatCard>
 
-	<!-- Card 3: Blocking Response Mode -->
-	<StatCard
-		label="Blocking Response Mode"
-		value={status ? modeInfo.display : null}
-		subtext={modeInfo.desc}
-		icon={BanIcon}
-		color="amber"
-		{loading}
-		popover={{
-			title: "DNS Sinkhole Policy",
-			description: "Controls how blocked queries are answered. NXDOMAIN reports domain doesn't exist, while Null IP returns 0.0.0.0.",
-		}}
-		badge={{
-			text: status?.enabled ? "Active Shield" : "Paused",
-			variant: status?.enabled ? "online" : "warning",
-			showDot: true,
-		}}
-	>
-		{#snippet footer()}
-			<StatCardFooterItem
-				label="Policy"
-				value={status?.blocking_mode ? status.blocking_mode.toUpperCase() : "NXDOMAIN"}
-				color="text-amber-400"
-			/>
-			<StatCardFooterItem
-				label="Enforcement"
-				value={status?.enabled ? "Active" : "Paused"}
-				color={status?.enabled ? "text-emerald-400" : "text-amber-400"}
-			/>
-		{/snippet}
-	</StatCard>
-
 	<!-- Card 4: Custom Rules & Overrides -->
 	<StatCard
-		label="Custom Rules & Overrides"
+		label="Allowed Domains"
 		value={status ? totalAllowedOrExceptions.toLocaleString() : null}
 		subtext={exceptionsDomains > 0
-			? `${allowlistDomains} whitelist, ${exceptionsDomains} @@ exceptions`
-			: "User rules taking precedence over blocklists"}
+			? `${allowlistDomains} allowed, ${exceptionsDomains} @@ exceptions`
+			: "Your rules that win over the lists"}
 		icon={ShieldCheckIcon}
 		color="emerald"
 		{loading}
 		popover={{
-			title: "Allowlist & Priority Overrides",
-			description: "Local user rules, whitelisted domains, and Adblock Plus exception rules (@@) that bypass remote blocklists.",
-		}}
-		badge={{
-			text: totalAllowedOrExceptions > 0 ? `${totalAllowedOrExceptions} Overrides` : "Default",
-			variant: totalAllowedOrExceptions > 0 ? "emerald" : "zinc",
-			showDot: totalAllowedOrExceptions > 0,
+			title: "Allowed domains",
+			description: "Allow rules and @@ exceptions: these domains resolve even when a list blocks them.",
 		}}
 	>
 		{#snippet footer()}
 			<StatCardFooterItem
-				label="Whitelist Domains"
+				label="Allowed"
 				value={allowlistDomains.toLocaleString()}
 				color="text-emerald-400"
 			/>
@@ -236,7 +169,7 @@
 					href="/dns/adblock/rules"
 					class="text-[11px] text-primary hover:underline font-medium flex items-center gap-0.5 truncate"
 				>
-					<span>Filtering Rules</span>
+					<span>Rules</span>
 					<ArrowRightIcon class="size-3 shrink-0" />
 				</a>
 			</div>

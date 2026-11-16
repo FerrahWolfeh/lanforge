@@ -1,13 +1,9 @@
 <script lang="ts">
 	import * as Card from "$lib/components/ui/card";
 	import { Badge } from "$lib/components/ui/badge";
-	import CheckCircleIcon from "@lucide/svelte/icons/check-circle";
 	import XCircleIcon from "@lucide/svelte/icons/x-circle";
-	import MoonIcon from "@lucide/svelte/icons/moon";
-	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import GaugeIcon from "@lucide/svelte/icons/gauge";
 	import CpuIcon from "@lucide/svelte/icons/cpu";
-	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 	import ArrowDownIcon from "@lucide/svelte/icons/arrow-down";
 	import ArrowUpIcon from "@lucide/svelte/icons/arrow-up";
@@ -18,7 +14,6 @@
 	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
 	import StatusBadge from "$lib/components/StatusBadge.svelte";
 	import StatusDot from "$lib/components/StatusDot.svelte";
-	import ThroughputDisplay from "$lib/components/ThroughputDisplay.svelte";
 	import { formatBytes, formatBps } from "$lib/utils";
 
 	import type { TrafficStatusResponse, TrafficTelemetryResponse } from "$lib/api/types";
@@ -30,117 +25,23 @@
 
 	let { status = null, telemetry = null }: Props = $props();
 
-	const stateStr = $derived((status?.service_state ?? "inactive").toLowerCase());
-	const isOnline = $derived(stateStr === "online" || stateStr === "active");
-	const isStarting = $derived(stateStr === "starting");
-	// SQM is configured (it suppresses flow offload) but has no WAN to attach to yet.
 	const sqmWaiting = $derived(!!status?.flow_offload_suppressed && !status?.sqm_active);
-
-	// Instantaneous rates for gateway uplink and physical interfaces (excluding IFB mirrors and container veths)
 	const wanIface = $derived(telemetry?.wan_interface ?? status?.wan_interface);
-	const totalRxBps = $derived.by(() => {
-		if (wanIface) {
-			const found = telemetry?.interfaces?.find((i) => i.interface === wanIface);
-			if (found) return found.rx_rate_bps;
-		}
-		return (
-			telemetry?.interfaces
-				?.filter((i) => !i.interface.startsWith("ifb") && !i.interface.startsWith("veth"))
-				?.reduce((acc, i) => acc + i.rx_rate_bps, 0) ?? 0
-		);
-	});
-	const totalTxBps = $derived.by(() => {
-		if (wanIface) {
-			const found = telemetry?.interfaces?.find((i) => i.interface === wanIface);
-			if (found) return found.tx_rate_bps;
-		}
-		return (
-			telemetry?.interfaces
-				?.filter((i) => !i.interface.startsWith("ifb") && !i.interface.startsWith("veth"))
-				?.reduce((acc, i) => acc + i.tx_rate_bps, 0) ?? 0
-		);
-	});
-	const totalRxBytes = $derived.by(() => {
-		if (wanIface) {
-			const found = telemetry?.interfaces?.find((i) => i.interface === wanIface);
-			if (found) return found.rx_bytes;
-		}
-		return (
-			telemetry?.interfaces
-				?.filter((i) => !i.interface.startsWith("ifb") && !i.interface.startsWith("veth"))
-				?.reduce((acc, i) => acc + i.rx_bytes, 0) ?? 0
-		);
-	});
-	const totalTxBytes = $derived.by(() => {
-		if (wanIface) {
-			const found = telemetry?.interfaces?.find((i) => i.interface === wanIface);
-			if (found) return found.tx_bytes;
-		}
-		return (
-			telemetry?.interfaces
-				?.filter((i) => !i.interface.startsWith("ifb") && !i.interface.startsWith("veth"))
-				?.reduce((acc, i) => acc + i.tx_bytes, 0) ?? 0
-		);
-	});
-	const totalDrops = $derived(
-		telemetry?.interfaces
-			?.filter((i) => !i.interface.startsWith("ifb"))
-			?.reduce((acc, i) => acc + i.rx_dropped + i.tx_dropped, 0) ?? 0
-	);
-	const totalErrors = $derived(
-		telemetry?.interfaces
-			?.filter((i) => !i.interface.startsWith("ifb"))
-			?.reduce((acc, i) => acc + i.rx_errors + i.tx_errors, 0) ?? 0
-	);
 
-	const conntrack = $derived(telemetry?.conntrack);
 </script>
 
 <div class="flex flex-col gap-4">
 	<!-- Top Core Telemetry Cards -->
-	<StatCardGrid cols={4}>
-		<!-- 1. Runtime Subsystem State -->
-		<StatCard
-			label="Runtime"
-			popover={{
-				title: "Service Lifecycle",
-				description: "Daemon supervisor state for the traffic and queue management subsystem.",
-			}}
-			badge={{
-				text: isOnline ? "Online" : isStarting ? "Starting" : "Dormant",
-				variant: isOnline ? "online" : isStarting ? "starting" : "dormant",
-				showDot: true,
-			}}
-		>
-			{#snippet valueExtra()}
-				<div class="flex items-center gap-2 pt-0.5">
-					{#if isOnline}
-						<CheckCircleIcon class="size-5 text-emerald-500 shrink-0" />
-						<span class="text-base font-bold text-emerald-400">Running</span>
-					{:else if isStarting}
-						<RefreshCwIcon class="size-5 text-amber-500 shrink-0 animate-spin" />
-						<span class="text-base text-amber-400 font-bold">Starting...</span>
-					{:else}
-						<MoonIcon class="size-5 text-muted-foreground shrink-0" />
-						<span class="text-base text-muted-foreground font-normal">Dormant</span>
-					{/if}
-				</div>
-			{/snippet}
-			{#snippet footer()}
-				<StatCardFooterItem label="Reload" value="In-place" color="text-emerald-500" />
-				<StatCardFooterItem label="Uplink" value={status?.wan_interface ?? "Auto"} />
-			{/snippet}
-		</StatCard>
-
+	<StatCardGrid cols={2}>
 		<!-- 2. Smart Queue Management (SQM CAKE) -->
 		<StatCard
-			label="CAKE Shaper"
+			label="Queue Management (CAKE)"
 			popover={{
-				title: "Smart Queue Management",
-				description: "Active Queue Management (CAKE) bounds buffer latency to prevent lag spikes under load.",
+				title: "Queue management",
+				description: "CAKE keeps latency low while the line is full, so calls and games do not lag during a download.",
 			}}
 			badge={{
-				text: status?.sqm_active ? "Active" : sqmWaiting ? "Waiting for WAN" : "Disabled",
+				text: status?.sqm_active ? "On" : sqmWaiting ? "Waiting for WAN" : "Off",
 				variant: status?.sqm_active ? "online" : sqmWaiting ? "starting" : "dormant",
 				showDot: true,
 			}}
@@ -155,14 +56,14 @@
 					{:else}
 						<XCircleIcon class="size-5 text-muted-foreground shrink-0" />
 						<span class="text-base text-muted-foreground font-normal">
-							{sqmWaiting ? "Attaches when the WAN is up" : "Shaper Disabled"}
+							{sqmWaiting ? "Starts when the WAN is up" : "Off"}
 						</span>
 					{/if}
 				</div>
 			{/snippet}
 			{#snippet footer()}
-				<StatCardFooterItem label="Profile" value={status?.diffserv ?? "diffserv4"} />
-				<StatCardFooterItem label="Ingress" value={status?.ingress_device ?? "None"} />
+				<StatCardFooterItem label="Profile" value={status?.diffserv ?? "—"} />
+				<StatCardFooterItem label="Download shaping on" value={status?.ingress_device ?? "—"} />
 			{/snippet}
 		</StatCard>
 
@@ -170,8 +71,8 @@
 		<StatCard
 			label="NIC Tuning"
 			popover={{
-				title: "Hardware & Driver Tuning",
-				description: "Kernel-level tuning for network interface controllers.",
+				title: "NIC tuning",
+				description: "Spreads packet processing over the CPU cores and sets the network card's offloads.",
 			}}
 			badge={{
 				text: status?.tuning_applied ? "Tuned" : "Default",
@@ -187,43 +88,16 @@
 						</span>
 					{:else}
 						<CpuIcon class="size-5 text-muted-foreground shrink-0" />
-						<span class="text-base text-muted-foreground font-normal">Kernel Default</span>
+						<span class="text-base text-muted-foreground font-normal">Kernel defaults</span>
 					{/if}
 				</div>
 			{/snippet}
 			{#snippet footer()}
-				<StatCardFooterItem label="RPS Mask" value={status?.effective_cpu_mask ? `0x${status.effective_cpu_mask}` : "auto"} />
-				<StatCardFooterItem label="Interfaces" value={status?.tuned_interfaces?.join(", ") || "None"} />
+				<StatCardFooterItem label="CPU Mask (RPS)" value={status?.effective_cpu_mask ? `0x${status.effective_cpu_mask}` : "—"} />
+				<StatCardFooterItem label="Interfaces" value={status?.tuned_interfaces?.join(", ") || "—"} />
 			{/snippet}
 		</StatCard>
 
-		<!-- 4. Real-Time Network Throughput & Volume -->
-		<StatCard
-			label="Throughput & Volume"
-			popover={{
-				title: "Instantaneous Network Rates",
-				description: "Real-time traffic throughput calculated from Linux kernel /proc/net/dev counters.",
-			}}
-			badge={{
-				text: "Live",
-				variant: "sky",
-			}}
-		>
-			{#snippet valueExtra()}
-				<div class="flex items-center gap-2 pt-0.5">
-					<ActivityIcon class="size-5 text-sky-400 shrink-0" />
-					<ThroughputDisplay rxBps={totalRxBps} txBps={totalTxBps} size="sm" />
-				</div>
-			{/snippet}
-			{#snippet footer()}
-				<StatCardFooterItem label="Volume (Rx/Tx)" value={`${formatBytes(totalRxBytes)} / ${formatBytes(totalTxBytes)}`} />
-				<StatCardFooterItem
-					label="Health"
-					value={totalDrops + totalErrors === 0 ? "0 drops/err" : `${totalDrops} drops · ${totalErrors} err`}
-					color={totalDrops > 0 || totalErrors > 0 ? "text-amber-400 font-medium" : "text-emerald-500"}
-				/>
-			{/snippet}
-		</StatCard>
 	</StatCardGrid>
 
 	<!-- Active Interfaces Throughput Panel -->

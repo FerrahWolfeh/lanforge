@@ -106,10 +106,8 @@
 	<DbStatsCards
 		systemStatus={dbState.systemStatus}
 		metrics={dbState.metrics}
-		totalStoredEntities={dbState.totalStoredEntities}
 		loading={dbState.loading}
 		isInMemory={dbState.isInMemory}
-		engineLabel={dbState.engineLabel}
 		isHealthy={dbState.isHealthy}
 		{formatBytes}
 		{formatTimeAgo}

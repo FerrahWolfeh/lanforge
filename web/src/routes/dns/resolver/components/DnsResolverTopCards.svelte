@@ -113,6 +113,7 @@
 				display: "0 / 0",
 				subtitle: "No upstream forwarders configured",
 				healthy: 0,
+				degraded: 0,
 				total: 0,
 			};
 		}
@@ -127,6 +128,7 @@
 			display: `${healthy} / ${total}`,
 			subtitle,
 			healthy,
+			degraded,
 			total,
 		};
 	});
@@ -156,7 +158,7 @@
 	<StatCard
 		label="DNS Queries (24h)"
 		value={loading && !analyticsData && !statsData ? null : totalQueries.toLocaleString()}
-		subtext={loading && !analyticsData && !statsData ? "Awaiting telemetry..." : "Queries in last 24h"}
+		subtext={loading && !analyticsData && !statsData ? "Loading…" : "Queries in the last 24 hours"}
 		icon={ActivityIcon}
 		color="sky"
 		{loading}
@@ -165,10 +167,6 @@
 			description: statsData
 				? `Processed in last 24h: ${totalQueries.toLocaleString()} queries. Lifetime total since startup: ${statsData.total_requests.toLocaleString()}.`
 				: "Total recursive, authoritative, and cached queries handled in the last 24 hours.",
-		}}
-		badge={{
-			text: "24h Window",
-			variant: "sky",
 		}}
 	>
 		{#snippet footer()}
@@ -194,15 +192,10 @@
 		color="emerald"
 		{loading}
 		popover={{
-			title: "Zero-Latency Memory Cache",
+			title: "Cache",
 			description: statsData
 				? `24h cache hits: ${cacheHitsCount.toLocaleString()} (${cacheHitPct}%). Lifetime memory hits: ${statsData.cache_hits.toLocaleString()}.`
 				: "Queries resolved directly from memory without forwarding to upstream DNS resolvers.",
-		}}
-		badge={{
-			text: cacheHitPct >= 70 ? "Optimal" : (cacheHitPct > 0 ? "Active" : "Standby"),
-			variant: cacheHitPct >= 70 ? "online" : (cacheHitPct > 0 ? "emerald" : "zinc"),
-			showDot: cacheHitPct > 0,
 		}}
 	>
 		{#snippet footer()}
@@ -228,7 +221,7 @@
 	<StatCard
 		label="Blocked Queries (24h)"
 		value={loading && !analyticsData && !statsData ? null : blockedCount.toLocaleString()}
-		subtext="Ads, trackers & malicious domains"
+		subtext={`${blockPct} of all queries`}
 		icon={ShieldIcon}
 		color="rose"
 		{loading}
@@ -236,12 +229,7 @@
 			title: "DNS Domain Filtering (24h Window)",
 			description: statsData
 				? `Blocked in last 24h: ${blockedCount.toLocaleString()} (${blockPct}). Lifetime blocked: ${statsData.blocked_queries.toLocaleString()}.`
-				: "Adware, tracking, telemetry, and custom rewrite domains blocked with NXDOMAIN or 0.0.0.0.",
-		}}
-		badge={{
-			text: `${blockPct} Blocked`,
-			variant: blockedCount > 0 ? "rose" : "zinc",
-			showDot: blockedCount > 0,
+				: "Queries answered by adblock instead of an upstream server.",
 		}}
 	>
 		{#snippet footer()}
@@ -274,13 +262,9 @@
 		footerCols={3}
 		popover={{
 			title: "Upstream Resolvers",
-			description: "Health-checked recursive resolvers configured for WAN domain resolution.",
+			description: "The servers this router forwards questions to. A server that is configured but not needed by the upstream mode is not a fault.",
 		}}
-		badge={{
-			text: upstreamStats.total === 0 ? "None" : (upstreamStats.healthy === upstreamStats.total ? "Operational" : "Degraded"),
-			variant: upstreamStats.total === 0 ? "zinc" : (upstreamStats.healthy === upstreamStats.total ? "online" : "warning"),
-			showDot: upstreamStats.total > 0,
-		}}
+		badge={upstreamStats.degraded > 0 ? { text: "Degraded", variant: "warning", showDot: true } : undefined}
 	>
 		{#snippet footer()}
 			<StatCardFooterItem

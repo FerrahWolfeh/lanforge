@@ -1,7 +1,6 @@
 <script lang="ts">
 	import HardDriveIcon from "@lucide/svelte/icons/hard-drive";
 	import ActivityIcon from "@lucide/svelte/icons/activity";
-	import ServerIcon from "@lucide/svelte/icons/server";
 	import CheckCircleIcon from "@lucide/svelte/icons/check-circle";
 	import AlertTriangleIcon from "@lucide/svelte/icons/triangle-alert";
 	import StatCard from "$lib/components/StatCard.svelte";
@@ -12,84 +11,32 @@
 	let {
 		systemStatus = null,
 		metrics = null,
-		totalStoredEntities = 0,
 		loading = false,
 		isInMemory = false,
-		engineLabel = "Persistent (redb)",
 		isHealthy = true,
 		formatBytes = (b: number) => `${b} B`,
 		formatTimeAgo = () => "Never",
 	}: {
 		systemStatus?: StatusResponse | null;
 		metrics?: DbMetrics | null;
-		totalStoredEntities?: number;
 		loading?: boolean;
 		isInMemory?: boolean;
-		engineLabel?: string;
 		isHealthy?: boolean;
 		formatBytes?: (b: number) => string;
 		formatTimeAgo?: (epochSecs: number | null | undefined) => string;
 	} = $props();
 </script>
 
-<StatCardGrid cols={3}>
+<StatCardGrid cols={2}>
 	<!-- Card 1: Storage & Footprint -->
 	<StatCard
-		label="Database Footprint"
+		label="Size"
 		value={formatBytes(systemStatus?.db?.size_bytes ?? 0)}
 		icon={HardDriveIcon}
 		color={isInMemory ? "amber" : "indigo"}
-		badge={{
-			text: isInMemory ? "In-Memory" : "redb",
-			variant: isInMemory ? "warning" : "online",
-			showDot: true
-		}}
-		subtext={systemStatus?.db?.path || (isInMemory ? "Volatile RAM store" : "redb (embedded)")}
+		badge={isInMemory ? { text: "In memory: lost on restart", variant: "warning", showDot: true } : undefined}
+		subtext={isInMemory ? "Nothing is written to disk" : systemStatus?.db?.path ?? ""}
 		loading={loading && !systemStatus}
-	>
-		{#snippet footer()}
-			<StatCardFooterItem
-				label="Backend"
-				value={isInMemory ? "RAM (Volatile)" : "Embedded redb"}
-			/>
-			<StatCardFooterItem
-				label="Health"
-				value={isHealthy ? "Optimal" : "Write error"}
-				color={isHealthy ? "text-emerald-500" : "text-destructive"}
-			/>
-		{/snippet}
-	</StatCard>
-
-	<!-- Card 2: Persistence Cadence -->
-	<StatCard
-		label="Last Disk Sync"
-		value={systemStatus?.db ? formatTimeAgo(Math.floor(Date.now() / 1000) - systemStatus.db.last_flush_secs_ago) : "—"}
-		icon={ActivityIcon}
-		color="emerald"
-		badge={{
-			text: `${(metrics?.flush_count ?? 0).toLocaleString()} flushes`,
-			variant: "zinc"
-		}}
-		subtext="Periodic batch disk synchronization"
-		loading={loading && !metrics}
-	>
-		{#snippet footer()}
-			<StatCardFooterItem
-				label="Total Flushes"
-				value={(metrics?.flush_count ?? 0).toLocaleString()}
-			/>
-			<StatCardFooterItem label="Interval" value="60s tick" />
-		{/snippet}
-	</StatCard>
-
-	<!-- Card 3: Stored Records & Inventory -->
-	<StatCard
-		label="Managed Records"
-		value={totalStoredEntities.toLocaleString()}
-		icon={ServerIcon}
-		color="sky"
-		subtext="Persisted state entities across tables"
-		loading={loading && !metrics}
 	>
 		{#snippet footer()}
 			<StatCardFooterItem
@@ -97,10 +44,28 @@
 				value={(metrics?.devices_written ?? 0).toLocaleString()}
 			/>
 			<StatCardFooterItem
-				label="Write Errors"
-				value={metrics?.last_error ? "Detected" : "0 errors"}
-				color={metrics?.last_error ? "text-destructive" : "text-emerald-500"}
+				label="Writes"
+				value={isHealthy ? "OK" : "Failing"}
+				color={isHealthy ? "text-emerald-500" : "text-destructive"}
 			/>
 		{/snippet}
 	</StatCard>
+
+	<!-- Card 2: Persistence Cadence -->
+	<StatCard
+		label="Last Write"
+		value={systemStatus?.db ? formatTimeAgo(Math.floor(Date.now() / 1000) - systemStatus.db.last_flush_secs_ago) : "—"}
+		icon={ActivityIcon}
+		color="emerald"
+		subtext="State in memory is written to disk in batches"
+		loading={loading && !metrics}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem
+				label="Writes Since Start"
+				value={(metrics?.flush_count ?? 0).toLocaleString()}
+			/>
+		{/snippet}
+	</StatCard>
+
 </StatCardGrid>
