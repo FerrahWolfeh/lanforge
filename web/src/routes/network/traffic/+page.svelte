@@ -1,26 +1,23 @@
 <script lang="ts">
-	import { trafficStatus, trafficTelemetryFeed } from "$lib/api/client";
-	import type { TrafficStatusResponse, TrafficTelemetryResponse } from "$lib/api/types";
+	import { trafficTelemetryFeed } from "$lib/api/client";
+	import type { TrafficTelemetryResponse } from "$lib/api/types";
 	import { onMount } from "svelte";
 	import { createPolling } from "$lib/utils/polling";
+	import { useTrafficStatus } from "./trafficStatusContext.svelte";
 
 	import TrafficStatsCards from "./components/TrafficStatsCards.svelte";
 	import TrafficActivityChart from "$lib/components/TrafficActivityChart.svelte";
 
 	const trafficTelemetry = trafficTelemetryFeed();
 
-	let status = $state<TrafficStatusResponse | null>(null);
+	const shared = useTrafficStatus();
+	const status = $derived(shared.value);
 	let telemetry = $state<TrafficTelemetryResponse | null>(null);
 	let loading = $state(true);
 
 	async function loadData() {
 		try {
-			const [s, t] = await Promise.all([
-				trafficStatus().catch(() => null),
-				trafficTelemetry().catch(() => null),
-			]);
-			status = s;
-			telemetry = t;
+			telemetry = await trafficTelemetry().catch(() => null);
 		} finally {
 			loading = false;
 		}
@@ -28,12 +25,13 @@
 
 	onMount(() => {
 		loadData();
-		const stopPolling = createPolling(() => {
-			Promise.allSettled([trafficStatus(), trafficTelemetry()]).then(([sRes, tRes]) => {
-				if (sRes.status === "fulfilled") status = sRes.value;
-				if (tRes.status === "fulfilled") telemetry = tRes.value;
-			});
-		}, 2500);
+		const stopPolling = createPolling(
+			() =>
+				trafficTelemetry()
+					.then((t) => (telemetry = t))
+					.catch(() => {}),
+			2500
+		);
 		return () => {
 			stopPolling();
 		};

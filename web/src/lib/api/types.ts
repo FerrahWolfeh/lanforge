@@ -964,6 +964,8 @@ export interface DnsQueryLogEntry {
 	repeats: number;
 	/** The upstream that answered, as configured (`tls://dns.google`); null when none was asked. */
 	upstream?: string | null;
+	/** UI only, never sent by the API: arrival order of a live entry, used as its list key. */
+	_seq?: number;
 }
 
 export interface DnsUpstreamEntry {

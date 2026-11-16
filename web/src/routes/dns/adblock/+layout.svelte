@@ -26,14 +26,19 @@
 		dnsAdblockSet,
 		dnsAdblockReload,
 	} from "$lib/api/client";
-	import type { DnsAdblockStatusResponse } from "$lib/api/types";
+	import {
+		provideAdblockStatus,
+		type AdblockStatusShare,
+	} from "./adblockStatusContext.svelte";
 
 	// Pause, toggle and list updates need dns_write; the settings are config (config_write).
 	const canDnsWrite = $derived(auth.can("dns_write"));
 
 	let { children } = $props();
 
-	let status = $state<DnsAdblockStatusResponse | null>(null);
+	const shared = $state<AdblockStatusShare>({ value: null, refresh: fetchStatus });
+	const status = $derived(shared.value);
+	provideAdblockStatus(shared);
 	let loadingStatus = $state(true);
 	let reloadingLists = $state(false);
 	let settingsOpen = $state(false);
@@ -48,7 +53,7 @@
 	async function fetchStatus() {
 		try {
 			const res = await dnsAdblockStatus();
-			if (res) status = res;
+			if (res) shared.value = res;
 		} catch {
 			// Silent fallback when daemon isn't ready
 		} finally {

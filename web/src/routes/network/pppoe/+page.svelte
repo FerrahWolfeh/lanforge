@@ -152,13 +152,17 @@
 		formProbeMaxWaitSecs = tp?.max_wait_secs ?? 10;
 	}
 
-	async function loadAll(silent = false) {
+	// Status is polled; the config (and its form re-sync) refreshes at most this often.
+	const CONFIG_REFRESH_MS = 30_000;
+	let configLoadedAt = 0;
+
+	async function loadAll(silent = false, withConfig = true) {
 		if (!silent) loading = true;
 		try {
 			const fetchSetup = !silent || availableInterfaces.length === 0;
 			const [s, c, setupRes] = await Promise.all([
 				pppoeStatus().catch(() => null),
-				canEdit ? pppoeConfig().catch(() => null) : Promise.resolve(null),
+				canEdit && withConfig ? pppoeConfig().catch(() => null) : Promise.resolve(null),
 				fetchSetup ? getSetupStatus().catch(() => null) : Promise.resolve(null),
 			]);
 			status = s;
@@ -168,6 +172,7 @@
 			}
 
 			if (c) {
+				configLoadedAt = Date.now();
 				if (!config || !isDirty) {
 					config = c;
 					syncFormFromConfig(c);
@@ -288,7 +293,10 @@
 
 	onMount(() => {
 		loadAll();
-		const stopPolling = createPolling(() => loadAll(true), 4000);
+		const stopPolling = createPolling(
+			() => loadAll(true, Date.now() - configLoadedAt >= CONFIG_REFRESH_MS),
+			4000
+		);
 		return () => {
 			stopPolling();
 		};

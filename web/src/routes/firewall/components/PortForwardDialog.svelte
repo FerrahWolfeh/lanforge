@@ -497,7 +497,7 @@
 					{#if selectedDevice && selectedDevice.ipv6_addrs && selectedDevice.ipv6_addrs.length > 1}
 						<div class="flex items-center gap-1.5 pt-1">
 							<span class="text-xs text-muted-foreground">Available on host:</span>
-							{#each selectedDevice.ipv6_addrs as addr}
+							{#each selectedDevice.ipv6_addrs as addr (addr)}
 								<Button
 									type="button"
 									variant="ghost"

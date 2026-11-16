@@ -2,7 +2,6 @@
 	import { auth } from "$lib/stores/auth.svelte";
 	import FloatingSaveBar from "$lib/components/FloatingSaveBar.svelte";
 	import {
-		trafficStatus,
 		trafficTelemetryFeed,
 		trafficConfig,
 		trafficUpdateConfig,
@@ -11,7 +10,6 @@
 	} from "$lib/api/client";
 	import type {
 		TrafficConfig,
-		TrafficStatusResponse,
 		TrafficTelemetryResponse,
 		NetworkInterfaceInfo,
 		SetupStatusResponse,
@@ -22,6 +20,7 @@
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
 	import { createPolling } from "$lib/utils/polling";
+	import { useTrafficStatus } from "../trafficStatusContext.svelte";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 
 	import TrafficSqmTab from "../components/TrafficSqmTab.svelte";
@@ -30,7 +29,8 @@
 
 	const canEdit = $derived(auth.can("config_write"));
 
-	let status = $state<TrafficStatusResponse | null>(null);
+	const shared = useTrafficStatus();
+	const status = $derived(shared.value);
 	let telemetry = $state<TrafficTelemetryResponse | null>(null);
 	let serverConfig = $state<TrafficConfig | null>(null);
 	let availableInterfaces = $state<NetworkInterfaceInfo[]>([]);
@@ -118,15 +118,13 @@
 		if (!silent) loading = true;
 		try {
 			const fetchSetup = !silent || availableInterfaces.length === 0;
-			const [s, c, setupRes, pppoeRes, telemRes] = await Promise.all([
-				trafficStatus().catch(() => null),
+			const [c, setupRes, pppoeRes, telemRes] = await Promise.all([
 				trafficConfig().catch(() => null),
 				fetchSetup ? getSetupStatus().catch(() => null) : Promise.resolve(null),
 				// The PPPoE config holds the password (config_write); it only names the WAN here.
 				canEdit ? pppoeConfig().catch(() => null) : Promise.resolve(null),
 				trafficTelemetry().catch(() => null),
 			]);
-			status = s;
 			if (setupRes) setupStatus = setupRes;
 			pppoeCfg = pppoeRes;
 			telemetry = telemRes;
@@ -183,11 +181,10 @@
 			toast.success("SQM CAKE configuration applied successfully");
 
 			refreshTimer = setTimeout(async () => {
-				const [s, t] = await Promise.all([
-					trafficStatus().catch(() => null),
+				const [, t] = await Promise.all([
+					shared.refresh(),
 					trafficTelemetry().catch(() => null),
 				]);
-				if (s) status = s;
 				if (t) telemetry = t;
 			}, 600);
 		} catch (err) {
@@ -201,10 +198,9 @@
 		loadAll(false);
 		const stopPolling = createPolling(
 			() =>
-				Promise.allSettled([trafficStatus(), trafficTelemetry()]).then(([sRes, tRes]) => {
-					if (sRes.status === "fulfilled") status = sRes.value;
-					if (tRes.status === "fulfilled") telemetry = tRes.value;
-				}),
+				trafficTelemetry()
+					.then((t) => (telemetry = t))
+					.catch(() => {}),
 			3000
 		);
 		return () => {

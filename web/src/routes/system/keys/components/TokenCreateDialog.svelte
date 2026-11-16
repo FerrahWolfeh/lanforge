@@ -207,7 +207,7 @@
 						Permissions & Scopes
 					</Field.FieldLegend>
 					<div class="flex flex-col gap-2 rounded-lg border border-border/60 p-3 bg-muted/20">
-						{#each availableScopes as sc}
+						{#each availableScopes as sc (sc.id)}
 							<div class="flex items-start justify-between gap-3 py-1">
 								<div class="flex flex-col gap-0.5">
 									<span class="text-xs font-semibold text-foreground flex items-center gap-1.5">

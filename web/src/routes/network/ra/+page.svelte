@@ -148,13 +148,17 @@
 		formDnssl = dnsslList;
 	}
 
-	async function loadAll(silent = false) {
+	// Status is polled; the config (and its form re-sync) refreshes at most this often.
+	const CONFIG_REFRESH_MS = 30_000;
+	let configLoadedAt = 0;
+
+	async function loadAll(silent = false, withConfig = true) {
 		if (!silent) loading = true;
 		try {
 			const fetchSetup = !silent || availableInterfaces.length === 0;
 			const [s, c, setupRes] = await Promise.all([
 				raStatus().catch(() => null),
-				raConfig().catch(() => null),
+				withConfig ? raConfig().catch(() => null) : Promise.resolve(null),
 				fetchSetup ? getSetupStatus().catch(() => null) : Promise.resolve(null),
 			]);
 			// A failed poll keeps the last status: a null here would read as "Disabled".
@@ -163,6 +167,7 @@
 				availableInterfaces = setupRes.interfaces;
 			}
 			if (c) {
+				configLoadedAt = Date.now();
 				if (!config || !isDirty) {
 					config = c;
 					syncFormFromConfig(c);
@@ -239,7 +244,10 @@
 
 	onMount(() => {
 		loadAll();
-		const stopPolling = createPolling(() => loadAll(true), 5000);
+		const stopPolling = createPolling(
+			() => loadAll(true, Date.now() - configLoadedAt >= CONFIG_REFRESH_MS),
+			5000
+		);
 		return () => {
 			stopPolling();
 		};

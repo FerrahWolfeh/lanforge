@@ -88,6 +88,17 @@
 		});
 	}
 
+	// Lowercased payload per event, built on first search that reaches it: events are immutable.
+	const dataTextCache = new WeakMap<SseEvent, string>();
+	function dataText(ev: SseEvent): string {
+		let text = dataTextCache.get(ev);
+		if (text === undefined) {
+			text = JSON.stringify(ev.data).toLowerCase();
+			dataTextCache.set(ev, text);
+		}
+		return text;
+	}
+
 	const filteredEvents = $derived.by(() => {
 		const q = searchQuery.trim().toLowerCase();
 		return events.filter((ev) => {
@@ -112,7 +123,6 @@
 
 			const matchKind = ev.kind.toLowerCase().includes(q);
 			const matchTopic = (ev.topic || "").toLowerCase().includes(q);
-			const matchData = JSON.stringify(ev.data).toLowerCase().includes(q);
 			const matchDevice = ev.device_info
 				? Boolean(
 						ev.device_info.hostname?.toLowerCase().includes(q) ||
@@ -134,7 +144,7 @@
 						ev.service_info.state.toLowerCase().includes(q),
 					)
 				: false;
-			return matchKind || matchTopic || matchData || matchDevice || matchIface || matchSvc;
+			return matchKind || matchTopic || matchDevice || matchIface || matchSvc || dataText(ev).includes(q);
 		});
 	});
 

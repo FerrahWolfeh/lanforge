@@ -237,7 +237,7 @@
 			<!-- Scopes -->
 			<Table.Cell class="py-3 font-sans">
 				<div class="flex flex-wrap gap-1 max-w-xs">
-					{#each token.scopes as sc}
+					{#each token.scopes as sc (sc)}
 						{#if sc === "admin"}
 							<Badge variant="default" class="text-xs px-1.5 py-0 font-mono">
 								admin

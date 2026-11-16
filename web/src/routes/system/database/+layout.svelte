@@ -32,9 +32,7 @@
 
 	onMount(() => {
 		dbState.loadAll();
-		const stopPolling = createPolling(() => {
-			dbState.loadAll(true);
-		}, 10000);
+		const stopPolling = createPolling(() => dbState.loadAll(true), 10000);
 		return () => {
 			stopPolling();
 		};

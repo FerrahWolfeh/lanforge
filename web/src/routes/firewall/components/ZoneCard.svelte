@@ -225,7 +225,7 @@
                 bind:value={selectedIfaceToAdd}
               >
                 <option value="" disabled>Select interface…</option>
-                {#each unassignedInterfaces as iface}
+                {#each unassignedInterfaces as iface (iface.name)}
                   <option value={iface.name}>
                     {iface.name} ({iface.bus_type} - {iface.carrier_up ? '🟢 Connected' : '⚪ Disconnected'} {iface.ips[0] ? `[${iface.ips[0]}]` : ''})
                   </option>

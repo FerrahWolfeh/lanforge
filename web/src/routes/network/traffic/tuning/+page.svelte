@@ -2,7 +2,6 @@
 	import { auth } from "$lib/stores/auth.svelte";
 	import FloatingSaveBar from "$lib/components/FloatingSaveBar.svelte";
 	import {
-		trafficStatus,
 		trafficConfig,
 		trafficUpdateConfig,
 		getSetupStatus,
@@ -10,20 +9,21 @@
 	} from "$lib/api/client";
 	import type {
 		TrafficConfig,
-		TrafficStatusResponse,
 		NetworkInterfaceInfo,
 		SetupStatusResponse,
 		PppoeConfig,
 	} from "$lib/api/types";
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
+	import { useTrafficStatus } from "../trafficStatusContext.svelte";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 
 	import TrafficTuningTab from "../components/TrafficTuningTab.svelte";
 
 	const canEdit = $derived(auth.can("config_write"));
 
-	let status = $state<TrafficStatusResponse | null>(null);
+	const shared = useTrafficStatus();
+	const status = $derived(shared.value);
 	let serverConfig = $state<TrafficConfig | null>(null);
 	let availableInterfaces = $state<NetworkInterfaceInfo[]>([]);
 	let setupStatus = $state<SetupStatusResponse | null>(null);
@@ -104,14 +104,12 @@
 	async function loadAll(silent = false) {
 		if (!silent) loading = true;
 		try {
-			const [s, c, setupRes, pppoeRes] = await Promise.all([
-				trafficStatus().catch(() => null),
+			const [c, setupRes, pppoeRes] = await Promise.all([
 				trafficConfig().catch(() => null),
 				getSetupStatus().catch(() => null),
 				// The PPPoE config holds the password (config_write); it only names the WAN here.
 				canEdit ? pppoeConfig().catch(() => null) : Promise.resolve(null),
 			]);
-			status = s;
 			setupStatus = setupRes;
 			pppoeCfg = pppoeRes;
 
@@ -166,8 +164,7 @@
 			toast.success("Hardware NIC tuning applied successfully");
 
 			refreshTimer = setTimeout(async () => {
-				const s = await trafficStatus().catch(() => null);
-				if (s) status = s;
+				await shared.refresh();
 			}, 600);
 		} catch (err) {
 			toast.error(`Failed to save: ${err instanceof Error ? err.message : String(err)}`);

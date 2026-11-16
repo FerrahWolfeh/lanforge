@@ -41,6 +41,7 @@
 
 	// --- Tab 2: Live Stream State ---
 	let liveEntries = $state<DnsQueryLogEntry[]>([]);
+	let liveSeq = 0;
 	let isLivePaused = $state(false);
 	let isLiveConnected = $state(false);
 	let bufferLimit = $state(200);
@@ -185,6 +186,7 @@
 										? parsed.coalesce_id
 										: null,
 							repeats: typeof dnsEv.repeats === "number" ? dnsEv.repeats : 1,
+							_seq: ++liveSeq,
 						};
 
 						liveEntries = [newEntry, ...liveEntries.slice(0, bufferLimit - 1)];

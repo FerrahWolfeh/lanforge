@@ -79,21 +79,28 @@ class DbStateManager {
 		},
 	]);
 
+	/** No endpoint returns these counts, so they cost three full list fetches: poll them slowly. */
+	private countsAt = 0;
+
 	async loadAll(silent = false) {
 		if (!silent) this.refreshing = true;
 		try {
+			const withCounts = !silent || Date.now() - this.countsAt >= COUNTS_REFRESH_MS;
 			const [s, m, l, u, t] = await Promise.all([
 				status().catch(() => null),
 				dbStats().catch(() => null),
-				leases().catch(() => null),
-				userList().catch(() => null),
-				listTokens().catch(() => null),
+				withCounts ? leases().catch(() => null) : undefined,
+				withCounts ? userList().catch(() => null) : undefined,
+				withCounts ? listTokens().catch(() => null) : undefined,
 			]);
 			if (s) this.systemStatus = s;
 			if (m) this.metrics = m;
-			this.leaseCount = l ? l.length : null;
-			this.userCount = u ? u.length : null;
-			this.tokenCount = t ? t.length : null;
+			if (withCounts) {
+				this.countsAt = Date.now();
+				this.leaseCount = l ? l.length : null;
+				this.userCount = u ? u.length : null;
+				this.tokenCount = t ? t.length : null;
+			}
 		} finally {
 			if (!silent) {
 				this.loading = false;
@@ -102,5 +109,7 @@ class DbStateManager {
 		}
 	}
 }
+
+const COUNTS_REFRESH_MS = 30_000;
 
 export const dbState = new DbStateManager();

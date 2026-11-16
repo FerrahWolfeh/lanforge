@@ -51,20 +51,20 @@
 		leases.filter((l) => l.kind === "v6" || l.kind === "v6_prefix").length
 	);
 
-	const filteredLeases = $derived(
-		leases.filter((lease) => {
+	const filteredLeases = $derived.by(() => {
+		const q = searchQuery.toLowerCase().trim();
+		return leases.filter((lease) => {
 			if (selectedKind !== "all" && lease.kind !== selectedKind) {
 				return false;
 			}
-			if (!searchQuery.trim()) return true;
-			const q = searchQuery.toLowerCase().trim();
+			if (!q) return true;
 			return (
 				lease.hostname.toLowerCase().includes(q) ||
 				lease.mac.toLowerCase().includes(q) ||
 				lease.address.toLowerCase().includes(q)
 			);
-		})
-	);
+		});
+	});
 
 	const paginatedLeases = $derived(
 		filteredLeases.slice(pageIndex * pageSize, (pageIndex + 1) * pageSize)

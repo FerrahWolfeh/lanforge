@@ -6,9 +6,9 @@
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import { Button } from "$lib/components/ui/button";
 	import { trafficStatus } from "$lib/api/client";
-	import type { TrafficStatusResponse } from "$lib/api/types";
 	import { onMount } from "svelte";
 	import { createPolling } from "$lib/utils/polling";
+	import { provideTrafficStatus, type TrafficStatusShare } from "./trafficStatusContext.svelte";
 
 	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
 	import PageHeader from "$lib/components/PageHeader.svelte";
@@ -16,8 +16,10 @@
 
 	let { children } = $props();
 
-	let status = $state<TrafficStatusResponse | null>(null);
+	const shared = $state<TrafficStatusShare>({ value: null, refresh: fetchStatus });
+	const status = $derived(shared.value);
 	let loading = $state(false);
+	provideTrafficStatus(shared);
 
 	const tabs: NavTabItem[] = [
 		{ label: "Overview", href: "/network/traffic", icon: ActivityIcon },
@@ -28,7 +30,7 @@
 	async function fetchStatus() {
 		loading = true;
 		try {
-			status = await trafficStatus();
+			shared.value = await trafficStatus();
 		} catch {
 			// Ignore in background
 		} finally {
@@ -38,9 +40,13 @@
 
 	onMount(() => {
 		fetchStatus();
-		const stopPolling = createPolling(() => {
-			trafficStatus().then((s) => (status = s)).catch(() => {});
-		}, 4000);
+		const stopPolling = createPolling(
+			() =>
+				trafficStatus()
+					.then((s) => (shared.value = s))
+					.catch(() => {}),
+			4000
+		);
 		return () => {
 			stopPolling();
 		};

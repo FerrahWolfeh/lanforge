@@ -35,7 +35,7 @@
 
 		{#if result}
 			<div class="max-h-64 overflow-y-auto space-y-2 py-2">
-				{#each result.results as res}
+				{#each result.results as res (res.section)}
 					<div class="flex items-center justify-between rounded-md border p-2 text-xs">
 						<span class="font-mono font-medium">{res.section}</span>
 						{#if res.success}

@@ -374,7 +374,7 @@
 						</Table.Cell>
 					</Table.Row>
 				{:else}
-					{#each displayEntries as entry, i (`live-${entry.timestamp}-${entry.src_ip}-${entry.domain}-${entry.qtype}-${i}`)}
+					{#each displayEntries as entry (entry._seq)}
 						{@const domainClean = cleanDomain(entry.domain)}
 						{@const answerClean = cleanAnswer(entry.answer)}
 						{@const style = typeVariants[entry.qtype] || "bg-secondary text-secondary-foreground border-border"}

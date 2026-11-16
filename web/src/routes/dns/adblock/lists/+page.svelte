@@ -344,7 +344,7 @@
 							</Table.Cell>
 						</Table.Row>
 					{:else}
-						{#each filteredSources as source, idx (source.url + idx)}
+						{#each filteredSources as source (source.url)}
 							<Table.Row class="hover:bg-muted/40 transition-colors group">
 								<!-- Name & URL -->
 								<Table.Cell class="text-xs">

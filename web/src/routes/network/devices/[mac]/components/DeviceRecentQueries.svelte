@@ -35,6 +35,7 @@
 	const KEEP = 8;
 	let entries = $state<DnsQueryLogEntry[]>([]);
 	let live = $state(false);
+	let seq = 0;
 	let source: EventSource | null = null;
 	/** Bumped by every stop(), so a start() that was awaiting a fetch knows it is no longer wanted. */
 	const generation = createSequence();
@@ -72,7 +73,7 @@
 		try {
 			const res = await dnsQueryLog({ client: target, limit: KEEP });
 			if (!generation.isCurrent(gen)) return;
-			entries = res.entries;
+			entries = res.entries.map((e) => ({ ...e, _seq: ++seq }));
 		} catch {
 			// The live stream still fills the list.
 		}
@@ -95,6 +96,7 @@
 							upstream_us: Number(e.upstream_us ?? 0),
 							cached: Boolean(e.cached),
 							repeats: Number(e.repeats ?? 1),
+							_seq: ++seq,
 						},
 						...entries,
 					].slice(0, KEEP);
@@ -146,7 +148,7 @@
 		<p class="p-3 text-sm text-muted-foreground">No queries logged yet.</p>
 	{:else}
 		<ul class="divide-y divide-border">
-			{#each entries as e, i (`${e.timestamp}-${e.domain}-${e.qtype}-${i}`)}
+			{#each entries as e (e._seq)}
 				<li class="flex items-center gap-3 px-3 py-2 text-xs">
 					<span class="shrink-0 tabular-nums text-muted-foreground">{time(e.timestamp)}</span>
 					<a href={`/dns/domains/${encodeURIComponent(e.domain.replace(/\.$/, ""))}`} class="min-w-0 flex-1 truncate font-mono hover:underline" title={e.domain}>{e.domain}</a>

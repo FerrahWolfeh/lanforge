@@ -9,26 +9,26 @@
 	import { Input } from "$lib/components/ui/input";
 	import { Badge } from "$lib/components/ui/badge";
 	import {
-		dnsAdblockStatus,
 		dnsStats,
 		dnsAnalytics,
 		dnsAdblockUrls,
 		dnsAdblockCheck,
 	} from "$lib/api/client";
 	import type {
-		DnsAdblockStatusResponse,
 		DnsStatsResponse,
 		DnsAnalyticsResponse,
 		DnsAdblockUrlEntry,
 		AdblockCheckResponse,
 	} from "$lib/api/types";
 
+	import { useAdblockStatus } from "./adblockStatusContext.svelte";
 	import DnsAdblockStatsCards from "./components/DnsAdblockStatsCards.svelte";
 	import DnsAdblockActivityChart from "./components/DnsAdblockActivityChart.svelte";
 	import DnsAdblockTopBlocked from "./components/DnsAdblockTopBlocked.svelte";
 
 	let loading = $state(true);
-	let status = $state<DnsAdblockStatusResponse | null>(null);
+	const shared = useAdblockStatus();
+	const status = $derived(shared.value);
 	let stats = $state<DnsStatsResponse | null>(null);
 	let analytics = $state<DnsAnalyticsResponse | null>(null);
 	let sources = $state<DnsAdblockUrlEntry[]>([]);
@@ -42,20 +42,14 @@
 	async function loadAllData() {
 		loading = true;
 		try {
-			const [statusRes, statsRes, analyticsRes, sourcesRes] =
+			const [statsRes, analyticsRes, sourcesRes] =
 				await Promise.allSettled([
-					dnsAdblockStatus(),
 					dnsStats(),
 					dnsAnalytics(10),
 					dnsAdblockUrls(),
 				]);
 
 			// A failed call keeps the last good data for its card.
-			if (statusRes.status === "fulfilled" && statusRes.value) {
-				status = statusRes.value;
-			} else if (statusRes.status === "rejected") {
-				toast.error("Failed to load adblock status");
-			}
 			if (statsRes.status === "fulfilled" && statsRes.value) {
 				stats = statsRes.value;
 			} else if (statsRes.status === "rejected") {
