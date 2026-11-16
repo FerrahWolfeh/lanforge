@@ -52,7 +52,7 @@
 
 	function formatAuthMethod(auth?: string): string {
 		switch (auth) {
-			case "chap_md5": return "CHAP-MD5 (Recommended)";
+			case "chap_md5": return "CHAP-MD5";
 			case "pap": return "PAP (Plaintext)";
 			case "none": return "None (Unauthenticated)";
 			default: return auth || "CHAP-MD5";

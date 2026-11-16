@@ -10,17 +10,14 @@
 	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import type {
 		DnsAnalyticsResponse,
-		DnsStatsResponse,
 	} from "$lib/api/types";
 
 	let {
 		loading = true,
 		analyticsData = null,
-		statsData = null,
 	}: {
 		loading?: boolean;
 		analyticsData?: DnsAnalyticsResponse | null;
-		statsData?: DnsStatsResponse | null;
 	} = $props();
 
 	let chartMode = $state<"area" | "bar">("area");
@@ -55,7 +52,6 @@
 
 	const chartPoints = $derived.by(() => {
 		const rates = analyticsData?.query_rate ?? [];
-		const blocked = analyticsData?.blocked_query_rate ?? [];
 
 		const now = Date.now();
 		const BUCKET_MS = 15 * 60 * 1000; // 15-minute intervals matching backend aggregation
@@ -68,13 +64,6 @@
 			const ms = r.timestamp < 10_000_000_000 ? r.timestamp * 1000 : r.timestamp;
 			const bucketKey = Math.floor(ms / BUCKET_MS) * BUCKET_MS;
 			ratesMap.set(bucketKey, r);
-		}
-
-		const blockedMap = new Map<number, number>();
-		for (const b of blocked) {
-			const ms = b.timestamp < 10_000_000_000 ? b.timestamp * 1000 : b.timestamp;
-			const bucketKey = Math.floor(ms / BUCKET_MS) * BUCKET_MS;
-			blockedMap.set(bucketKey, b.count);
 		}
 
 		return Array.from({ length: BUCKET_COUNT }, (_, i) => {
@@ -98,19 +87,11 @@
 			}
 
 			const total = r.count;
-			const blkCount = r.blocked ?? blockedMap.get(bucketMs) ?? 0;
+			const blkCount = r.blocked ?? 0;
 			const rwCount = r.rewritten ?? 0;
 			const locCount = r.local ?? 0;
-			const cacheCount =
-				r.cached ??
-				(statsData && statsData.total_requests > 0
-					? Math.round(
-							(statsData.cache_hits / statsData.total_requests) *
-								Math.max(0, total - blkCount - rwCount - locCount),
-						)
-					: Math.floor(Math.max(0, total - blkCount - rwCount - locCount) * 0.4));
-			const fwdCount =
-				r.forwarded ?? Math.max(0, total - cacheCount - blkCount - rwCount - locCount);
+			const cacheCount = r.cached ?? 0;
+			const fwdCount = r.forwarded ?? 0;
 
 			return {
 				date,

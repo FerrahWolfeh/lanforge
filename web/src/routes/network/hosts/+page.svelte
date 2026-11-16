@@ -41,11 +41,16 @@
 				hostList(),
 				listDevices(),
 			]);
+			// A failed call keeps the last good data for its table.
 			if (hRes.status === "fulfilled") {
 				hosts = hRes.value;
+			} else {
+				toast.error("Failed to load static host rules");
 			}
 			if (dRes.status === "fulfilled") {
 				discoveredDevices = dRes.value.devices;
+			} else {
+				toast.error("Failed to load discovered devices");
 			}
 		} catch {
 			toast.error("Failed to load static host configurations");

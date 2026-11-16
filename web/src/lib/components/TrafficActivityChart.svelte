@@ -20,7 +20,6 @@
 	import type {
 		DnsAnalyticsResponse,
 		StatusResponse,
-		DnsStatsResponse,
 		TrafficTelemetryResponse,
 		TrafficStatusResponse,
 	} from "$lib/api/types";
@@ -34,7 +33,6 @@
 		telemetryData?: TrafficTelemetryResponse | null;
 		statusData?: StatusResponse | null;
 		trafficStatus?: TrafficStatusResponse | null;
-		dnsData?: DnsStatsResponse | null;
 		analyticsData?: DnsAnalyticsResponse | null;
 	}
 
@@ -47,7 +45,6 @@
 		telemetryData = null,
 		statusData = null,
 		trafficStatus = null,
-		dnsData = null,
 		analyticsData = null,
 	}: Props = $props();
 
@@ -351,13 +348,10 @@
 		return Array.from({ length: BUCKET_COUNT }, (_, i) => {
 			const bucketMs = currentBucketMs - (BUCKET_COUNT - 1 - i) * BUCKET_MS;
 			const date = new Date(bucketMs);
-			const label = `${date.getHours().toString().padStart(2, "0")}:${date.getMinutes().toString().padStart(2, "0")}`;
-
 			const r = ratesMap.get(bucketMs);
 			if (!r) {
 				return {
 					date,
-					label,
 					timestamp: bucketMs,
 					total: 0,
 					cached: 0,
@@ -365,15 +359,10 @@
 			}
 
 			const total = r.count;
-			const cacheCount =
-				r.cached ??
-				(dnsData && dnsData.total_requests > 0
-					? Math.round((dnsData.cache_hits / dnsData.total_requests) * total)
-					: Math.floor(total * 0.4));
+			const cacheCount = r.cached ?? 0;
 
 			return {
 				date,
-				label,
 				timestamp: bucketMs,
 				total,
 				cached: cacheCount,
@@ -440,10 +429,12 @@
 							<Card.Title class="text-base font-semibold">
 								{activeMode === "bandwidth" ? title : "Gateway DNS Activity"}
 							</Card.Title>
-							<div class="flex items-center gap-1.5 rounded-full border border-success/30 bg-success/10 px-2 py-0.5 text-xs font-medium text-success">
-								<span class="size-1.5 rounded-full bg-success"></span>
-								<span>{activeMode === "bandwidth" ? "Live Stream" : "Online"}</span>
-							</div>
+							{#if activeMode === "bandwidth" ? telemetryData : analyticsData}
+								<div class="flex items-center gap-1.5 rounded-full border border-success/30 bg-success/10 px-2 py-0.5 text-xs font-medium text-success">
+									<span class="size-1.5 rounded-full bg-success"></span>
+									<span>{activeMode === "bandwidth" ? "Live Stream" : "Online"}</span>
+								</div>
+							{/if}
 						</div>
 						<p class="text-muted-foreground text-xs mt-0.5">
 							{#if description}
@@ -537,7 +528,7 @@
 					<div class="hidden sm:flex flex-col gap-0.5 text-right">
 						<span class="text-xs font-medium text-muted-foreground">Peak Window</span>
 						<span class="text-foreground font-semibold tabular-nums">
-							{dnsStatsValues.peakBucket} <span class="text-xs font-normal text-muted-foreground">pkts</span>
+							{dnsStatsValues.peakBucket} <span class="text-xs font-normal text-muted-foreground">queries</span>
 						</span>
 					</div>
 					<div class="flex flex-col gap-0.5 text-right">
@@ -693,7 +684,7 @@
 	<!-- Chart Canvas -->
 	<Card.Content class="p-4 sm:p-6">
 		{#if activeMode === "bandwidth"}
-			{#if loading && trafficHistory.length === 0}
+			{#if loading && !telemetryData}
 				<Skeleton class="h-[210px] w-full" />
 			{:else}
 				<Chart.Container config={trafficChartConfig} class="aspect-auto h-[210px] w-full">
@@ -789,7 +780,7 @@
 		<div class="flex flex-wrap items-center justify-between gap-3 w-full text-xs text-muted-foreground font-mono">
 			<div class="flex items-center gap-2">
 				<ZapIcon class="size-3.5 text-muted-foreground" />
-				<span>Gateway Uplink: <span class="text-foreground font-semibold font-sans">{detectedWan || statusData?.network?.lan_iface || "Auto"}</span></span>
+				<span>Gateway Uplink: <span class="text-foreground font-semibold font-sans">{detectedWan || "Not detected"}</span></span>
 			</div>
 			{#if showConntrack}
 				<div class="flex items-center gap-2">

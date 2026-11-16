@@ -50,20 +50,27 @@
 					dnsAdblockUrls(),
 				]);
 
+			// A failed call keeps the last good data for its card.
 			if (statusRes.status === "fulfilled" && statusRes.value) {
 				status = statusRes.value;
+			} else if (statusRes.status === "rejected") {
+				toast.error("Failed to load adblock status");
 			}
 			if (statsRes.status === "fulfilled" && statsRes.value) {
 				stats = statsRes.value;
+			} else if (statsRes.status === "rejected") {
+				toast.error("Failed to load DNS statistics");
 			}
 			if (analyticsRes.status === "fulfilled" && analyticsRes.value) {
 				analytics = analyticsRes.value;
+			} else if (analyticsRes.status === "rejected") {
+				toast.error("Failed to load DNS analytics");
 			}
 			if (sourcesRes.status === "fulfilled" && sourcesRes.value) {
 				sources = sourcesRes.value;
+			} else if (sourcesRes.status === "rejected") {
+				toast.error("Failed to load adblock sources");
 			}
-		} catch {
-			toast.error("Failed to load adblock telemetry");
 		} finally {
 			loading = false;
 		}

@@ -194,6 +194,7 @@
 	itemName="events"
 	searchPlaceholder="Search event kind, MAC, IP, hostname, or attributes..."
 	bind:searchQuery
+	onSearchChange={() => (pageIndex = 0)}
 	{loading}
 	columns={5}
 	minTableWidth="min-w-[700px]"

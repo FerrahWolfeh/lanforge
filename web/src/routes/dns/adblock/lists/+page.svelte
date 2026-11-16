@@ -62,6 +62,7 @@
 	let copiedUrl = $state<string | null>(null);
 	let updatingAll = $state(false);
 	let groupNames = $state<string[]>([]);
+	let loadError = $state(false);
 
 	function formatTimestamp(ts?: number | null): string {
 		if (!ts) return "Pending";
@@ -83,14 +84,21 @@
 				dnsAdblockSources(),
 				dnsAdblockGroups(),
 			]);
-			const groups = groupsRes.status === "fulfilled" ? (groupsRes.value?.groups ?? []) : [];
+			// A failed request keeps the table as it was: a blank table would read as "no lists".
+			if (urlsRes.status === "rejected") toast.error("Failed to load adblock source URLs");
+			if (statusRes.status === "rejected") toast.error("Failed to load adblock source status");
+			if (groupsRes.status === "rejected") toast.error("Failed to load adblock groups");
+			if (urlsRes.status === "rejected" || statusRes.status === "rejected" || groupsRes.status === "rejected") {
+				loadError = true;
+				return;
+			}
+			loadError = false;
+
+			const groups = groupsRes.value?.groups ?? [];
 			groupNames = groups.map((g) => g.name);
 
-			const urls = urlsRes.status === "fulfilled" ? urlsRes.value : [];
-			const statuses =
-				statusRes.status === "fulfilled" && statusRes.value?.sources
-					? statusRes.value.sources
-					: [];
+			const urls = urlsRes.value;
+			const statuses = statusRes.value?.sources ?? [];
 
 			rawUrls = urls;
 
@@ -326,7 +334,9 @@
 					{:else if filteredSources.length === 0}
 						<Table.Row>
 							<Table.Cell colspan={6} class="h-32 text-center text-muted-foreground text-xs">
-								{#if searchQuery}
+								{#if loadError}
+									Could not load the adblock lists. Refresh to try again.
+								{:else if searchQuery}
 									No source lists match your search query.
 								{:else}
 									No adblock lists configured yet. Click "Add Source" or select a preset above.

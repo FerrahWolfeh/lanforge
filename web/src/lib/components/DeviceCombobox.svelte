@@ -33,8 +33,12 @@
 
 	const activeDevices = $derived(providedDevices ?? loadedDevices);
 
+	// Loaded once: on mount and on each focus would list the devices again. A failed load is retried on the next focus.
+	let devicesRequested = false;
+
 	async function fetchDevicesIfNeeded() {
-		if (providedDevices !== null) return;
+		if (providedDevices !== null || devicesRequested) return;
+		devicesRequested = true;
 		try {
 			const res = await listDevices();
 			if (res && res.devices) {
@@ -42,6 +46,7 @@
 			}
 		} catch {
 			// silent fallback
+			devicesRequested = false;
 		}
 	}
 

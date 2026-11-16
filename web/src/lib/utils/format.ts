@@ -160,3 +160,11 @@ export function adblockClientNames(devices: { mac: string; name: string }[]): st
 export function adblockClientMacs(devices: { mac: string; name: string }[]): string {
 	return devices.map((d) => `${d.name}: ${d.mac}`).join("\n");
 }
+
+/**
+ * A reverse-resolver subnet (`{ addr, prefix_len }`, as the daemon sends it) as CIDR text.
+ * A string is already CIDR and passes through.
+ */
+export function formatSubnet(subnet: string | { addr: string; prefix_len: number }): string {
+	return typeof subnet === "string" ? subnet : `${subnet.addr}/${subnet.prefix_len}`;
+}

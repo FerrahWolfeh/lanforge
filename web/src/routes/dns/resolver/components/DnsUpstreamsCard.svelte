@@ -78,9 +78,6 @@
 	function getUpstreamAddr(u: DnsUpstreamEntry): string {
 		if (u.host_name && typeof u.target === "string") return `${u.host_name} (${u.target})`;
 		if (typeof u.addr === "string") return u.addr;
-		if (u.addr && typeof u.addr === "object" && (u.addr as any).addr) {
-			return (u.addr as any).addr;
-		}
 		if (typeof u.target === "string") return u.target;
 		if (typeof u.url === "string") return u.url;
 		return String(u.target ?? u.addr ?? u.url ?? "");

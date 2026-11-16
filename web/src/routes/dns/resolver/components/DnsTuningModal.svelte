@@ -46,8 +46,8 @@
 					selectedMode = m;
 				}
 			}
-		} catch (err) {
-			console.error("Failed to load upstream resolution mode:", err);
+		} catch (err: any) {
+			toast.error(`Failed to load DNS upstream mode: ${err.message || String(err)}`);
 		} finally {
 			loadingMode = false;
 		}

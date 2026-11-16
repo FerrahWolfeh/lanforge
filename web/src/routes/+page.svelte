@@ -6,7 +6,6 @@
 	import { formatBytes, formatBuild, formatIpv6Prefix, formatUptime, createPolling } from "$lib/utils";
 	import {
 		status,
-		dnsStats,
 		dhcpPools,
 		listDevices,
 		scan,
@@ -16,7 +15,6 @@
 	import {
 		normalizeServices,
 		type StatusResponse,
-		type DnsStatsResponse,
 		type DnsAnalyticsResponse,
 		type DhcpPoolsResponse,
 		type DeviceEntry,
@@ -45,7 +43,6 @@
 	const trafficTelemetry = trafficTelemetryFeed();
 
 	let statusData = $state<StatusResponse | null>(null);
-	let dnsData = $state<DnsStatsResponse | null>(null);
 	let poolsData = $state<DhcpPoolsResponse | null>(null);
 	let devicesData = $state<{
 		devices: DeviceEntry[];
@@ -59,16 +56,15 @@
 	async function loadAll() {
 		loadingData = true;
 		try {
-			const [s, dns, pools, dev, aRes, telem] = await Promise.allSettled([
+			const [s, pools, dev, aRes, telem] = await Promise.allSettled([
 				status(),
-				dnsStats(),
 				dhcpPools(),
 				listDevices(),
 				dnsAnalytics(10),
 				trafficTelemetry(),
 			]);
+			// A failed call keeps the last good data for its panel.
 			if (s.status === "fulfilled") statusData = s.value;
-			if (dns.status === "fulfilled") dnsData = dns.value;
 			if (pools.status === "fulfilled") poolsData = pools.value;
 			if (dev.status === "fulfilled") {
 				devicesData = dev.value;
@@ -78,6 +74,13 @@
 			}
 			if (telem.status === "fulfilled") {
 				telemetryData = telem.value;
+			}
+			const results = [s, pools, dev, aRes, telem];
+			const failed = results.filter((r) => r.status === "rejected").length;
+			if (failed === results.length) {
+				toast.error("Failed to load dashboard data");
+			} else if (failed > 0) {
+				toast.error(`Failed to load ${failed} of ${results.length} dashboard sources`);
 			}
 		} finally {
 			loadingData = false;
@@ -282,7 +285,6 @@
 		title="Real-Time Bandwidth & Throughput"
 		{analyticsData}
 		{statusData}
-		{dnsData}
 		{telemetryData}
 	/>
 

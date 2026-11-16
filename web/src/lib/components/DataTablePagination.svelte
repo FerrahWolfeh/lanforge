@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from "svelte";
 	import { Button } from "$lib/components/ui/button";
 	import ChevronLeftIcon from "@lucide/svelte/icons/chevron-left";
 	import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
@@ -30,6 +31,14 @@
 	}: Props = $props();
 
 	const totalPages = $derived(Math.max(1, Math.ceil(totalItems / pageSize)));
+
+	// The total can shrink under the current page (a filter, a refresh): fall back to the last page.
+	$effect(() => {
+		if (pageIndex > totalPages - 1) {
+			pageIndex = totalPages - 1;
+			untrack(() => onPageChange?.(pageIndex));
+		}
+	});
 	const startItem = $derived(totalItems > 0 ? pageIndex * pageSize + 1 : 0);
 	const endItem = $derived(Math.min((pageIndex + 1) * pageSize, totalItems));
 

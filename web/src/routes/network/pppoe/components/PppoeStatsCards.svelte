@@ -50,11 +50,11 @@
 
 	function formatAuthMethod(auth?: string): string {
 		switch (auth) {
-			case "chap_md5": return "CHAP (MD5)";
+			case "chap_md5": return "CHAP-MD5";
 			case "pap": return "PAP (Plaintext)";
 			case "mschap_v2": return "MS-CHAPv2";
 			case "none": return "None";
-			default: return auth || "CHAP (MD5)";
+			default: return auth || "CHAP-MD5";
 		}
 	}
 </script>

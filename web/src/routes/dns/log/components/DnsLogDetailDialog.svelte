@@ -61,7 +61,7 @@
 	function formatLatency(us: number): string {
 		if (us === 0) return "0 ms";
 		if (us < 1000) return `${us} µs`;
-		return `${(us / 1000).toFixed(2)} ms`;
+		return `${(us / 1000).toFixed(1)} ms`;
 	}
 
 	function formatTimestamp(ts: number): string {

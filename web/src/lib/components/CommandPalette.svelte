@@ -347,10 +347,9 @@
 	});
 
 	$effect(() => {
-		// Reset selected index when search query changes
-		if (search) {
-			selectedIndex = 0;
-		}
+		// Reset the highlight on every change of the query, including clearing it.
+		void search;
+		selectedIndex = 0;
 	});
 
 	function executeItem(item: CommandItem) {

@@ -13,6 +13,7 @@
 	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
 	import CopyIcon from "@lucide/svelte/icons/copy";
 	import type { ReverseResolverEntry } from "$lib/api/types";
+	import { formatSubnet } from "$lib/utils";
 
 	let {
 		loading = true,
@@ -28,20 +29,6 @@
 		/** False hides add and remove (the session lacks upstream_write). */
 		canEdit?: boolean;
 	} = $props();
-
-	function formatSubnet(s: any): string {
-		if (!s) return "";
-		if (typeof s === "string") return s;
-		if (typeof s === "object") {
-			if (s.subnet) return formatSubnet(s.subnet);
-			if (s.net && s.prefix !== undefined) return `${s.net}/${s.prefix}`;
-			if (s.cidr) return s.cidr;
-			if (s.ip && s.mask) return `${s.ip}/${s.mask}`;
-			if (s.addr && s.prefix_len !== undefined)
-				return `${s.addr}/${s.prefix_len}`;
-		}
-		return String(s);
-	}
 
 	function formatResolverUri(r: ReverseResolverEntry): string {
 		if (!r) return "—";
@@ -138,7 +125,7 @@
 											<DropdownMenu.Item
 												onclick={() => {
 													const subnet =
-														formatSubnet(r);
+														formatSubnet(r.subnet);
 													navigator.clipboard.writeText(
 														subnet,
 													);

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { auth } from "$lib/stores/auth.svelte";
+import { formatSubnet } from "$lib/utils";
 	import { Button } from "$lib/components/ui/button";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import * as Field from "$lib/components/ui/field";
@@ -119,12 +120,15 @@
 				dnsAnalytics(10),
 			]);
 
+			// A failed call keeps the last good data for its card.
 			if (sRes.status === "fulfilled") statsData = sRes.value;
+			else toast.error("Failed to load DNS statistics");
 			if (uRes.status === "fulfilled") upstreams = uRes.value;
+			else toast.error("Failed to load upstream DNS servers");
 			if (rRes.status === "fulfilled") reverseResolvers = rRes.value;
+			else toast.error("Failed to load PTR resolvers");
 			if (aRes.status === "fulfilled") analyticsData = aRes.value;
-		} catch (err: any) {
-			toast.error("Failed to load DNS resolver data");
+			else toast.error("Failed to load DNS analytics");
 		} finally {
 			loading = false;
 		}
@@ -156,9 +160,6 @@
 
 	function getUpstreamAddrStr(u: DnsUpstreamEntry): string {
 		if (typeof u.addr === "string") return u.addr;
-		if (u.addr && typeof u.addr === "object" && (u.addr as any).addr) {
-			return (u.addr as any).addr;
-		}
 		if (typeof u.target === "string") return u.target;
 		if (typeof u.url === "string") return u.url;
 		return String(u.target ?? u.addr ?? u.url ?? "");
@@ -201,18 +202,6 @@
 		} finally {
 			reverseSubmitting = false;
 		}
-	}
-
-	function formatSubnet(subnet: any): string {
-		if (typeof subnet === "string") return subnet;
-		if (subnet && typeof subnet === "object") {
-			if (subnet.net && subnet.prefix !== undefined) {
-				return `${subnet.net}/${subnet.prefix}`;
-			}
-			if (subnet.cidr) return subnet.cidr;
-			if (subnet.ip && subnet.mask) return `${subnet.ip}/${subnet.mask}`;
-		}
-		return String(subnet ?? "");
 	}
 
 	async function handleRemoveReverse(item: ReverseResolverEntry) {
@@ -283,7 +272,7 @@
 		<!-- 2. Time-Series Activity Chart & Query Types Breakdown  -->
 		<div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
 			<div class="lg:col-span-2">
-				<DnsResolverActivityChart {loading} {analyticsData} {statsData} />
+				<DnsResolverActivityChart {loading} {analyticsData} />
 			</div>
 			<div class="lg:col-span-1">
 				<DnsQueryTypesCard {loading} {analyticsData} />

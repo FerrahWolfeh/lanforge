@@ -14,7 +14,7 @@
 	import { commandState } from "$lib/stores/command.svelte";
 	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
 
-	let { uptime = $bindable(0) }: { uptime?: number } = $props();
+	let { uptime = 0 }: { uptime?: number } = $props();
 	let isMobileOpen = $state(false);
 
 	const titleMap: Record<string, string> = {
@@ -120,6 +120,7 @@
 			<Tooltip.Root>
 				<Tooltip.Trigger
 					class="flex items-center gap-2 px-2.5 py-1 rounded-md hover:bg-accent/60 transition-colors border border-border"
+					aria-label={uptime > 0 ? "Daemon status: live" : "Daemon status: offline"}
 				>
 					<span class="relative flex size-2 shrink-0">
 						<span
