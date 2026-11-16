@@ -153,7 +153,8 @@
 			{#if showSearch || filters || actions}
 				<div class="flex flex-wrap items-center gap-2">
 					{#if showSearch}
-						<div class="relative w-full sm:w-60">
+						<!-- Phones: search and the action buttons share the first line, filters take the second. -->
+						<div class="relative min-w-0 flex-1 basis-40 sm:flex-none sm:basis-auto sm:w-60">
 							<SearchIcon
 								class="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground"
 							/>
@@ -169,11 +170,15 @@
 					{/if}
 
 					{#if filters}
-						{@render filters()}
+						<div class="order-last flex w-full flex-wrap items-center gap-2 sm:order-none sm:w-auto">
+							{@render filters()}
+						</div>
 					{/if}
 
 					{#if actions}
-						{@render actions()}
+						<div class="flex items-center gap-2">
+							{@render actions()}
+						</div>
 					{/if}
 				</div>
 			{/if}

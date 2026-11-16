@@ -225,14 +225,16 @@
 			size="sm"
 			onclick={onScan}
 			disabled={scanning}
+			aria-label="Scan Network"
+			title="Scan Network"
 			class="h-8 text-xs gap-1.5"
 		>
 			{#if scanning}
 				<span class="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent"></span>
 			{:else}
-				<ZapIcon class="size-3.5 text-muted-foreground" />
+				<ZapIcon class="size-3.5" />
 			{/if}
-			<span>Scan Network</span>
+			<span class="hidden sm:inline">Scan Network</span>
 		</Button>
 		{/if}
 	{/snippet}
