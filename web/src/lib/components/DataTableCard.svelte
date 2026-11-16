@@ -65,8 +65,9 @@
 		emptyFilteredMessage,
 		emptyAction,
 		minTableWidth = "min-w-[750px]",
-		// Phones get no fixed height: the page scrolls, not a box inside it.
-		containerHeight = "md:h-[calc(100dvh-250px)] md:min-h-[480px] md:max-h-[750px]",
+		// The card is as tall as its rows, capped near the viewport so the header and pager stay in
+		// view. Phones get no cap: the page scrolls, not a box inside it.
+		containerHeight = "md:max-h-[calc(100dvh-17rem)]",
 		showPagination = true,
 		pageIndex = $bindable(0),
 		pageSize = $bindable(50),
