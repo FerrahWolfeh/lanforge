@@ -119,8 +119,8 @@ const SERVICE_REGISTRY: Record<string, Omit<ServiceMeta, 'id'>> = {
 		tag: 'PXE Boot',
 		proto: 'UDP Port 69',
 		description: 'Serves boot files to devices that start from the network (PXE)',
-		configHref: '/system',
-		configLabel: 'System Status',
+		configHref: '/tftp',
+		configLabel: 'TFTP Settings',
 		icon: FolderIcon,
 		canControl: true
 	},
@@ -199,6 +199,17 @@ const SERVICE_REGISTRY: Record<string, Omit<ServiceMeta, 'id'>> = {
 export function getServiceMeta(id?: string, name?: string): ServiceMeta {
 	const rawId = (id || '').toLowerCase().trim();
 	const rawName = (name || '').toLowerCase().trim();
+
+	// The daemon's ServiceId names first: the substring heuristics below would map "mdns" to DNS.
+	const DAEMON_IDS: Record<string, string> = {
+		dhcp4: 'dhcpv4',
+		dhcp6: 'dhcpv6',
+		discovery: 'monitor',
+		uds: 'control',
+		mdns: 'mdns'
+	};
+	const alias = DAEMON_IDS[rawId];
+	if (alias && SERVICE_REGISTRY[alias]) return { id: alias, ...SERVICE_REGISTRY[alias] };
 
 	// Match by known ID first
 	for (const [key, meta] of Object.entries(SERVICE_REGISTRY)) {
