@@ -15,6 +15,7 @@ import type {
 	AuthToken,
 	BlockingMode,
 	DeviceDnsResponse,
+	DeviceRulesResponse,
 	DeviceEntry,
 	DevicesMeta,
 	DevicesResponse,
@@ -424,6 +425,9 @@ export const whois = async (target: string): Promise<WhoisResponse> => {
 /** The device's DNS activity over the last day. */
 export const deviceDns = (mac: string) =>
 	get<DeviceDnsResponse>(`/devices/${encodeURIComponent(mac)}/dns`);
+/** The forwards, rewrites and name bindings the daemon resolves to the device. */
+export const deviceRules = (mac: string) =>
+	get<DeviceRulesResponse>(`/devices/${encodeURIComponent(mac)}/rules`);
 export const purge = (target: string) => del<void>(`/devices/${encodeURIComponent(target)}`);
 export const wol = (target: string) =>
 	post<void>(`/devices/${encodeURIComponent(target)}/wol`);

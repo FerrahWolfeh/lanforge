@@ -9,8 +9,7 @@
 		deviceDns,
 		wol,
 		purge,
-		firewallConfig,
-		dnsRewriteList,
+		deviceRules,
 		dnsAdblockGroups,
 		dnsBlock,
 		dnsAllow,
@@ -25,8 +24,9 @@
 		type DeviceDnsResponse,
 		type DeviceEntry,
 		type HostConfigEntry,
+		type DevicePortForward,
+		type DeviceRulesResponse,
 		type PortForwardRule,
-		type RewriteRule,
 	} from "$lib/api/types";
 	import { createDebounce, formatTimeAgo, copyToClipboard } from "$lib/utils";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
@@ -61,8 +61,7 @@
 	let notFound = $state(false);
 	let dns = $state<DeviceDnsResponse | null>(null);
 	let dnsLoading = $state(true);
-	let forwards = $state<PortForwardRule[]>([]);
-	let rewrites = $state<RewriteRule[]>([]);
+	let rules = $state<DeviceRulesResponse | null>(null);
 	let adblock = $state<string | null>(null);
 
 	let hostOpen = $state(false);
@@ -112,9 +111,11 @@
 	}
 
 	async function loadRules() {
-		const [fw, rw] = await Promise.allSettled([firewallConfig(), dnsRewriteList()]);
-		forwards = fw.status === "fulfilled" ? (fw.value.port_forwards ?? []) : [];
-		rewrites = rw.status === "fulfilled" ? rw.value : [];
+		try {
+			rules = await deviceRules(mac);
+		} catch {
+			rules = null;
+		}
 	}
 
 	function loadAll() {
@@ -124,7 +125,11 @@
 		loadRules();
 	}
 
-	const debouncedDevice = createDebounce(() => loadDevice(), 500);
+	// Name bindings and forward targets move with the device's addresses and names.
+	const debouncedDevice = createDebounce(() => {
+		loadDevice();
+		loadRules();
+	}, 500);
 
 	onMount(() => {
 		try {
@@ -156,41 +161,12 @@
 	const name = $derived(named ? (device?.hostname as string) : "Unnamed device");
 	const v4 = $derived(device?.v4?.ip ?? device?.primary_v4 ?? null);
 	const v4Reserved = $derived(Boolean(device?.v4?.reserved));
-	const addresses = $derived(
-		new Set(
-			[v4, device?.primary_v6, ...(device?.ipv6_addrs ?? []).map((a) => a.addr)]
-				.filter((a): a is string => Boolean(a))
-				.map((a) => a.toLowerCase())
-		)
-	);
-	const hasGua = $derived((device?.ipv6_addrs ?? []).some((a) => a.kind === "Gua"));
+	const myForwards = $derived(rules?.port_forwards ?? []);
+	const myRewrites = $derived(rules?.rewrites ?? []);
 
-	/** A `dev:` reference names this device by MAC or by its current name. */
-	function namesThisDevice(ref: string): boolean {
-		const id = ref.slice(4).split("|")[0].trim().toLowerCase();
-		return id === mac.toLowerCase() || (named && id === device?.hostname.toLowerCase());
-	}
-
-	const myForwards = $derived(
-		forwards
-			.map((rule) => {
-				const target = rule.internal_ip.trim();
-				const byDevice = target.toLowerCase().startsWith("dev:");
-				const mine = byDevice ? namesThisDevice(target) : addresses.has(target.toLowerCase());
-				return mine ? { rule, byDevice } : null;
-			})
-			.filter((f): f is { rule: PortForwardRule; byDevice: boolean } => f !== null)
-	);
-
-	const myRewrites = $derived(
-		rewrites.filter((r) => {
-			const answer = formatRewriteAnswer(r.answer).trim();
-			return answer.toLowerCase().startsWith("dev:") ? namesThisDevice(answer) : addresses.has(answer.toLowerCase());
-		})
-	);
-
-	function families(f: { rule: PortForwardRule; byDevice: boolean }): { v4: boolean; v6: boolean } {
-		if (!f.byDevice) return { v4: !f.rule.internal_ip.includes(":"), v6: f.rule.internal_ip.includes(":") };
+	/** The families a forward asks for: a `dev:` rule both unless limited, an address its own. */
+	function families(f: DevicePortForward): { v4: boolean; v6: boolean } {
+		if (!f.by_device) return { v4: !f.rule.internal_ip.includes(":"), v6: f.rule.internal_ip.includes(":") };
 		return { v4: f.rule.family !== "ipv6", v6: f.rule.family !== "ipv4" };
 	}
 	const port = (r: PortForwardRule) => `${String(r.protocol).toUpperCase()} ${r.external_port}`;
@@ -199,7 +175,13 @@
 	const problems = $derived.by(() => {
 		const out: { title: string; text: string; action?: "reserve" }[] = [];
 		if (!device) return out;
-		const pinned = myForwards.filter((f) => !f.byDevice && f.rule.internal_ip === v4);
+		if (rules?.refused_name) {
+			out.push({
+				title: `Announced the name ${rules.refused_name.name},`,
+				text: ` but rules bind that name to ${rules.refused_name.owner}, so this device keeps its own name.`,
+			});
+		}
+		const pinned = myForwards.filter((f) => !f.by_device && f.rule.internal_ip === v4);
 		if (pinned.length && !v4Reserved) {
 			out.push({
 				title: `${pinned.map((f) => port(f.rule)).join(", ")} forwards to ${v4},`,
@@ -207,11 +189,20 @@
 				action: "reserve",
 			});
 		}
-		const v6Rules = myForwards.filter((f) => f.byDevice && families(f).v6);
-		if (v6Rules.length && device.online && !hasGua) {
+		// Where the daemon sends them: a side with no target reaches nothing.
+		const noV4 = myForwards.filter((f) => f.by_device && families(f).v4 && !rules?.forward_v4);
+		if (noV4.length) {
 			out.push({
-				title: "No global IPv6 address:",
-				text: ` the IPv6 side of ${v6Rules.map((f) => port(f.rule)).join(", ")} reaches nothing.`,
+				title: "No IPv4 lease or reservation:",
+				text: ` the IPv4 side of ${noV4.map((f) => port(f.rule)).join(", ")} reaches nothing.`,
+				action: "reserve",
+			});
+		}
+		const noV6 = myForwards.filter((f) => f.by_device && families(f).v6 && !rules?.forward_v6.length);
+		if (noV6.length && device.online) {
+			out.push({
+				title: "No stable IPv6 address:",
+				text: ` the IPv6 side of ${noV6.map((f) => port(f.rule)).join(", ")} reaches nothing. Pinholes need a DHCPv6 lease or a reserved suffix; temporary (SLAAC) addresses are never used.`,
 			});
 		}
 		if (!device.online && myForwards.length) {
@@ -454,7 +445,7 @@
 			<StatusLine tone="warning" title={p.title}>
 				{p.text}
 				{#if p.action === "reserve" && canDevice}
-					<Button size="xs" variant="outline" class="ml-2" onclick={openHost}>Reserve {v4}</Button>
+					<Button size="xs" variant="outline" class="ml-2" onclick={openHost}>{v4 ? `Reserve ${v4}` : "Reserve an address"}</Button>
 				{/if}
 			</StatusLine>
 		{/each}
@@ -508,7 +499,7 @@
 						<p class="px-3 py-2.5 text-sm text-muted-foreground">No port is forwarded to this device.</p>
 					{:else}
 						<ul class="divide-y divide-border">
-							{#each myForwards as f, i (i)}
+							{#each myForwards as f (f.index)}
 								{@const fam = families(f)}
 								<li class="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm">
 									<span class="flex min-w-32 items-center gap-1 font-mono text-xs font-medium">
@@ -517,7 +508,7 @@
 									<span class="min-w-0 flex-1">
 										{f.rule.comment || "Port forward"}
 										<span class="block text-xs text-muted-foreground">
-											{f.byDevice ? `to ${f.rule.internal_ip}, follows the device` : `to ${f.rule.internal_ip} only`}{f.rule.enable_hairpin ? " · hairpin" : ""}
+											{f.by_device ? `to ${f.rule.internal_ip}, follows the device` : `to ${f.rule.internal_ip} only`}{f.rule.enable_hairpin ? " · hairpin" : ""}
 										</span>
 									</span>
 									<span class="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
@@ -545,8 +536,8 @@
 							name,
 							device.origin === "Static"
 								? "set in lanforge.toml"
-								: myForwards.some((f) => f.byDevice) || myRewrites.length
-									? `rules name it as dev:${device.hostname}, so the name stays with this device`
+								: rules?.bound_names.length
+									? `bound to this device by rules naming dev:${rules.bound_names.join(", dev:")}`
 									: "as the device announces it"
 						)}
 						{#each myRewrites as r (`${r.domain}-${r.rtype}`)}

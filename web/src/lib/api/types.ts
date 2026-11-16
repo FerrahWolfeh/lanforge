@@ -658,6 +658,29 @@ export interface DeviceDnsResponse {
 	logging_off: boolean;
 }
 
+/** A port forward that reaches a device, as the daemon resolves it. */
+export interface DevicePortForward {
+	/** Position in the firewall's `port_forwards`. */
+	index: number;
+	rule: PortForwardRule;
+	/** Targets the device by `dev:` reference, not a fixed address. */
+	by_device: boolean;
+}
+
+/** What the daemon resolves to one device (`/devices/{mac}/rules`). */
+export interface DeviceRulesResponse {
+	/** Where IPv4 forwards land now: the lease or reservation. */
+	forward_v4: string | null;
+	/** Where IPv6 pinholes land now: only predictable GUAs (DHCPv6 lease, reserved suffix). */
+	forward_v6: string[];
+	port_forwards: DevicePortForward[];
+	rewrites: RewriteRule[];
+	/** Names `dev:` rules bound to this device (lowercase). */
+	bound_names: string[];
+	/** A name the device announced but another device holds. */
+	refused_name: { name: string; owner: string } | null;
+}
+
 export interface DevicesMeta {
 	total: number;
 	online: number;
