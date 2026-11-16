@@ -5,6 +5,7 @@
 	import { toast } from "svelte-sonner";
 	import { auth } from "$lib/stores/auth.svelte";
 	import {
+		ApiError,
 		whois,
 		deviceDns,
 		wol,
@@ -30,7 +31,7 @@
 		type DeviceRulesResponse,
 		type PortForwardRule,
 	} from "$lib/api/types";
-	import { createDebounce, createPolling, formatTimeAgo, copyToClipboard } from "$lib/utils";
+	import { createDebounce, createPolling, formatTimeAgo, copyToClipboard, errorMessage } from "$lib/utils";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import { Button } from "$lib/components/ui/button";
 	import { Skeleton } from "$lib/components/ui/skeleton";
@@ -84,10 +85,10 @@
 			if (m !== mac) return;
 			device = res;
 			notFound = false;
-		} catch (err: any) {
+		} catch (err) {
 			if (m !== mac) return;
-			if (err?.status === 404) notFound = true;
-			else toast.error(err?.message ?? "Failed to load the device");
+			if (err instanceof ApiError && err.status === 404) notFound = true;
+			else toast.error(errorMessage(err, "Failed to load the device"));
 		}
 	}
 
@@ -293,8 +294,8 @@
 		try {
 			await wol(mac);
 			toast.success(`Wake-on-LAN sent to ${name}`);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to send Wake-on-LAN");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to send Wake-on-LAN"));
 		}
 	}
 
@@ -307,8 +308,8 @@
 				const hosts = await hostList();
 				if (m !== mac) return;
 				existing = hosts.find((h) => h.mac.toLowerCase() === mac.toLowerCase()) ?? null;
-			} catch (err: any) {
-				toast.error(err?.message ?? "Failed to load the static host");
+			} catch (err) {
+				toast.error(errorMessage(err, "Failed to load the static host"));
 				return;
 			}
 		}
@@ -330,8 +331,8 @@
 			await purge(mac);
 			toast.success(`${name} forgotten`);
 			goto("/network/devices");
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to forget the device");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to forget the device"));
 		}
 	}
 
@@ -340,8 +341,8 @@
 			await hostSet(mac, "ignore_dns_log", off ? "true" : "false");
 			toast.success(off ? `Queries of ${name} are no longer logged` : `Queries of ${name} are logged again`);
 			await Promise.all([loadDevice(), loadDns()]);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to change DNS logging");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to change DNS logging"));
 		}
 	}
 
@@ -358,8 +359,8 @@
 				toast.success(`IPv4 lease of ${name} released`);
 			}
 			await loadDevice();
-		} catch (err: any) {
-			toast.error(err?.message ?? `Failed to ${kind} the IPv4 lease`);
+		} catch (err) {
+			toast.error(errorMessage(err, `Failed to ${kind} the IPv4 lease`));
 		}
 	}
 
@@ -373,8 +374,8 @@
 				toast.success(`${domain} allowed for every device`);
 			}
 			await loadDns();
-		} catch (err: any) {
-			toast.error(err?.message ?? `Failed to ${action} ${domain}`);
+		} catch (err) {
+			toast.error(errorMessage(err, `Failed to ${action} ${domain}`));
 		}
 	}
 

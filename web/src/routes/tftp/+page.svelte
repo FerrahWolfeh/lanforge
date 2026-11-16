@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { createTimers } from "$lib/utils";
+	import { createTimers, errorMessage } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import { onDestroy, onMount } from "svelte";
 	import { Button } from "$lib/components/ui/button";
@@ -114,13 +114,13 @@
 			]);
 
 			if (optsRes.status === "rejected") {
-				toast.error(`Failed to load TFTP settings: ${optsRes.reason?.message ?? "unknown error"}`);
+				toast.error(`Failed to load TFTP settings: ${errorMessage(optsRes.reason, "unknown error")}`);
 			}
 			if (sysRes.status === "rejected") {
-				toast.error(`Failed to load system status: ${sysRes.reason?.message ?? "unknown error"}`);
+				toast.error(`Failed to load system status: ${errorMessage(sysRes.reason, "unknown error")}`);
 			}
 			if (bannersRes.status === "rejected") {
-				toast.error(`Failed to load service status: ${bannersRes.reason?.message ?? "unknown error"}`);
+				toast.error(`Failed to load service status: ${errorMessage(bannersRes.reason, "unknown error")}`);
 			}
 
 			if (optsRes.status === "fulfilled") {

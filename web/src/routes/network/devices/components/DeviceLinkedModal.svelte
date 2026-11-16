@@ -1,4 +1,5 @@
 <script lang="ts">
+import { errorMessage } from "$lib/utils";
 	import { untrack } from "svelte";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import { Button } from "$lib/components/ui/button";
@@ -55,8 +56,8 @@
 			toast.success(`Linked addresses of ${device.hostname || device.mac} saved`);
 			open = false;
 			onSaved();
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to save the linked addresses");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to save the linked addresses"));
 		} finally {
 			submitting = false;
 		}

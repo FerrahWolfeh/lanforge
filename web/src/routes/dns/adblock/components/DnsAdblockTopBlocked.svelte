@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { copyToClipboard } from "$lib/utils";
+	import { copyToClipboard, errorMessage } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Card from "$lib/components/ui/card";
 	import { Button } from "$lib/components/ui/button";
@@ -41,8 +41,8 @@
 			await dnsAllow(domain);
 			toast.success(`Whitelisted domain: ${domain}`);
 			onAllowedDomain(domain);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to allow domain");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to allow domain"));
 		}
 	}
 

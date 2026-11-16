@@ -132,8 +132,8 @@ export async function copyToClipboard(text: string, label?: string): Promise<boo
 		await navigator.clipboard.writeText(text);
 		toast.success(label ? `Copied ${label}` : "Copied to clipboard");
 		return true;
-	} catch (err: any) {
-		toast.error(err?.message || "Failed to copy to clipboard");
+	} catch (err) {
+		toast.error(errorMessage(err, "Failed to copy to clipboard"));
 		return false;
 	}
 }
@@ -227,4 +227,16 @@ export function adblockClientMacs(devices: { mac: string; name: string }[]): str
  */
 export function formatSubnet(subnet: string | { addr: string; prefix_len: number }): string {
 	return typeof subnet === "string" ? subnet : `${subnet.addr}/${subnet.prefix_len}`;
+}
+
+/**
+ * The message of a thrown value (ApiError, Error, string), or `fallback`.
+ */
+export function errorMessage(err: unknown, fallback: string): string {
+	if (typeof err === "string") return err !== "" ? err : fallback;
+	if (typeof err === "object" && err !== null) {
+		const message = (err as { message?: unknown }).message;
+		if (typeof message === "string" && message !== "") return message;
+	}
+	return fallback;
 }

@@ -1,4 +1,5 @@
 <script lang="ts">
+import { errorMessage } from "$lib/utils";
 	import { untrack } from "svelte";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import { Button } from "$lib/components/ui/button";
@@ -42,8 +43,8 @@
 				.filter((g) => g.clients.some((c) => c.devices.length === 0 && !c.selector.startsWith("dev:")))
 				.map((g) => g.name);
 			bypass = deviceIn(res.bypass, mac);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to load adblock groups");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to load adblock groups"));
 		} finally {
 			loading = false;
 		}
@@ -69,8 +70,8 @@
 			toast.success(`Adblock groups of ${device.hostname || device.mac} saved`);
 			open = false;
 			onSaved();
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to save the adblock groups");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to save the adblock groups"));
 		} finally {
 			submitting = false;
 		}

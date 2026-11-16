@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { cleanAnswer } from "$lib/components/dns/dnsLog";
-	import { copyToClipboard } from "$lib/utils";
+	import { copyToClipboard, errorMessage } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import { Button } from "$lib/components/ui/button";
@@ -52,8 +52,8 @@
 			const res = await dnsQuery(cleanName(entry.name), entry.kind);
 			testQueryResult = JSON.stringify(res, null, 2);
 			toast.success("Query test executed successfully");
-		} catch (err: any) {
-			testQueryResult = `Error: ${err?.message ?? "Query failed"}`;
+		} catch (err) {
+			testQueryResult = `Error: ${errorMessage(err, "Query failed")}`;
 			toast.error("Query test failed");
 		} finally {
 			testingQuery = false;
@@ -68,8 +68,8 @@
 			toast.success(
 				`Added ${cleanName(entry.name)} to adblock black list`,
 			);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to block domain");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to block domain"));
 		} finally {
 			actionLoading = false;
 		}
@@ -81,8 +81,8 @@
 		try {
 			await dnsAllow(cleanName(entry.name));
 			toast.success(`Added ${cleanName(entry.name)} to allowlist`);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to allow domain");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to allow domain"));
 		} finally {
 			actionLoading = false;
 		}

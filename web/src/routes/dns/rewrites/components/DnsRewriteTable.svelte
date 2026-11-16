@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { copyToClipboard } from "$lib/utils";
+	import { copyToClipboard, errorMessage } from "$lib/utils";
 	import { RECORD_TYPE_CLASS, recordTypeClass } from "$lib/components/dns/dnsLog";
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Table from "$lib/components/ui/table";
@@ -74,8 +74,8 @@
 		try {
 			const res = await dnsQuery(dom, rule.rtype);
 			toast.success(`Resolution test for ${dom}: ${JSON.stringify(res)}`);
-		} catch (err: any) {
-			toast.error(err?.message ?? `Failed resolution test for ${dom}`);
+		} catch (err) {
+			toast.error(errorMessage(err, `Failed resolution test for ${dom}`));
 		}
 	}
 
@@ -86,8 +86,8 @@
 				`Removed rewrite rule for ${cleanDomain(rule.domain)}`,
 			);
 			onRuleDeleted();
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to delete rewrite rule");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to delete rewrite rule"));
 		}
 	}
 

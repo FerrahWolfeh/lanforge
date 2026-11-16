@@ -1,6 +1,7 @@
 import { toast } from "svelte-sonner";
 import { dnsAllow, dnsBlock } from "$lib/api/client";
 import type { AdblockSourceMatch, DnsRecordType, FilterMatch, FilterOrigin } from "$lib/api/types";
+import { errorMessage } from "$lib/utils";
 
 export const RECORD_TYPES: DnsRecordType[] = [
 	"A",
@@ -76,8 +77,8 @@ export async function quickDnsRule(action: "block" | "allow", domain: string): P
 			toast.success(`Added ${target} to allowlist`);
 		}
 		return true;
-	} catch (err: any) {
-		toast.error(err?.message ?? `Failed to ${action} domain`);
+	} catch (err) {
+		toast.error(errorMessage(err, `Failed to ${action} domain`));
 		return false;
 	}
 }

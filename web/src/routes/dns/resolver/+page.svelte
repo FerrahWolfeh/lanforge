@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { auth } from "$lib/stores/auth.svelte";
-import { formatSubnet } from "$lib/utils";
+import { formatSubnet, errorMessage } from "$lib/utils";
 	import { Button } from "$lib/components/ui/button";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import * as Field from "$lib/components/ui/field";
@@ -90,9 +90,9 @@ import { formatSubnet } from "$lib/utils";
 			} else {
 				toast.error(res.error || "Upstream test failed");
 			}
-		} catch (err: any) {
-			upstreamTestResult = { ok: false, latency_ms: 0, error: err?.message || "Failed to contact upstream" };
-			toast.error(err?.message || "Failed to reach upstream");
+		} catch (err) {
+			upstreamTestResult = { ok: false, latency_ms: 0, error: errorMessage(err, "Failed to contact upstream") };
+			toast.error(errorMessage(err, "Failed to reach upstream"));
 		} finally {
 			testingUpstream = false;
 		}
@@ -142,9 +142,9 @@ import { formatSubnet } from "$lib/utils";
 			formUpstreamDomain = "";
 			upstreamOpen = false;
 			await loadAllData();
-		} catch (err: any) {
+		} catch (err) {
 			toast.error(
-				`Failed to add upstream: ${err.message || "Invalid address"}`,
+				`Failed to add upstream: ${errorMessage(err, "Invalid address")}`,
 			);
 		} finally {
 			upstreamSubmitting = false;
@@ -188,9 +188,9 @@ import { formatSubnet } from "$lib/utils";
 			formResolverUri = "";
 			reverseOpen = false;
 			await loadAllData();
-		} catch (err: any) {
+		} catch (err) {
 			toast.error(
-				`Failed to add PTR resolver: ${err.message || "Invalid CIDR/URI"}`,
+				`Failed to add PTR resolver: ${errorMessage(err, "Invalid CIDR/URI")}`,
 			);
 		} finally {
 			reverseSubmitting = false;

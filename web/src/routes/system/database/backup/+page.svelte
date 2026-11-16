@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { downloadBlob } from "$lib/utils";
+	import { downloadBlob, errorMessage } from "$lib/utils";
 	import { toast } from "svelte-sonner";
 	import {
 		exportSystemConfig,
@@ -35,9 +35,9 @@
 			toast.success("Configuration exported successfully", {
 				description: "Saved aggregated JSON persistence snapshot.",
 			});
-		} catch (e: any) {
+		} catch (e) {
 			toast.error("Export failed", {
-				description: e?.message || "Internal server error",
+				description: errorMessage(e, "Internal server error"),
 			});
 		} finally {
 			exporting = false;
@@ -53,9 +53,9 @@
 			toast.success("TOML configuration exported", {
 				description: "Saved consolidated lanforge.toml file.",
 			});
-		} catch (e: any) {
+		} catch (e) {
 			toast.error("Export failed", {
-				description: e?.message || "Internal server error",
+				description: errorMessage(e, "Internal server error"),
 			});
 		} finally {
 			exportingToml = false;
@@ -109,9 +109,9 @@
 			selectedFile = null;
 			if (importFileInput) importFileInput.value = "";
 			await dbState.loadAll(true);
-		} catch (e: any) {
+		} catch (e) {
 			toast.error("Import failed", {
-				description: e?.message || "Internal server error",
+				description: errorMessage(e, "Internal server error"),
 			});
 		} finally {
 			importing = false;

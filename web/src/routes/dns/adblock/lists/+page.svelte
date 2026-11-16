@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { copyToClipboard, toMillis, createTimers } from "$lib/utils";
+	import { copyToClipboard, toMillis, createTimers, errorMessage } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import { onDestroy, onMount } from "svelte";
 	import * as Card from "$lib/components/ui/card";
@@ -170,8 +170,8 @@
 			await loadSources();
 			later(loadSources, 1500);
 			later(loadSources, 3500);
-		} catch (err: any) {
-			toast.error(err?.message ?? `Failed to add "${name}"`);
+		} catch (err) {
+			toast.error(errorMessage(err, `Failed to add "${name}"`));
 		}
 	}
 
@@ -189,8 +189,8 @@
 			});
 			toast.success(`Removed list: ${entry.url}`);
 			await loadSources();
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to remove source URL");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to remove source URL"));
 		}
 	}
 
@@ -200,8 +200,8 @@
 			await dnsAdblockReload();
 			toast.success("Triggered background list download & compilation");
 			later(loadSources, 1500);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to update lists");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to update lists"));
 		} finally {
 			later(() => {
 				updatingAll = false;

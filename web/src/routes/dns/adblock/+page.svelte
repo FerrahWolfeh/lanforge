@@ -1,4 +1,5 @@
 <script lang="ts">
+import { errorMessage } from "$lib/utils";
 	import { originText } from "$lib/components/dns/dnsLog";
 	import { onMount } from "svelte";
 	import { toast } from "svelte-sonner";
@@ -85,8 +86,8 @@
 		try {
 			const res = await dnsAdblockCheck(domain, checkClientInput.trim() || undefined);
 			checkResult = res;
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to check domain");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to check domain"));
 		} finally {
 			checking = false;
 		}

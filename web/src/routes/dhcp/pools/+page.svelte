@@ -20,7 +20,7 @@
 		dhcpOptionsGet,
 		dhcpReconcile,
 	} from "$lib/api/client";
-	import { parseCsvList as parseList } from "$lib/utils";
+	import { parseCsvList as parseList, errorMessage } from "$lib/utils";
 	import { ipv4Schema } from "$lib/utils/validation";
 	import type {
 		DhcpPoolsResponse,
@@ -96,13 +96,13 @@
 			]);
 
 			if (statsRes.status === "rejected") {
-				toast.error(`Failed to load pool usage: ${statsRes.reason?.message ?? "unknown error"}`);
+				toast.error(`Failed to load pool usage: ${errorMessage(statsRes.reason, "unknown error")}`);
 			}
 			if (configRes.status === "rejected") {
-				toast.error(`Failed to load pool configuration: ${configRes.reason?.message ?? "unknown error"}`);
+				toast.error(`Failed to load pool configuration: ${errorMessage(configRes.reason, "unknown error")}`);
 			}
 			if (optsRes.status === "rejected") {
-				toast.error(`Failed to load DHCP defaults: ${optsRes.reason?.message ?? "unknown error"}`);
+				toast.error(`Failed to load DHCP defaults: ${errorMessage(optsRes.reason, "unknown error")}`);
 			}
 
 			if (statsRes.status === "fulfilled") {
@@ -124,8 +124,8 @@
 				globalV4SubnetMask = optsRes.value.v4?.subnet_mask ?? "255.255.255.0";
 				globalV4LeaseTime = optsRes.value.v4?.lease_time ?? 86400;
 			}
-		} catch (err: any) {
-			toast.error(`Failed to load DHCP pools data: ${err.message}`);
+		} catch (err) {
+			toast.error(`Failed to load DHCP pools data: ${errorMessage(err, String(err))}`);
 		} finally {
 			loading = false;
 			isRefreshing = false;
@@ -144,8 +144,8 @@
 			});
 			toast.success("DHCP address scopes and pools saved successfully");
 			refreshTimer = setTimeout(() => loadAllData(false), 500);
-		} catch (err: any) {
-			toast.error(`Failed to save scopes: ${err.message}`);
+		} catch (err) {
+			toast.error(`Failed to save scopes: ${errorMessage(err, String(err))}`);
 		} finally {
 			saving = false;
 		}
@@ -162,8 +162,8 @@
 			const res = await dhcpReconcile();
 			toastReconcileResult(res);
 			await loadAllData(false);
-		} catch (err: any) {
-			toast.error(`Failed to reconcile leases: ${err.message}`);
+		} catch (err) {
+			toast.error(`Failed to reconcile leases: ${errorMessage(err, String(err))}`);
 		} finally {
 			reconciling = false;
 		}

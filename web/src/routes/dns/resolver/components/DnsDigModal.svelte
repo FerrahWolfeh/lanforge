@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { copyToClipboard } from "$lib/utils";
+	import { copyToClipboard, errorMessage } from "$lib/utils";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import * as Field from "$lib/components/ui/field";
 	import { Input } from "$lib/components/ui/input";
@@ -74,8 +74,8 @@
 			const res = await dnsQuery(digDomain.trim(), digRecordType);
 			digResult = res;
 			toast.success(`DNS ${digRecordType} lookup completed`);
-		} catch (err: any) {
-			toast.error(`DNS lookup failed: ${err.message || "Unknown error"}`);
+		} catch (err) {
+			toast.error(`DNS lookup failed: ${errorMessage(err, "Unknown error")}`);
 		} finally {
 			digLoading = false;
 		}

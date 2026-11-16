@@ -1,4 +1,5 @@
 <script lang="ts">
+import { errorMessage } from "$lib/utils";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import { Button } from "$lib/components/ui/button";
 	import { Input } from "$lib/components/ui/input";
@@ -62,8 +63,8 @@
 			}
 			open = false;
 			onSaved();
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to save the group");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to save the group"));
 		} finally {
 			submitting = false;
 		}

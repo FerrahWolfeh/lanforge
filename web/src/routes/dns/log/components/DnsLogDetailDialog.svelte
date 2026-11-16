@@ -19,7 +19,7 @@
 	import { toast } from "svelte-sonner";
 	import { dnsQuery, hostSet } from "$lib/api/client";
 	import type { DnsQueryLogEntry } from "$lib/api/types";
-	import { createSequence, copyToClipboard, formatFullDate, formatLatency } from "$lib/utils";
+	import { createSequence, copyToClipboard, formatFullDate, formatLatency, errorMessage } from "$lib/utils";
 
 	let {
 		open = $bindable(false),
@@ -63,9 +63,9 @@
 			if (!testSeq.isCurrent(seq)) return;
 			testQueryResult = JSON.stringify(res, null, 2);
 			toast.success("Diagnostic query test executed");
-		} catch (err: any) {
+		} catch (err) {
 			if (!testSeq.isCurrent(seq)) return;
-			testQueryResult = `Error: ${err?.message ?? "Query failed"}`;
+			testQueryResult = `Error: ${errorMessage(err, "Query failed")}`;
 			toast.error("Diagnostic query failed");
 		}
 		testingQuery = false;
@@ -104,8 +104,8 @@
 			await hostSet(entry.src_mac, "add_ignored_log_domain", dom);
 			toast.success(`Silenced ${dom} in logs for ${entry.src_hostname || entry.src_mac}`);
 			open = false;
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to silence domain for this client");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to silence domain for this client"));
 		} finally {
 			actionLoading = false;
 		}
@@ -118,8 +118,8 @@
 			await hostSet(entry.src_mac, "ignore_dns_log", "true");
 			toast.success(`Silenced all DNS logs for ${entry.src_hostname || entry.src_mac}`);
 			open = false;
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to silence client in logs");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to silence client in logs"));
 		} finally {
 			actionLoading = false;
 		}

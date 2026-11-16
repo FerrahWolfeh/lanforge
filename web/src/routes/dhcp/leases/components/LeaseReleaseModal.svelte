@@ -1,4 +1,5 @@
 <script lang="ts">
+import { errorMessage } from "$lib/utils";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import { Button } from "$lib/components/ui/button";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
@@ -27,8 +28,8 @@
 			toast.success(`Released DHCP lease for ${lease.address}`);
 			open = false;
 			await onReleased();
-		} catch (err: any) {
-			toast.error(err?.message || "Failed to release lease");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to release lease"));
 		} finally {
 			releasing = false;
 		}

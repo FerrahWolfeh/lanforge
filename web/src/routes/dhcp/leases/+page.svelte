@@ -13,7 +13,7 @@
 		type EventStream,
 	} from "$lib/api/client";
 	import type { LeaseEntry } from "$lib/api/types";
-	import { createDebounce } from "$lib/utils";
+	import { createDebounce, errorMessage } from "$lib/utils";
 
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import LeaseTable from "./components/LeaseTable.svelte";
@@ -39,8 +39,8 @@
 		else isRefreshing = true;
 		try {
 			allLeases = await leases();
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to load DHCP leases");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to load DHCP leases"));
 		} finally {
 			loading = false;
 			isRefreshing = false;
@@ -52,8 +52,8 @@
 			await leaseRenew(lease.mac, leaseTarget(lease));
 			toast.success(`Sent renewal trigger for ${lease.address}`);
 			await loadLeasesData(false);
-		} catch (err: any) {
-			toast.error(err?.message || "Failed to trigger lease renewal");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to trigger lease renewal"));
 		}
 	}
 
@@ -61,8 +61,8 @@
 		try {
 			await wol(mac);
 			toast.success(`Wake-on-LAN packet sent to ${mac}`);
-		} catch (err: any) {
-			toast.error(err?.message || "Failed to send WoL packet");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to send WoL packet"));
 		}
 	}
 

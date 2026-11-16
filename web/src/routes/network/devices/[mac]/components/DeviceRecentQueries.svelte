@@ -9,7 +9,7 @@
 	import { Switch } from "$lib/components/ui/switch";
 	import { dnsQueryLog, dnsLogSseUrl, hostSet, openEventStream, type EventStream } from "$lib/api/client";
 	import type { DnsQueryLogEntry } from "$lib/api/types";
-	import { createSequence, toMillis } from "$lib/utils";
+	import { createSequence, toMillis, errorMessage } from "$lib/utils";
 
 	/** The device's latest DNS queries, then live ones as they arrive. */
 	let {
@@ -46,8 +46,8 @@
 			await hostSet(mac, field, domain);
 			onChanged?.();
 			return true;
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to change the muted domains");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to change the muted domains"));
 			return false;
 		}
 	}

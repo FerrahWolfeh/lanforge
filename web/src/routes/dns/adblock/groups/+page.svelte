@@ -14,7 +14,7 @@
 	import ShieldOffIcon from "@lucide/svelte/icons/shield-off";
 	import LayersIcon from "@lucide/svelte/icons/layers";
 	import { toast } from "svelte-sonner";
-	import { adblockClientMacs, adblockClientNames } from "$lib/utils";
+	import { adblockClientMacs, adblockClientNames, errorMessage } from "$lib/utils";
 	import {
 		dnsAdblockGroups,
 		dnsAdblockGroupDelete,
@@ -54,8 +54,8 @@
 			groupLists = (sources?.sources ?? [])
 				.filter((s) => !global.has(s.url) && s.name)
 				.map((s) => s.name as string);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to load adblock groups");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to load adblock groups"));
 		} finally {
 			loading = false;
 		}
@@ -77,8 +77,8 @@
 			await dnsAdblockGroupDelete(deleting.name);
 			toast.success(`Group "${deleting.name}" removed`);
 			await load();
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to remove the group");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to remove the group"));
 		} finally {
 			deleting = null;
 			deleteOpen = false;

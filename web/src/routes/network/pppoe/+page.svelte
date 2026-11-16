@@ -1,4 +1,5 @@
 <script lang="ts">
+import { errorMessage } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Tabs from "$lib/components/ui/tabs";
 	import { Button } from "$lib/components/ui/button";
@@ -248,8 +249,8 @@
 			await pppoeUpdateConfig(payload);
 			toast.success("PPPoE configuration saved and reloaded");
 			await loadAll(true);
-		} catch (err: any) {
-			toast.error(err?.message || "Failed to save PPPoE configuration");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to save PPPoE configuration"));
 		} finally {
 			saving = false;
 		}

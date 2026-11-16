@@ -1,4 +1,5 @@
 <script lang="ts">
+import { errorMessage } from "$lib/utils";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import { Button } from "$lib/components/ui/button";
 	import { Input } from "$lib/components/ui/input";
@@ -159,8 +160,8 @@
 			toast.success(editing ? "Updated DNS rewrite rule" : "Added DNS rewrite rule");
 			open = false;
 			await onSaved();
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to save rewrite rule");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to save rewrite rule"));
 		} finally {
 			saving = false;
 		}

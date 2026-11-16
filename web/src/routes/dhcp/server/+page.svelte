@@ -5,7 +5,7 @@
 	import { toast } from "svelte-sonner";
 	import { toastReconcileResult } from "../reconcile";
 	import { dhcpOptionsGet, dhcpOptionsUpdate, dhcpReconcile } from "$lib/api/client";
-	import { parseCsvList as parseList } from "$lib/utils";
+	import { errorMessage, parseCsvList as parseList } from "$lib/utils";
 	import type { DhcpOptionsConfig, TftpOptions } from "$lib/api/types";
 
 	import DhcpServerHeader from "./components/DhcpServerHeader.svelte";
@@ -190,8 +190,8 @@
 			}
 
 			pristineJson = JSON.stringify(currentPayload());
-		} catch (err: any) {
-			toast.error(`Failed to load DHCP server options: ${err.message}`);
+		} catch (err) {
+			toast.error(`Failed to load DHCP server options: ${errorMessage(err, String(err))}`);
 		} finally {
 			loading = false;
 		}
@@ -217,8 +217,8 @@
 			await dhcpOptionsUpdate(payload);
 			pristineJson = JSON.stringify(payload);
 			toast.success("DHCP server options saved and propagated successfully");
-		} catch (err: any) {
-			toast.error(`Failed to save options: ${err.message}`);
+		} catch (err) {
+			toast.error(`Failed to save options: ${errorMessage(err, String(err))}`);
 		} finally {
 			saving = false;
 		}
@@ -234,8 +234,8 @@
 		try {
 			const res = await dhcpReconcile();
 			toastReconcileResult(res);
-		} catch (err: any) {
-			toast.error(`Failed to reconcile leases: ${err.message}`);
+		} catch (err) {
+			toast.error(`Failed to reconcile leases: ${errorMessage(err, String(err))}`);
 		} finally {
 			reconciling = false;
 		}

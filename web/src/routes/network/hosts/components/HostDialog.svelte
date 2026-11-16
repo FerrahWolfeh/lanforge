@@ -1,4 +1,5 @@
 <script lang="ts">
+import { errorMessage } from "$lib/utils";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import * as Field from "$lib/components/ui/field";
 	import { Button } from "$lib/components/ui/button";
@@ -129,8 +130,8 @@
 			);
 			open = false;
 			await onSaved();
-		} catch (err: any) {
-			toast.error(err?.message || "Failed to save static host rule");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to save static host rule"));
 		} finally {
 			submitting = false;
 		}

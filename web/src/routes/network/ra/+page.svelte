@@ -1,4 +1,5 @@
 <script lang="ts">
+import { errorMessage } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Tabs from "$lib/components/ui/tabs";
 	import { Button } from "$lib/components/ui/button";
@@ -215,8 +216,8 @@
 			await raUpdateConfig(payload);
 			toast.success("Router Advertisement configuration saved!");
 			await loadAll(true);
-		} catch (err: any) {
-			toast.error(err?.message || "Failed to update RA configuration");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to update RA configuration"));
 		} finally {
 			saving = false;
 		}
@@ -228,8 +229,8 @@
 			await raTrigger();
 			toast.success("RA multicast burst packet triggered!");
 			await loadAll(true);
-		} catch (err: any) {
-			toast.error(err?.message || "Failed to trigger RA burst");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to trigger RA burst"));
 		} finally {
 			triggering = false;
 		}

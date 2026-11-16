@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { copyToClipboard } from "$lib/utils";
+	import { copyToClipboard, errorMessage } from "$lib/utils";
 	import * as Card from "$lib/components/ui/card";
 	import * as Table from "$lib/components/ui/table";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
@@ -122,8 +122,8 @@
 			await dnsUpstreamSetDefault([...preset.v4, ...preset.v6]);
 			toast.success(`Default upstreams replaced with the ${preset.name} preset`);
 			await onReloadAll();
-		} catch (err: any) {
-			toast.error(`Failed to apply preset: ${err.message || String(err)}`);
+		} catch (err) {
+			toast.error(`Failed to apply preset: ${errorMessage(err, String(err))}`);
 		} finally {
 			applyingPreset = false;
 		}

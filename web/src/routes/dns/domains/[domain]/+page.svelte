@@ -3,10 +3,10 @@
 	import { page } from "$app/state";
 	import { toast } from "svelte-sonner";
 	import { auth } from "$lib/stores/auth.svelte";
-	import { dnsDomain, dnsAdblockCheck, dnsBlock, dnsAllow } from "$lib/api/client";
+	import { ApiError, dnsDomain, dnsAdblockCheck, dnsBlock, dnsAllow } from "$lib/api/client";
 	import type { AdblockCheckResponse, DnsDomainResponse } from "$lib/api/types";
 	import { formatTimeAgo } from "$lib/utils/format";
-	import { createSequence } from "$lib/utils";
+	import { createSequence, errorMessage } from "$lib/utils";
 	import { Button } from "$lib/components/ui/button";
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import StatusLine from "$lib/components/StatusLine.svelte";
@@ -43,11 +43,11 @@
 			const res = await dnsDomain(domain);
 			if (!statsSeq.isCurrent(seq)) return;
 			stats = res;
-		} catch (err: any) {
+		} catch (err) {
 			if (!statsSeq.isCurrent(seq)) return;
 			stats = null;
-			if (err?.status === 404) notFound = true;
-			else failed = err?.message ?? "Failed to load the domain";
+			if (err instanceof ApiError && err.status === 404) notFound = true;
+			else failed = errorMessage(err, "Failed to load the domain");
 		}
 		loading = false;
 	}
@@ -87,8 +87,8 @@
 				toast.success(`${domain} allowed for every device`);
 			}
 			await loadVerdict();
-		} catch (err: any) {
-			toast.error(err?.message ?? `Failed to ${action} ${domain}`);
+		} catch (err) {
+			toast.error(errorMessage(err, `Failed to ${action} ${domain}`));
 		}
 	}
 

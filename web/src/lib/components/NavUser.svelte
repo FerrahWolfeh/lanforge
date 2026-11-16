@@ -1,4 +1,5 @@
 <script lang="ts">
+import { errorMessage } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import { sidebarState } from "$lib/stores/sidebar.svelte";
 	import { changePassword } from "$lib/api/client";
@@ -70,8 +71,8 @@
 			newPassword = "";
 			confirmPassword = "";
 			isPasswdOpen = false;
-		} catch (err: any) {
-			toast.error(err?.message || "Failed to change password");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to change password"));
 		} finally {
 			changingPassword = false;
 		}

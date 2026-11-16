@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { downloadBlob } from "$lib/utils";
+	import { downloadBlob, errorMessage } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import {
 		hostList,
@@ -103,8 +103,8 @@
 				await hostImport(entries);
 				toast.success("Successfully imported host rules");
 				await loadHostsAndDevices();
-			} catch (err: any) {
-				toast.error(err?.message || "Failed to parse and import JSON");
+			} catch (err) {
+				toast.error(errorMessage(err, "Failed to parse and import JSON"));
 			}
 		};
 		reader.readAsText(file);

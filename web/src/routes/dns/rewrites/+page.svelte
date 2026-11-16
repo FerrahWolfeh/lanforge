@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { downloadBlob } from "$lib/utils";
+	import { downloadBlob, errorMessage } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import { Button } from "$lib/components/ui/button";
 	import * as Dialog from "$lib/components/ui/dialog";
@@ -95,8 +95,8 @@
 			clearModalOpen = false;
 			offset = 0;
 			await loadRewrites();
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to clear rewrite rules");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to clear rewrite rules"));
 		} finally {
 			clearing = false;
 		}

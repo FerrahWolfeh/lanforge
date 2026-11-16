@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { createTimers } from "$lib/utils";
+	import { createTimers, errorMessage } from "$lib/utils";
 	import { onDestroy } from "svelte";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import * as Select from "$lib/components/ui/select";
@@ -70,8 +70,8 @@
 			onAdded();
 			later(onAdded, 1500);
 			later(onAdded, 3500);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to add source URL");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to add source URL"));
 		} finally {
 			submitting = false;
 		}

@@ -28,7 +28,7 @@
 	import { page } from "$app/state";
 	import { goto } from "$app/navigation";
 	import type { AdblockRuleEntry } from "$lib/api/types";
-	import { createSequence, copyToClipboard } from "$lib/utils";
+	import { createSequence, copyToClipboard, errorMessage } from "$lib/utils";
 	import DnsAdblockImportRulesDialog from "./components/DnsAdblockImportRulesDialog.svelte";
 
 	const canEdit = $derived(auth.can("dns_write"));
@@ -81,8 +81,8 @@
 			}
 			newDomain = "";
 			await loadAll();
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to save domain");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to save domain"));
 		} finally {
 			adding = false;
 		}
@@ -99,8 +99,8 @@
 			await dnsAdblockRuleRemove(rule.domain, group);
 			toast.success(`Removed "${ruleLabel(rule)}" from ${rule.action === "allow" ? "allowlist" : "blacklist"}`);
 			await loadAll();
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to remove domain");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to remove domain"));
 		}
 	}
 
@@ -109,8 +109,8 @@
 			await dnsAdblockRuleStatus(rule.domain, !rule.enabled, group);
 			rule.enabled = !rule.enabled;
 			toast.success(`Rule "${ruleLabel(rule)}" ${rule.enabled ? "enabled" : "disabled"}`);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to toggle rule status");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to toggle rule status"));
 		}
 	}
 

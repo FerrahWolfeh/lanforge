@@ -1,4 +1,5 @@
 <script lang="ts">
+import { errorMessage } from "$lib/utils";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import { Button } from "$lib/components/ui/button";
 	import { Badge } from "$lib/components/ui/badge";
@@ -44,8 +45,8 @@
 					selectedMode = m;
 				}
 			}
-		} catch (err: any) {
-			toast.error(`Failed to load DNS upstream mode: ${err.message || String(err)}`);
+		} catch (err) {
+			toast.error(`Failed to load DNS upstream mode: ${errorMessage(err, String(err))}`);
 		} finally {
 			loadingMode = false;
 		}
@@ -61,9 +62,9 @@
 			const target = MODES.find((m) => m.id === mode);
 			toast.success(`DNS upstream mode set to ${target?.name ?? mode}`);
 			await onReload();
-		} catch (err: any) {
+		} catch (err) {
 			selectedMode = prev;
-			toast.error(`Failed to update DNS upstream mode: ${err.message || String(err)}`);
+			toast.error(`Failed to update DNS upstream mode: ${errorMessage(err, String(err))}`);
 		} finally {
 			savingMode = false;
 		}
@@ -102,8 +103,8 @@
 			await dnsCacheFlush();
 			toast.success("Flushed DNS resolver in-memory cache");
 			await onReload();
-		} catch (err: any) {
-			toast.error(`Failed to flush DNS cache: ${err.message || String(err)}`);
+		} catch (err) {
+			toast.error(`Failed to flush DNS cache: ${errorMessage(err, String(err))}`);
 		} finally {
 			flushing = false;
 		}

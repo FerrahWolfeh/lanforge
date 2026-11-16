@@ -1,4 +1,5 @@
 <script lang="ts">
+import { errorMessage } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import { Button } from "$lib/components/ui/button";
 	import * as Dialog from "$lib/components/ui/dialog";
@@ -107,8 +108,8 @@
 			flushModalOpen = false;
 			offset = 0;
 			await refreshAll();
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to flush DNS cache");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to flush DNS cache"));
 		} finally {
 			flushing = false;
 		}

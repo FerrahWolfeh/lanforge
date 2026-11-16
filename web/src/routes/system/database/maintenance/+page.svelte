@@ -1,4 +1,5 @@
 <script lang="ts">
+import { errorMessage } from "$lib/utils";
 	import { toast } from "svelte-sonner";
 	import {
 		dbPrune,
@@ -26,9 +27,9 @@
 				description: "Purged inactive dynamic devices with no hostname nor active lease.",
 			});
 			await dbState.loadAll(true);
-		} catch (e: any) {
+		} catch (e) {
 			toast.error("Prune failed", {
-				description: e?.message || "Internal server error",
+				description: errorMessage(e, "Internal server error"),
 			});
 		} finally {
 			pruning = false;
@@ -44,9 +45,9 @@
 				description: "Log buffers and temporary query history truncated.",
 			});
 			await dbState.loadAll(true);
-		} catch (e: any) {
+		} catch (e) {
 			toast.error("Log clean failed", {
-				description: e?.message || "Internal server error",
+				description: errorMessage(e, "Internal server error"),
 			});
 		} finally {
 			logCleaning = false;
@@ -62,9 +63,9 @@
 			});
 			wipeDialogOpen = false;
 			await dbState.loadAll(true);
-		} catch (e: any) {
+		} catch (e) {
 			toast.error("Reset failed", {
-				description: e?.message || "Internal server error",
+				description: errorMessage(e, "Internal server error"),
 			});
 		} finally {
 			wiping = false;

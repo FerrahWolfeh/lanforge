@@ -13,7 +13,7 @@
 		dnsAnalytics,
 	} from "$lib/api/client";
 	import type { DeviceEntry, TopClientEntry } from "$lib/api/types";
-	import { createDebounce, createPolling } from "$lib/utils";
+	import { createDebounce, createPolling, errorMessage } from "$lib/utils";
 
 	import DeviceTable from "./components/DeviceTable.svelte";
 	import MonitorIcon from "@lucide/svelte/icons/monitor";
@@ -87,9 +87,9 @@
 			const res = await listDevices();
 			devices = res.devices;
 			meta = res.meta;
-		} catch (err: any) {
+		} catch (err) {
 			if (showSpinner) {
-				toast.error(err?.message || "Failed to load devices");
+				toast.error(errorMessage(err, "Failed to load devices"));
 			}
 		} finally {
 			if (showSpinner) loading = false;
@@ -102,8 +102,8 @@
 			await scan();
 			await loadDevices();
 			toast.success("Network devices refreshed");
-		} catch (err: any) {
-			toast.error(err?.message || "Failed to refresh devices");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to refresh devices"));
 		} finally {
 			scanning = false;
 		}
@@ -113,8 +113,8 @@
 		try {
 			await wol(mac);
 			toast.success(`Wake-on-LAN packet transmitted to ${mac}`);
-		} catch (err: any) {
-			toast.error(err?.message || "Failed to transmit WoL magic packet");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to transmit WoL magic packet"));
 		}
 	}
 
@@ -124,8 +124,8 @@
 			await purge(mac);
 			toast.success(`${mac} forgotten`);
 			await loadDevices();
-		} catch (err: any) {
-			toast.error(err?.message || "Failed to forget the device");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to forget the device"));
 		}
 	}
 

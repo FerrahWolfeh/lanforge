@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { createTimers } from "$lib/utils";
+	import { createTimers, errorMessage } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import ShieldIcon from "@lucide/svelte/icons/shield";
 	import LayoutDashboardIcon from "@lucide/svelte/icons/layout-dashboard";
@@ -71,8 +71,8 @@
 					: "Adblock domain filtering disabled",
 			);
 			await fetchStatus();
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to toggle adblock status");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to toggle adblock status"));
 		}
 	}
 
@@ -83,8 +83,8 @@
 			const label = seconds < 60 ? `${seconds}s` : `${mins}m`;
 			toast.info(`Adblock filtering paused for ${label}`);
 			await fetchStatus();
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to pause adblock");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to pause adblock"));
 		}
 	}
 
@@ -98,8 +98,8 @@
 			await dnsAdblockReload();
 			toast.success("Triggered background blocklist compilation & reload");
 			later(fetchStatus, 1500);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to reload blocklists");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to reload blocklists"));
 		} finally {
 			later(() => {
 				reloadingLists = false;

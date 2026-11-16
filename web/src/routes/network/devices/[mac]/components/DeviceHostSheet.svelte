@@ -1,4 +1,5 @@
 <script lang="ts">
+import { errorMessage } from "$lib/utils";
 	import * as Sheet from "$lib/components/ui/sheet";
 	import * as Field from "$lib/components/ui/field";
 	import { Button } from "$lib/components/ui/button";
@@ -94,8 +95,8 @@
 			toast.success(reserved ? `Updated the reservation of ${name}` : `Reserved ${name} in lanforge.toml`);
 			open = false;
 			await onSaved();
-		} catch (err: any) {
-			toast.error(err?.message || "Failed to save the reservation");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to save the reservation"));
 		} finally {
 			submitting = false;
 		}
@@ -109,8 +110,8 @@
 			toast.success(`Removed the reservation of ${name}`);
 			open = false;
 			await onSaved();
-		} catch (err: any) {
-			toast.error(err?.message || "Failed to remove the reservation");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to remove the reservation"));
 		} finally {
 			submitting = false;
 		}
