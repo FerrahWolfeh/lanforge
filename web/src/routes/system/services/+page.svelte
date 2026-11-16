@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Card from "$lib/components/ui/card";
-	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import { Input } from "$lib/components/ui/input";
 	import { Skeleton } from "$lib/components/ui/skeleton";
@@ -9,7 +8,6 @@
 	import { normalizeServices, type ServiceBanner } from "$lib/api/types";
 	import { degradedReason, getServiceMeta } from "$lib/services";
 	import { toast } from "svelte-sonner";
-	import { goto } from "$app/navigation";
 	import { onMount } from "svelte";
 	import { createPolling } from "$lib/utils/polling";
 	import { formatBytes } from "$lib/utils";
@@ -21,11 +19,11 @@
 	import SquareIcon from "@lucide/svelte/icons/square";
 	import SlidersIcon from "@lucide/svelte/icons/sliders";
 	import SearchIcon from "@lucide/svelte/icons/search";
-	import ExternalLinkIcon from "@lucide/svelte/icons/external-link";
 	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import LayersIcon from "@lucide/svelte/icons/layers";
 	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
 	import PageHeader from "$lib/components/PageHeader.svelte";
+	import StatusBadge from "$lib/components/StatusBadge.svelte";
 
 	const systemTabs: NavTabItem[] = [
 		{ label: "System Status", href: "/system", icon: ServerIcon },
@@ -34,7 +32,6 @@
 	];
 	import Loader2Icon from "@lucide/svelte/icons/loader-2";
 	import CpuIcon from "@lucide/svelte/icons/cpu";
-	import ShieldIcon from "@lucide/svelte/icons/shield";
 
 	import StopImpactDialog from "$lib/components/StopImpactDialog.svelte";
 	let stopDialog = $state<StopImpactDialog>();
@@ -142,20 +139,6 @@
 		return s === "error" || s === "failed" || s === "degraded";
 	}
 
-	function stateBadgeVariant(state: string): "default" | "secondary" | "outline" | "destructive" {
-		if (isOnline(state)) return "default";
-		if (isStarting(state)) return "secondary";
-		if (isInactive(state)) return "outline";
-		return "destructive";
-	}
-
-	function stateDotClass(state: string): string {
-		if (isOnline(state)) return "bg-success";
-		if (isStarting(state)) return "bg-warning animate-pulse";
-		if (isInactive(state)) return "bg-muted-foreground";
-		return "bg-danger";
-	}
-
 	function formatUptime(secs: number): string {
 		if (!secs || secs <= 0) return "Standby / Stopped";
 		const d = Math.floor(secs / 86400);
@@ -234,7 +217,6 @@
 	<!-- System Diagnostics Sub-Navigation Tabs -->
 	<NavTabs tabs={systemTabs} ariaLabel="System diagnostics navigation" />
 
-
 	<!-- Filter & Search Toolbar -->
 	<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 		<div class="relative w-full sm:w-72">
@@ -284,26 +266,19 @@
 		</div>
 	</div>
 
-	<!-- Services Grid -->
+	<!-- Services List -->
 	{#if loading}
-		<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-			{#each [1, 2, 3, 4, 5, 6] as _}
-				<Card.Root class="p-5 flex flex-col gap-4">
-					<div class="flex items-center justify-between">
-						<div class="flex items-center gap-3">
-							<Skeleton class="size-10 rounded-lg" />
-							<div class="flex flex-col gap-1.5">
-								<Skeleton class="h-4 w-32" />
-								<Skeleton class="h-3 w-20" />
-							</div>
-						</div>
-						<Skeleton class="h-6 w-16 rounded-full" />
+		<Card.Root class="gap-0 py-0">
+			<div class="flex flex-col divide-y divide-border">
+				{#each [1, 2, 3, 4, 5, 6] as _}
+					<div class="flex items-center gap-3 px-4 py-3">
+						<Skeleton class="size-4" />
+						<Skeleton class="h-4 w-40" />
+						<Skeleton class="ml-auto h-5 w-24" />
 					</div>
-					<Skeleton class="h-10 w-full" />
-					<Skeleton class="h-8 w-full rounded-md" />
-				</Card.Root>
-			{/each}
-		</div>
+				{/each}
+			</div>
+		</Card.Root>
 	{:else if filteredBanners.length === 0}
 		<Card.Root class="border-dashed py-12 text-center">
 			<Card.Content class="flex flex-col items-center justify-center gap-2">
@@ -329,7 +304,9 @@
 			</Card.Content>
 		</Card.Root>
 	{:else}
-		<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+		<!-- One row per service: phones keep it to two lines instead of a 280px card each. -->
+		<Card.Root class="gap-0 py-0">
+			<div class="flex flex-col divide-y divide-border">
 			{#each filteredBanners as banner (banner.id || banner.name)}
 				{@const svcId = banner.id || banner.name.toLowerCase().replace(/\s+/g, "_")}
 				{@const meta = getServiceMeta(banner.id, banner.name)}
@@ -340,161 +317,86 @@
 				{@const active = isOnline(banner.state) || banner.state.toLowerCase() === "degraded"}
 				{@const starting = isStarting(banner.state)}
 				{@const inactive = isInactive(banner.state)}
+				{@const reason = degradedReason(banner.detail)}
+				{@const t = banner.transport}
 
-				<Card.Root class="flex flex-col justify-between transition-all hover:border-muted-foreground/40 group">
-					<!-- Clickable Body: Direct Navigation to Configuration -->
-					<div
-						role="button"
-						tabindex="0"
-						onclick={() => goto(meta.configHref)}
-						onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") goto(meta.configHref); }}
-						class="flex-1 p-5 flex flex-col gap-3.5 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-primary/50 rounded-t-xl"
-					>
-						<!-- Card Top Row: Icon, Titles & Status Badge -->
-						<div class="flex items-start justify-between gap-2">
-							<div class="flex items-center gap-3">
-								<div class="bg-muted flex size-10 items-center justify-center rounded-lg border border-border/70 shrink-0 group-hover:border-primary/40 transition-colors">
-									<SvcIcon class="size-5 text-foreground group-hover:text-primary transition-colors" />
-								</div>
-								<div class="flex flex-col min-w-0">
-									<div class="flex items-center gap-1.5 flex-wrap">
-										<span class="text-foreground text-sm font-semibold truncate group-hover:text-primary transition-colors">
-											{meta.name}
-										</span>
-									</div>
-									<div class="flex items-center gap-1.5 pt-0.5">
-										<span class="bg-muted text-muted-foreground rounded px-1.5 py-0.2 font-mono text-xs">
-											{svcId}
-										</span>
-										<span class="text-muted-foreground text-xs truncate">
-											• {meta.tag}
-										</span>
-									</div>
-								</div>
-							</div>
-
-							<!-- Status Badge with Dot -->
-							<Badge variant={stateBadgeVariant(banner.state)} class="capitalize text-xs gap-1.5 shrink-0">
-								{#if starting}
-									<Loader2Icon class="size-3 animate-spin text-warning" />
-								{:else}
-									<span class={["size-2 rounded-full shrink-0", stateDotClass(banner.state)].join(" ")}></span>
-								{/if}
-								{banner.state}
-							</Badge>
-						</div>
-
-						<!-- Service Description -->
-						<p class="text-muted-foreground text-xs line-clamp-2 leading-relaxed">
-							{meta.description}
-						</p>
-
-						<!-- Transport & Uptime Info -->
-						<div class="flex items-center justify-between text-xs font-mono border-t border-border/50 pt-2.5">
-							<Badge variant="outline" class="font-mono text-xs px-1.5 py-0">
-								{meta.proto}
-							</Badge>
-							<span class="text-muted-foreground">
-								{formatUptime(banner.uptime_secs)}
-							</span>
-						</div>
-
-						{#if degradedReason(banner.detail)}
-							<p class="text-xs text-warning pt-0.5">{degradedReason(banner.detail)}</p>
+				<div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3 transition-colors hover:bg-accent/30">
+					<SvcIcon class="size-4 shrink-0 text-muted-foreground" />
+					<a href={meta.configHref} class="flex min-w-0 flex-1 basis-56 flex-col" title={meta.description}>
+						<span class="flex items-center gap-2">
+							<span class="truncate text-sm font-medium text-foreground hover:text-selected-foreground">{meta.name}</span>
+							<span class="hidden font-mono text-xs text-muted-foreground sm:inline">{svcId}</span>
+						</span>
+						{#if reason}
+							<span class="truncate text-xs text-warning">{reason}</span>
+						{:else if banner.summary}
+							<span class="truncate font-mono text-xs text-muted-foreground">{banner.summary}</span>
+						{:else}
+							<span class="hidden truncate text-xs text-muted-foreground md:block">{meta.description}</span>
 						{/if}
-						{#if banner.summary}
-							<p class="font-mono text-xs text-foreground pt-0.5">{banner.summary}</p>
-						{/if}
+					</a>
 
-						<!-- Transport Telemetry -->
-						{#if banner.transport && (banner.transport.rx_packets > 0 || banner.transport.tx_packets > 0 || banner.transport.errors > 0 || banner.transport.rate_limited > 0 || banner.transport.dropped > 0)}
-							<div class="flex flex-wrap items-center gap-2 pt-1 border-t border-border/40 text-xs font-mono">
-								<span class="text-muted-foreground">Traffic:</span>
-								<span class="text-foreground font-medium">↓ {formatBytes(banner.transport.rx_bytes)}</span>
-								<span class="text-foreground font-medium">↑ {formatBytes(banner.transport.tx_bytes)}</span>
-								{#if banner.transport.rate_limited > 0}
-									<span class="text-warning font-medium">{banner.transport.rate_limited} limited</span>
-								{/if}
-								{#if banner.transport.dropped > 0}
-									<span class="text-destructive font-medium">{banner.transport.dropped} dropped</span>
-								{/if}
-								{#if banner.transport.errors > 0}
-									<span class="text-destructive font-medium">{banner.transport.errors} errors</span>
-								{/if}
-							</div>
-						{/if}
-					</div>
+					{#if t && (t.errors > 0 || t.dropped > 0 || t.rate_limited > 0)}
+						<span class="flex items-center gap-2 font-mono text-xs" title={`↓ ${formatBytes(t.rx_bytes)} ↑ ${formatBytes(t.tx_bytes)}`}>
+							{#if t.rate_limited > 0}<span class="text-warning">{t.rate_limited} limited</span>{/if}
+							{#if t.dropped > 0}<span class="text-danger">{t.dropped} dropped</span>{/if}
+							{#if t.errors > 0}<span class="text-danger">{t.errors} errors</span>{/if}
+						</span>
+					{/if}
 
-					<!-- Card Footer: Navigation Link & Lifecycle Action Controls -->
-					<Card.Footer class="px-5 py-3 border-t border-border/50 flex flex-wrap items-center justify-between gap-2 bg-muted/10">
-						<!-- Configure Button -->
-						<Button
-							variant="outline"
-							size="sm"
-							href={meta.configHref}
-							title="Configure {meta.name} (persistent boot enable/disable and parameters)"
-							class="text-xs gap-1.5 h-8 font-medium hover:text-primary"
-						>
-							<SlidersIcon class="size-3.5" />
-							<span>Configure</span>
-							<ExternalLinkIcon class="size-3 text-muted-foreground" />
-						</Button>
+					<span class="w-20 text-right font-mono text-xs tabular-nums text-muted-foreground">
+						{active || starting ? formatUptime(banner.uptime_secs) : ""}
+					</span>
 
-						<!-- Service Lifecycle Actions -->
-						<div class="flex items-center gap-1.5">
-							{#if meta.canControl && isAdmin}
-								{#if inactive}
-									<!-- Start Action -->
-									<Button
-										variant="default"
-										size="sm"
-										disabled={isBusy}
-										title="Start {meta.name} in runtime"
-										onclick={(e) => {
-											e.stopPropagation();
-											executeAction(svcId, "Start");
-										}}
-										class="text-xs gap-1.5 h-8 bg-success hover:bg-success/90 text-white"
-									>
-										{#if isBusy && currentAction === "Start"}
-											<Loader2Icon class="size-3.5 animate-spin" />
-										{:else}
-											<PlayIcon class="size-3.5 fill-current" />
-										{/if}
-										Start
-									</Button>
-								{:else if active}
-									<!-- Restart Action -->
-									<Button
-										variant="secondary"
-										size="sm"
-										disabled={isBusy}
-										title="Restart {meta.name} process"
-										onclick={(e) => {
-											e.stopPropagation();
-											executeAction(svcId, "Restart");
-										}}
-										class="text-xs gap-1.5 h-8"
-									>
-										{#if isBusy && currentAction === "Restart"}
-											<Loader2Icon class="size-3.5 animate-spin" />
-										{:else}
-											<RotateCwIcon class="size-3.5" />
-										{/if}
-										Restart
-									</Button>
+					<StatusBadge
+						text={banner.state}
+						variant={isOnline(banner.state) ? "online" : starting || banner.state.toLowerCase() === "degraded" ? "warning" : isError(banner.state) ? "error" : "dormant"}
+						showDot
+						class="w-24 justify-center capitalize shrink-0"
+					/>
 
-									<!-- Stop Action -->
+					<div class="flex w-full items-center justify-end gap-1.5 sm:w-auto">
+						{#if meta.canControl && isAdmin}
+							{#if inactive}
+								<Button
+									variant="outline"
+									size="sm"
+									disabled={isBusy}
+									title="Start {meta.name} now (to keep it on, enable it in Configure)"
+									onclick={() => executeAction(svcId, "Start")}
+									class="h-7 gap-1.5 text-xs text-success hover:text-success"
+								>
+									{#if isBusy && currentAction === "Start"}
+										<Loader2Icon class="size-3.5 animate-spin" />
+									{:else}
+										<PlayIcon class="size-3.5 fill-current" />
+									{/if}
+									Start
+								</Button>
+							{:else}
+								<Button
+									variant="outline"
+									size="sm"
+									disabled={isBusy}
+									title="Restart {meta.name}"
+									onclick={() => executeAction(svcId, "Restart")}
+									class="h-7 gap-1.5 text-xs"
+								>
+									{#if isBusy && currentAction === "Restart"}
+										<Loader2Icon class="size-3.5 animate-spin" />
+									{:else}
+										<RotateCwIcon class="size-3.5" />
+									{/if}
+									Restart
+								</Button>
+								{#if active}
 									<Button
 										variant="outline"
 										size="sm"
 										disabled={isBusy}
-										title="Stop {meta.name} in runtime (to permanently disable, use Configure)"
-										onclick={(e) => {
-											e.stopPropagation();
-											executeAction(svcId, "Stop");
-										}}
-										class="text-xs gap-1.5 h-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
+										title="Stop {meta.name} now (to keep it off, disable it in Configure)"
+										onclick={() => executeAction(svcId, "Stop")}
+										class="h-7 gap-1.5 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
 									>
 										{#if isBusy && currentAction === "Stop"}
 											<Loader2Icon class="size-3.5 animate-spin" />
@@ -503,38 +405,24 @@
 										{/if}
 										Stop
 									</Button>
-								{:else}
-									<!-- Error/Starting State: Restart Option -->
-									<Button
-										variant="secondary"
-										size="sm"
-										disabled={isBusy}
-										onclick={(e) => {
-											e.stopPropagation();
-											executeAction(svcId, "Restart");
-										}}
-										class="text-xs gap-1.5 h-8"
-									>
-										{#if isBusy && currentAction === "Restart"}
-											<Loader2Icon class="size-3.5 animate-spin" />
-										{:else}
-											<RotateCwIcon class="size-3.5" />
-										{/if}
-										Restart
-									</Button>
 								{/if}
-							{:else}
-								<!-- Core Subsystem Badge -->
-								<Badge variant="secondary" class="text-xs font-mono gap-1 text-muted-foreground">
-									<ShieldIcon class="size-3 text-muted-foreground" />
-									Core Task
-								</Badge>
 							{/if}
-						</div>
-					</Card.Footer>
-				</Card.Root>
+						{/if}
+						<Button
+							variant="ghost"
+							size="sm"
+							href={meta.configHref}
+							title="Configure {meta.name}"
+							class="h-7 gap-1.5 text-xs text-muted-foreground"
+						>
+							<SlidersIcon class="size-3.5" />
+							<span class="sr-only sm:not-sr-only">Configure</span>
+						</Button>
+					</div>
+				</div>
 			{/each}
-		</div>
+			</div>
+		</Card.Root>
 	{/if}
 </div>
 
