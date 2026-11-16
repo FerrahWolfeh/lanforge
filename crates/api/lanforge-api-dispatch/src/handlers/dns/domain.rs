@@ -1,10 +1,11 @@
-use crate::ClientContext;
+use crate::{ClientContext, handlers::duration_since_epoch_u64};
 use lanforge_api::api::{DeviceDnsBucket, DnsDomainClient, DnsDomainResponse, Response};
+use lanforge_db_core::Stores;
 use lanforge_types::identifiers::MacAddr;
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 use tracing::debug;
 
 /// Window of the domain view: the last day, in hourly buckets.
@@ -58,14 +59,11 @@ impl ClientContext {
         if let Err(e) = storage.flush_dns_log().await {
             debug!("DNS log flush before the domain view failed: {e}");
         }
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = duration_since_epoch_u64(SystemTime::now());
         let since = now.saturating_sub(WINDOW_SECS);
         let wanted = domain.clone();
         let activity = storage
-            .call(move |s: &lanforge_db_core::Stores| {
+            .call(move |s: &Stores| {
                 s.log()
                     .get_dns_domain_activity(since, now, BUCKET_SECS, &wanted)
             })
@@ -144,11 +142,7 @@ impl ClientContext {
             rate: activity
                 .rate
                 .into_iter()
-                .map(|(timestamp, total, blocked)| DeviceDnsBucket {
-                    timestamp,
-                    total,
-                    blocked,
-                })
+                .map(DeviceDnsBucket::from)
                 .collect(),
             clients,
         }))

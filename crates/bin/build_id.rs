@@ -20,6 +20,8 @@ fn git(root: &Path, args: &[&str]) -> Option<String> {
         .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// The web UI version from `web/package.json` (`0.0.0` when missing), read without a JSON
+/// parser: the first `"version": "..."` line.
 fn web_version(root: &Path) -> String {
     let Ok(text) = fs::read_to_string(root.join("web/package.json")) else {
         return "0.0.0".into();

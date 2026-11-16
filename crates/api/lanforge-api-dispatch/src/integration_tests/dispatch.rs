@@ -38,12 +38,12 @@ use lanforge_types::device::{Device, DeviceClass, IPv4State, Ipv6AddrOrSuffix, O
 use lanforge_types::identifiers::{DeviceIdentifier, MacAddr};
 use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
-use lanforge_types::network::dns::QueryResult;
 use lanforge_types::network::dns::adblock::{
     AdblockDbConfig, AdblockRuleAction, AdblockRuleEntry, AdblockSourceFormat, AdblockUrlKind,
     BlockingMode, RewriteAnswer, RewriteRule, TimeOfDay,
 };
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
+use lanforge_types::network::dns::{QueryLogEntry, QueryResult, TransportProtocol};
 use lanforge_types::network::firewall::{
     FirewallCommitRequest, FirewallConfig, ForwardTarget, L4Protocol, PortForwardRule,
 };
@@ -1864,8 +1864,6 @@ async fn upstreams_without_dns_are_unmeasured() {
 /// (60 s / 100 lines), so the log read writes that batch first.
 #[tokio::test]
 async fn a_fresh_query_is_in_the_log_at_once() {
-    use lanforge_types::network::dns::{QueryLogEntry, QueryResult, TransportProtocol};
-
     let client = init_test_context().await;
     let storage = loop {
         if let Some(s) = client.ctx.storage_handle() {
@@ -2179,7 +2177,6 @@ fn query_line(
     result: QueryResult,
     repeats: u32,
 ) {
-    use lanforge_types::network::dns::{QueryLogEntry, TransportProtocol};
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
