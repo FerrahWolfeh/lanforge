@@ -71,7 +71,7 @@
 	<Dialog.Content class="w-[95vw] sm:max-w-md">
 		<Dialog.Header>
 			<Dialog.Title class="flex items-center gap-2">
-				<PlusCircleIcon class="size-5 text-amber-400" />
+				<PlusCircleIcon class="size-5 text-muted-foreground" />
 				<span>Promote to Static Host</span>
 			</Dialog.Title>
 		</Dialog.Header>

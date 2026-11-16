@@ -281,7 +281,7 @@
 				size="sm"
 				onclick={handleTriggerBurst}
 				disabled={triggering || !status?.enabled}
-				class="h-8 text-xs gap-1.5 shadow-sm"
+				class="h-8 text-xs gap-1.5"
 			>
 				<ZapIcon class="size-3.5 {triggering ? 'animate-pulse' : ''}" />
 				<span>Trigger Burst</span>
@@ -291,13 +291,13 @@
 	</PageHeader>
 
 	{#if capabilitiesState.isLoaded && !capabilitiesState.isActualEnabled("ra")}
-		<div class="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-amber-900 dark:text-amber-200 flex items-start gap-3">
-			<RadioIcon class="size-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+		<div class="rounded-lg border border-warning/30 bg-warning/10 p-4 text-warning flex items-start gap-3">
+			<RadioIcon class="size-5 text-muted-foreground shrink-0 mt-0.5" />
 			<div class="flex flex-col gap-1 text-xs">
 				<div class="flex items-center gap-2">
 					<span class="font-semibold text-sm">Router Advertisement (RA) Module is Disabled</span>
 					{#if capabilitiesState.debugMode}
-						<span class="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-mono font-medium text-amber-600 dark:text-amber-300 border border-amber-500/30">
+						<span class="rounded bg-warning/20 px-1.5 py-0.5 text-xs font-mono font-medium text-warning border border-warning/30">
 							DEV OVERRIDE
 						</span>
 					{/if}
@@ -311,12 +311,12 @@
 
 	{#if loading && !status}
 		<div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-			<Skeleton class="h-28 w-full rounded-xl" />
-			<Skeleton class="h-28 w-full rounded-xl" />
-			<Skeleton class="h-28 w-full rounded-xl" />
-			<Skeleton class="h-28 w-full rounded-xl" />
+			<Skeleton class="h-28 w-full rounded-lg" />
+			<Skeleton class="h-28 w-full rounded-lg" />
+			<Skeleton class="h-28 w-full rounded-lg" />
+			<Skeleton class="h-28 w-full rounded-lg" />
 		</div>
-		<Skeleton class="h-96 w-full rounded-xl" />
+		<Skeleton class="h-96 w-full rounded-lg" />
 	{:else}
 		<!-- KPI Stats Cards -->
 		<RaStatsCards {status} />
@@ -333,7 +333,7 @@
 						<SlidersIcon class="size-4" />
 						Configuration
 						{#if isDirty}
-							<span class="size-2 rounded-full bg-amber-500 animate-pulse"></span>
+							<span class="size-2 rounded-full bg-warning animate-pulse"></span>
 						{/if}
 					</Tabs.Trigger>
 				</Tabs.List>

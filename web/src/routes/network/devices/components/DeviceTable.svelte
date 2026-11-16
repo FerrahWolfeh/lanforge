@@ -106,18 +106,18 @@
 		</DropdownMenu.Trigger>
 		<DropdownMenu.Content align="end" class="w-48 text-xs">
 			<DropdownMenu.Item onclick={() => onInspect(dev)} class="gap-2">
-				<SearchIcon class="size-3.5 text-sky-400" />
+				<SearchIcon class="size-3.5 text-muted-foreground" />
 				Inspect Details (Whois)
 			</DropdownMenu.Item>
 			{#if onWol}
 			<DropdownMenu.Item onclick={() => onWol(dev.mac)} class="gap-2">
-				<ZapIcon class="size-3.5 text-emerald-400" />
+				<ZapIcon class="size-3.5 text-muted-foreground" />
 				Send Wake-on-LAN
 			</DropdownMenu.Item>
 			{/if}
 			{#if onPromote}
 			<DropdownMenu.Item onclick={() => onPromote(dev)} class="gap-2">
-				<BookmarkIcon class="size-3.5 text-amber-400" />
+				<BookmarkIcon class="size-3.5 text-muted-foreground" />
 				Promote to Static Host
 			</DropdownMenu.Item>
 			{/if}
@@ -146,7 +146,7 @@
 			{/if}
 			{#if onPurge}
 			<DropdownMenu.Separator />
-			<DropdownMenu.Item onclick={() => onPurge(dev.mac)} class="gap-2 text-rose-500">
+			<DropdownMenu.Item onclick={() => onPurge(dev.mac)} class="gap-2 text-danger">
 				<Trash2Icon class="size-3.5" />
 				Purge Endpoint
 			</DropdownMenu.Item>
@@ -177,7 +177,7 @@
 				class={[
 					"rounded px-2.5 py-1 text-xs font-medium transition-colors",
 					statusFilter === "all"
-						? "bg-background text-foreground shadow-xs"
+						? "bg-background text-foreground"
 						: "text-muted-foreground hover:text-foreground",
 				].join(" ")}
 				onclick={() => (statusFilter = "all")}
@@ -188,7 +188,7 @@
 				class={[
 					"rounded px-2.5 py-1 text-xs font-medium transition-colors",
 					statusFilter === "online"
-						? "bg-background text-emerald-400 shadow-xs"
+						? "bg-background text-success"
 						: "text-muted-foreground hover:text-foreground",
 				].join(" ")}
 				onclick={() => (statusFilter = "online")}
@@ -199,7 +199,7 @@
 				class={[
 					"rounded px-2.5 py-1 text-xs font-medium transition-colors",
 					statusFilter === "offline"
-						? "bg-background text-rose-400 shadow-xs"
+						? "bg-background text-danger"
 						: "text-muted-foreground hover:text-foreground",
 				].join(" ")}
 				onclick={() => (statusFilter = "offline")}
@@ -230,7 +230,7 @@
 			{#if scanning}
 				<span class="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent"></span>
 			{:else}
-				<ZapIcon class="size-3.5 text-amber-300" />
+				<ZapIcon class="size-3.5 text-muted-foreground" />
 			{/if}
 			<span>Scan Network</span>
 		</Button>
@@ -246,8 +246,8 @@
 					class={[
 						"mt-1.5 size-2 rounded-full shrink-0",
 						dev.online
-							? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]"
-							: "bg-zinc-600",
+							? "bg-success"
+							: "bg-muted-foreground",
 					].join(" ")}
 					title={dev.online ? "Online" : "Offline"}
 				></span>
@@ -259,20 +259,20 @@
 						<span class="truncate text-sm font-semibold tracking-tight text-foreground">
 							{dev.hostname || "Unassigned Host"}
 						</span>
-						<span class="shrink-0 text-[11px] text-muted-foreground">
+						<span class="shrink-0 text-xs text-muted-foreground">
 							{formatLastSeen(dev.last_seen)}
 						</span>
 					</span>
 					{#if v4}
-						<span class="truncate font-mono text-xs text-emerald-400">{v4}</span>
+						<span class="truncate font-mono text-xs text-foreground">{v4}</span>
 					{/if}
 					{#if v6}
-						<span class="truncate font-mono text-[11px] text-sky-400">{v6}</span>
+						<span class="truncate font-mono text-xs text-muted-foreground">{v6}</span>
 					{/if}
-					<span class="flex items-center gap-1.5 flex-wrap font-mono text-[11px] text-muted-foreground">
+					<span class="flex items-center gap-1.5 flex-wrap font-mono text-xs text-muted-foreground">
 						{dev.mac}
 						{#if dev.learning_method}
-							<Badge variant="outline" class="text-[10px] uppercase px-1.5 py-0">
+							<Badge variant="outline" class="text-xs uppercase px-1.5 py-0">
 								{dev.learning_method}
 							</Badge>
 						{/if}
@@ -301,11 +301,11 @@
 						class={[
 							"size-2 rounded-full shrink-0",
 							dev.online
-								? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]"
-								: "bg-zinc-600",
+								? "bg-success"
+								: "bg-muted-foreground",
 						].join(" ")}
 					></span>
-					<span class="text-[11px] font-medium capitalize">
+					<span class="text-xs font-medium capitalize">
 						{dev.online ? "Online" : "Offline"}
 					</span>
 				</div>
@@ -317,7 +317,7 @@
 					<span class="text-foreground text-xs sm:text-sm font-semibold tracking-tight">
 						{dev.hostname || "Unassigned Host"}
 					</span>
-					<div class="flex items-center gap-1.5 text-muted-foreground font-mono text-[11px]">
+					<div class="flex items-center gap-1.5 text-muted-foreground font-mono text-xs">
 						<span>{dev.mac}</span>
 						<button
 							class="text-muted-foreground hover:text-foreground transition-colors p-0.5 cursor-pointer"
@@ -335,7 +335,7 @@
 				<div class="flex flex-col gap-0.5">
 					{#if dev.primary_v4 || dev.v4?.ip}
 						<div class="flex items-center gap-1">
-							<span class="text-emerald-400 font-medium">
+							<span class="text-foreground font-medium">
 								{dev.primary_v4 || dev.v4?.ip}
 							</span>
 							<button
@@ -348,7 +348,7 @@
 						</div>
 					{/if}
 					{#if dev.primary_v6 || dev.v6?.ip}
-						<span class="text-sky-400 text-[10px] truncate max-w-[200px]">
+						<span class="text-muted-foreground text-xs truncate max-w-[200px]">
 							{dev.primary_v6 || dev.v6?.ip}
 						</span>
 					{/if}
@@ -362,12 +362,12 @@
 			<Table.Cell class="font-sans">
 				<div class="flex items-center gap-1.5 flex-wrap">
 					{#if dev.learning_method}
-						<Badge variant="outline" class="text-[10px] uppercase font-mono px-1.5 py-0">
+						<Badge variant="outline" class="text-xs uppercase font-mono px-1.5 py-0">
 							{dev.learning_method}
 						</Badge>
 					{/if}
 					{#if dev.class}
-						<Badge variant="secondary" class="text-[10px] capitalize px-1.5 py-0">
+						<Badge variant="secondary" class="text-xs capitalize px-1.5 py-0">
 							{dev.class}
 						</Badge>
 					{/if}

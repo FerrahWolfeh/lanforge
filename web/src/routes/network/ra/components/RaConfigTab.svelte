@@ -247,7 +247,7 @@
 					<div class="flex items-center justify-between">
 						<div class="flex flex-col gap-0.5">
 							<Label class="text-xs font-semibold">Service Enabled</Label>
-							<p class="text-[11px] text-muted-foreground">
+							<p class="text-xs text-muted-foreground">
 								ICMPv6 listener and periodic broadcast engine.
 							</p>
 						</div>
@@ -277,17 +277,17 @@
 													<div class="flex items-center gap-2">
 														<span class="font-mono font-medium">{iface.name}</span>
 														{#if iface.carrier_up}
-															<span class="size-1.5 rounded-full bg-emerald-500" title="Link active"></span>
+															<span class="size-1.5 rounded-full bg-success" title="Link active"></span>
 														{:else}
 															<span class="size-1.5 rounded-full bg-muted-foreground/40" title="Link down"></span>
 														{/if}
 													</div>
-													<div class="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+													<div class="flex items-center gap-1.5 text-xs text-muted-foreground">
 														{#if iface.is_physical}
-															<Badge variant="secondary" class="text-[9px] px-1 py-0 font-normal">Physical</Badge>
+															<Badge variant="secondary" class="text-xs px-1 py-0 font-normal">Physical</Badge>
 														{/if}
 														{#if iface.ips && iface.ips.length > 0}
-															<span class="truncate max-w-[110px] font-mono text-[10px]">{iface.ips[0]}</span>
+															<span class="truncate max-w-[110px] font-mono text-xs">{iface.ips[0]}</span>
 														{/if}
 													</div>
 												</div>
@@ -303,7 +303,7 @@
 									class="h-9 font-mono text-xs"
 								/>
 							{/if}
-							<p class="text-[11px] text-muted-foreground">
+							<p class="text-xs text-muted-foreground">
 								LAN interface for raw ICMPv6 socket.
 							</p>
 						</div>
@@ -326,7 +326,7 @@
 									<Select.Item value="low" class="text-xs">Low (Secondary / Backup)</Select.Item>
 								</Select.Content>
 							</Select.Root>
-							<p class="text-[11px] text-muted-foreground">
+							<p class="text-xs text-muted-foreground">
 								Client default router preference.
 							</p>
 						</div>
@@ -391,7 +391,7 @@
 									class="h-9 font-mono text-xs"
 									onkeydown={(e) => e.key === "Enter" && addPrefix()}
 								/>
-								<p class="text-[11px] text-muted-foreground">
+								<p class="text-xs text-muted-foreground">
 									Enter an IPv6 prefix ending with <code class="font-mono text-primary font-semibold">::/64</code> (e.g. <code class="font-mono text-foreground">2001:db8:1::/64</code>). Host addresses are rejected.
 								</p>
 							</div>
@@ -503,7 +503,7 @@
 							bind:value={formMaxInterval}
 							class="h-9 font-mono text-xs"
 						/>
-						<p class="text-[10px] text-muted-foreground">Default 200s.</p>
+						<p class="text-xs text-muted-foreground">Default 200s.</p>
 					</div>
 
 					<div class="flex flex-col gap-1.5">
@@ -520,7 +520,7 @@
 							}}
 							class="h-9 font-mono text-xs"
 						/>
-						<p class="text-[10px] text-muted-foreground">1/3 of max interval.</p>
+						<p class="text-xs text-muted-foreground">1/3 of max interval.</p>
 					</div>
 
 					<div class="flex flex-col gap-1.5">
@@ -538,7 +538,7 @@
 							}}
 							class="h-9 font-mono text-xs"
 						/>
-						<p class="text-[10px] text-muted-foreground">0 = non-default router.</p>
+						<p class="text-xs text-muted-foreground">0 = non-default router.</p>
 					</div>
 
 					<div class="flex flex-col gap-1.5">
@@ -551,7 +551,7 @@
 							bind:value={formHopLimit}
 							class="h-9 font-mono text-xs"
 						/>
-						<p class="text-[10px] text-muted-foreground">Default 64. 0 = unspecified (hosts keep their own).</p>
+						<p class="text-xs text-muted-foreground">Default 64. 0 = unspecified (hosts keep their own).</p>
 					</div>
 
 					<div class="flex flex-col gap-1.5">
@@ -569,7 +569,7 @@
 							}}
 							class="h-9 font-mono text-xs"
 						/>
-						<p class="text-[10px] text-muted-foreground">E.g. 1492 for PPPoE.</p>
+						<p class="text-xs text-muted-foreground">E.g. 1492 for PPPoE.</p>
 					</div>
 
 					<div class="flex flex-col gap-1.5">
@@ -581,7 +581,7 @@
 							bind:value={formReachableTime}
 							class="h-9 font-mono text-xs"
 						/>
-						<p class="text-[10px] text-muted-foreground">0 = unspecified.</p>
+						<p class="text-xs text-muted-foreground">0 = unspecified.</p>
 					</div>
 				</Card.Content>
 			</Card.Root>

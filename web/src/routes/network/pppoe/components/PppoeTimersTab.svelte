@@ -47,7 +47,7 @@
 					bind:value={formMru}
 					class="h-9 font-mono text-xs"
 				/>
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					1280 to 1492. Default 1492 (1500 Ethernet MTU minus the 8-byte PPPoE header, RFC 2516);
 					1280 is the IPv6 minimum.
 				</p>
@@ -64,7 +64,7 @@
 					bind:value={formEchoInterval}
 					class="h-9 font-mono text-xs"
 				/>
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					Frequency of LCP Echo-Request keepalive probes sent to the BRAS to detect dead links.
 				</p>
 			</div>
@@ -80,7 +80,7 @@
 					bind:value={formEchoMaxFailures}
 					class="h-9 font-mono text-xs"
 				/>
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					Number of consecutive missed echo replies before tearing down the session.
 				</p>
 			</div>
@@ -96,7 +96,7 @@
 					bind:value={formReconnectDelay}
 					class="h-9 font-mono text-xs"
 				/>
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					Wait period before attempting to re-establish a dropped PPPoE connection.
 				</p>
 			</div>
@@ -112,7 +112,7 @@
 					bind:value={formPadiRetries}
 					class="h-9 font-mono text-xs"
 				/>
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					Active PPPoE Active Discovery Initiation attempts before backing off.
 				</p>
 			</div>
@@ -128,7 +128,7 @@
 					bind:value={formPadiTimeout}
 					class="h-9 font-mono text-xs"
 				/>
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					Wait time for a PADO response packet from upstream BRAS before retransmitting.
 				</p>
 			</div>
@@ -137,7 +137,7 @@
 			<div class="flex items-start justify-between gap-3 p-3 rounded-lg border bg-muted/20 sm:col-span-2">
 				<div class="flex flex-col gap-0.5">
 					<Label class="text-xs font-semibold">Send PADT on Shutdown</Label>
-					<p class="text-[11px] text-muted-foreground">
+					<p class="text-xs text-muted-foreground">
 						Sends a graceful PPPoE Active Discovery Terminate packet to immediately free the ISP session slot.
 					</p>
 				</div>

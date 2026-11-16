@@ -89,7 +89,7 @@
 		<DropdownMenu.Content align="end" class="w-48 text-xs">
 			{#if canEdit}
 			<DropdownMenu.Item onclick={() => onEdit(host)} class="gap-2">
-				<PencilIcon class="size-3.5 text-amber-400" />
+				<PencilIcon class="size-3.5 text-muted-foreground" />
 				Edit Host Assignment
 			</DropdownMenu.Item>
 			<DropdownMenu.Separator />
@@ -106,7 +106,7 @@
 			{/if}
 			{#if canEdit}
 			<DropdownMenu.Separator />
-			<DropdownMenu.Item onclick={() => onDelete(host.mac)} class="gap-2 text-rose-500">
+			<DropdownMenu.Item onclick={() => onDelete(host.mac)} class="gap-2 text-danger">
 				<Trash2Icon class="size-3.5" />
 				Delete Static Host
 			</DropdownMenu.Item>
@@ -203,17 +203,17 @@
 						<span class="truncate text-sm font-semibold tracking-tight text-foreground">
 							{host.hostname || "—"}
 						</span>
-						<Badge variant="outline" class="shrink-0 text-[10px] uppercase font-mono px-1.5 py-0">
+						<Badge variant="outline" class="shrink-0 text-xs uppercase font-mono px-1.5 py-0">
 							{host.origin || "Config"}
 						</Badge>
 					</span>
 					{#if host.v4_fixed || host.v4}
-						<span class="truncate font-mono text-xs text-emerald-400">{host.v4_fixed || host.v4}</span>
+						<span class="truncate font-mono text-xs text-foreground">{host.v4_fixed || host.v4}</span>
 					{/if}
 					{#if host.v6_suffix}
-						<span class="truncate font-mono text-[11px] text-sky-400">{host.v6_suffix}</span>
+						<span class="truncate font-mono text-xs text-muted-foreground">{host.v6_suffix}</span>
 					{/if}
-					<span class="font-mono text-[11px] text-muted-foreground">{host.mac}</span>
+					<span class="font-mono text-xs text-muted-foreground">{host.mac}</span>
 				</div>
 				{@render actionsMenu(host)}
 			</div>
@@ -236,11 +236,11 @@
 				<div class="flex items-center gap-1.5 flex-wrap">
 					<span>{host.hostname || "—"}</span>
 					{#if host.ignore_dns_log}
-						<Badge variant="secondary" class="text-[9px] font-mono px-1 py-0 text-muted-foreground border-border/50">
+						<Badge variant="secondary" class="text-xs font-mono px-1 py-0 text-muted-foreground border-border/50">
 							DNS Muted
 						</Badge>
 					{:else if host.ignored_log_domains && host.ignored_log_domains.length > 0}
-						<Badge variant="outline" class="text-[9px] font-mono px-1 py-0 text-muted-foreground" title={host.ignored_log_domains.join(", ")}>
+						<Badge variant="outline" class="text-xs font-mono px-1 py-0 text-muted-foreground" title={host.ignored_log_domains.join(", ")}>
 							{host.ignored_log_domains.length} {host.ignored_log_domains.length === 1 ? "domain" : "domains"} muted
 						</Badge>
 					{/if}
@@ -265,7 +265,7 @@
 			<Table.Cell>
 				{#if host.v4_fixed || host.v4}
 					<div class="flex items-center gap-1.5">
-						<span class="text-emerald-400 font-medium">{host.v4_fixed || host.v4}</span>
+						<span class="text-foreground font-medium">{host.v4_fixed || host.v4}</span>
 						<button
 							class="text-muted-foreground hover:text-foreground transition-colors p-0.5 cursor-pointer"
 							onclick={() => copyText(host.v4_fixed || host.v4 || "", "IPv4")}
@@ -280,13 +280,13 @@
 			</Table.Cell>
 
 			<!-- IPv6 Suffix -->
-			<Table.Cell class="text-sky-400">
+			<Table.Cell class="font-mono text-muted-foreground">
 				{host.v6_suffix || "—"}
 			</Table.Cell>
 
 			<!-- Origin -->
 			<Table.Cell class="font-sans">
-				<Badge variant="outline" class="text-[10px] uppercase font-mono">
+				<Badge variant="outline" class="text-xs uppercase font-mono">
 					{host.origin || "Config"}
 				</Badge>
 			</Table.Cell>

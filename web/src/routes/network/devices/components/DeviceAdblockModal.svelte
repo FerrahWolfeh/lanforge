@@ -96,7 +96,7 @@
 						<span class="font-mono">{name}</span>
 						<span class="flex items-center gap-2">
 							{#if viaSubnet.includes(name)}
-								<span class="text-[10px] text-muted-foreground">may also match by subnet</span>
+								<span class="text-xs text-muted-foreground">may also match by subnet</span>
 							{/if}
 							<Switch
 								checked={member.includes(name)}
@@ -107,11 +107,11 @@
 					</label>
 				{/each}
 				<label
-					class="flex items-center justify-between gap-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2"
+					class="flex items-center justify-between gap-3 rounded-md border border-warning/30 bg-warning/5 px-3 py-2"
 				>
 					<span>
 						<span class="font-medium">Bypass</span>
-						<span class="block text-[11px] text-muted-foreground">Never filtered.</span>
+						<span class="block text-xs text-muted-foreground">Never filtered.</span>
 					</span>
 					<Switch bind:checked={bypass} />
 				</label>

@@ -49,7 +49,7 @@
 			{#snippet valueExtra()}
 				<div class="flex items-center gap-2 pt-0.5">
 					{#if status?.sqm_active}
-						<GaugeIcon class="size-5 text-emerald-500 shrink-0" />
+						<GaugeIcon class="size-5 text-muted-foreground shrink-0" />
 						<span class="text-base font-bold text-foreground">
 							{status.download_mbps}M / {status.upload_mbps}M
 						</span>
@@ -134,32 +134,32 @@
 										<StatusDot state="online" size="sm" />
 										<span>{iface.interface}</span>
 										{#if iface.interface === wanIface || iface.interface.startsWith("ppp")}
-											<Badge variant="outline" class="text-[10px] px-1 py-0 border-sky-500/30 text-sky-400 font-sans">WAN</Badge>
+											<Badge variant="outline" class="text-xs px-1 py-0 border-border text-muted-foreground font-sans">WAN</Badge>
 										{:else if iface.interface.startsWith("ifb")}
-											<Badge variant="outline" class="text-[10px] px-1 py-0 border-amber-500/30 text-amber-400 font-sans">SQM Ingress</Badge>
+											<Badge variant="outline" class="text-xs px-1 py-0 border-border text-muted-foreground font-sans">SQM Ingress</Badge>
 										{:else if iface.interface.startsWith("tailscale")}
-											<Badge variant="outline" class="text-[10px] px-1 py-0 border-violet-500/30 text-violet-400 font-sans">Tailscale VPN</Badge>
+											<Badge variant="outline" class="text-xs px-1 py-0 border-border text-muted-foreground font-sans">Tailscale VPN</Badge>
 										{:else if iface.interface.startsWith("veth") || iface.interface.startsWith("podman") || iface.interface.startsWith("docker")}
-											<Badge variant="outline" class="text-[10px] px-1 py-0 border-zinc-500/30 text-zinc-400 font-sans">Container</Badge>
+											<Badge variant="outline" class="text-xs px-1 py-0 border-border text-muted-foreground font-sans">Container</Badge>
 										{:else if iface.interface.startsWith("lan") || iface.interface.startsWith("br-")}
-											<Badge variant="outline" class="text-[10px] px-1 py-0 border-emerald-500/30 text-emerald-400 font-sans">LAN</Badge>
+											<Badge variant="outline" class="text-xs px-1 py-0 border-border text-muted-foreground font-sans">LAN</Badge>
 										{/if}
 									</td>
 									<td class="py-2.5 px-4 text-right">
-										<div class="flex items-center justify-end gap-1 text-sky-400">
+										<div class="flex items-center justify-end gap-1 text-[var(--chart-1)]">
 											<ArrowDownIcon class="size-3 shrink-0" />
 											<span class="font-semibold">{formatBps(iface.rx_rate_bps)}</span>
 										</div>
 									</td>
 									<td class="py-2.5 px-4 text-right">
-										<div class="flex items-center justify-end gap-1 text-emerald-400">
+										<div class="flex items-center justify-end gap-1 text-[var(--chart-2)]">
 											<ArrowUpIcon class="size-3 shrink-0" />
 											<span class="font-semibold">{formatBps(iface.tx_rate_bps)}</span>
 										</div>
 									</td>
 									<td class="py-2.5 px-4 text-right text-muted-foreground font-sans">
 										<span>{formatBytes(iface.rx_bytes)}</span>
-										<span class="text-zinc-500 mx-1">/</span>
+										<span class="text-muted-foreground mx-1">/</span>
 										<span>{formatBytes(iface.tx_bytes)}</span>
 									</td>
 									<td class="py-2.5 px-4 text-right text-muted-foreground">

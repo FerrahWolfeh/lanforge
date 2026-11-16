@@ -35,7 +35,7 @@
 	<Dialog.Content class="w-[95vw] sm:max-w-md">
 		<Dialog.Header>
 			<Dialog.Title class="flex items-center gap-2">
-				<MonitorIcon class="size-5 text-emerald-400" />
+				<MonitorIcon class="size-5 text-muted-foreground" />
 				<span>Device Details</span>
 			</Dialog.Title>
 		</Dialog.Header>
@@ -58,13 +58,13 @@
 				</div>
 				<div class="flex justify-between items-center border-b border-border/50 pb-2">
 					<span class="text-muted-foreground font-medium">IPv4 Address</span>
-					<span class="font-mono text-emerald-400">
+					<span class="font-mono text-foreground">
 						{device.primary_v4 || device.v4?.ip || "—"}
 					</span>
 				</div>
 				<div class="flex justify-between items-center border-b border-border/50 pb-2">
 					<span class="text-muted-foreground font-medium">IPv6 Address</span>
-					<span class="font-mono text-sky-400 truncate max-w-[200px]">
+					<span class="font-mono text-muted-foreground truncate max-w-[200px]">
 						{device.primary_v6 || device.v6?.ip || "—"}
 					</span>
 				</div>

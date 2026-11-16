@@ -77,23 +77,23 @@
 		{#snippet valueExtra()}
 			<div class="flex items-center gap-2 pt-0.5">
 				{#if status?.state === "connected"}
-					<CheckCircleIcon class="size-5 text-emerald-500 shrink-0" />
-					<span class="text-base font-bold text-emerald-400">Connected</span>
+					<CheckCircleIcon class="size-5 text-muted-foreground shrink-0" />
+					<span class="text-base font-bold text-success">Connected</span>
 				{:else if status?.state === "reconnecting"}
-					<RefreshCwIcon class="size-5 text-amber-500 shrink-0 animate-spin" />
-					<span class="text-base text-amber-400 font-bold">Reconnecting...</span>
+					<RefreshCwIcon class="size-5 text-muted-foreground shrink-0 animate-spin" />
+					<span class="text-base text-warning font-bold">Reconnecting...</span>
 				{:else if status?.state === "authenticating"}
-					<RefreshCwIcon class="size-5 text-amber-500 shrink-0 animate-spin" />
-					<span class="text-base text-amber-400 font-bold">Authenticating...</span>
+					<RefreshCwIcon class="size-5 text-muted-foreground shrink-0 animate-spin" />
+					<span class="text-base text-warning font-bold">Authenticating...</span>
 				{:else if status?.state === "discovering"}
-					<RadioIcon class="size-5 text-cyan-500 shrink-0 animate-pulse" />
-					<span class="text-base text-cyan-400 font-bold">Looking for the ISP…</span>
+					<RadioIcon class="size-5 text-info shrink-0" />
+					<span class="text-base text-info font-bold">Looking for the ISP…</span>
 				{:else if status?.state === "waiting_for_carrier"}
-					<AlertCircleIcon class="size-5 text-amber-500 shrink-0" />
-					<span class="text-base text-amber-400 font-bold">Waiting for Carrier</span>
+					<AlertCircleIcon class="size-5 text-muted-foreground shrink-0" />
+					<span class="text-base text-warning font-bold">Waiting for Carrier</span>
 				{:else if status?.state === "waiting_for_terminal"}
-					<RefreshCwIcon class="size-5 text-amber-500 shrink-0 animate-spin" />
-					<span class="text-base text-amber-400 font-bold">Waiting for the ONT…</span>
+					<RefreshCwIcon class="size-5 text-muted-foreground shrink-0 animate-spin" />
+					<span class="text-base text-warning font-bold">Waiting for the ONT…</span>
 				{:else}
 					<XCircleIcon class="size-5 text-muted-foreground shrink-0" />
 					<span class="text-base text-muted-foreground font-normal">{status && !status.enabled ? "Disabled" : "Disconnected"}</span>
@@ -102,7 +102,7 @@
 		{/snippet}
 
 		{#snippet footer()}
-			<StatCardFooterItem label="Uptime" value={formatUptime(status?.uptime_secs)} color={status?.state === "connected" ? "text-emerald-400" : "text-muted-foreground"} />
+			<StatCardFooterItem label="Uptime" value={formatUptime(status?.uptime_secs)} color={status?.state === "connected" ? "text-foreground" : "text-muted-foreground"} />
 		{/snippet}
 	</StatCard>
 
@@ -110,7 +110,7 @@
 	<StatCard
 		label="Public Address"
 		icon={GlobeIcon}
-		color="emerald"
+		color="neutral"
 		popover={{
 			title: "Public address",
 			description: "The IPv4 address the ISP gave this session, and its gateway.",
@@ -120,7 +120,7 @@
 		{#snippet valueExtra()}
 			<div class="pt-0.5">
 				{#if status?.local_ip}
-					<span class="text-lg sm:text-xl font-bold font-mono text-emerald-400 truncate block">
+					<span class="text-lg sm:text-xl font-bold font-mono text-foreground truncate block">
 						{status.local_ip}
 					</span>
 				{:else}
@@ -139,14 +139,14 @@
 	<StatCard
 		label="ISP Server"
 		icon={ServerIcon}
-		color="indigo"
+		color="neutral"
 		popover={{
 			title: "ISP server (access concentrator)",
 			description: "The ISP box that answered this router's PPPoE discovery.",
 		}}
 		badge={{
 			text: formatAuthMethod(status?.auth ?? config?.auth ?? formAuth),
-			variant: "indigo",
+			variant: "dormant",
 		}}
 	>
 		{#snippet valueExtra()}

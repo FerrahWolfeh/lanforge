@@ -377,7 +377,7 @@
 				size="sm"
 				onclick={handleConnectOrReconnect}
 				disabled={reconnecting || loading}
-				class="h-8 text-xs gap-1.5 transition-transform duration-150 active:scale-95 transform-gpu shadow-sm"
+				class="h-8 text-xs gap-1.5 transition-transform duration-150 active:scale-95 transform-gpu"
 			>
 				{#if reconnecting}
 					<RefreshCwIcon class="animate-spin size-3.5" data-icon="inline-start" />

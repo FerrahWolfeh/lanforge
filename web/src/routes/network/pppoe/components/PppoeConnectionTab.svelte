@@ -70,10 +70,10 @@
 		</Card.Header>
 		<Card.Content class="p-4 flex flex-col gap-5">
 			<!-- Service Enable Switch -->
-			<div class="flex items-center justify-between rounded-xl border p-3.5 bg-muted/20">
+			<div class="flex items-center justify-between rounded-lg border p-3.5 bg-muted/20">
 				<div class="flex flex-col gap-0.5">
 					<Label class="text-xs font-semibold">Enable PPPoE Client Service</Label>
-					<p class="text-[11px] text-muted-foreground">
+					<p class="text-xs text-muted-foreground">
 						When enabled, Lanforge actively negotiates and maintains the PPPoE session on the physical WAN interface.
 					</p>
 				</div>
@@ -102,17 +102,17 @@
 											<div class="flex items-center gap-2">
 												<span class="font-mono font-medium">{iface.name}</span>
 												{#if iface.carrier_up}
-													<span class="size-1.5 rounded-full bg-emerald-500" title="Connected"></span>
+													<span class="size-1.5 rounded-full bg-success" title="Connected"></span>
 												{:else}
 													<span class="size-1.5 rounded-full bg-muted-foreground/40" title="Disconnected"></span>
 												{/if}
 											</div>
-											<div class="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+											<div class="flex items-center gap-1.5 text-xs text-muted-foreground">
 												{#if iface.is_physical}
-													<Badge variant="secondary" class="text-[9px] px-1 py-0 font-normal">Physical</Badge>
+													<Badge variant="secondary" class="text-xs px-1 py-0 font-normal">Physical</Badge>
 												{/if}
 												{#if iface.ips && iface.ips.length > 0}
-													<span class="truncate max-w-[120px] font-mono text-[10px]">{iface.ips[0]}</span>
+													<span class="truncate max-w-[120px] font-mono text-xs">{iface.ips[0]}</span>
 												{/if}
 											</div>
 										</div>
@@ -128,7 +128,7 @@
 							class="h-9 font-mono text-xs"
 						/>
 					{/if}
-					<p class="text-[11px] text-muted-foreground">
+					<p class="text-xs text-muted-foreground">
 						Port connected to your fiber ONT, modem, or upstream switch.
 					</p>
 				</div>
@@ -152,7 +152,7 @@
 							<Select.Item value="none" class="text-xs">None (Unauthenticated)</Select.Item>
 						</Select.Content>
 					</Select.Root>
-					<p class="text-[11px] text-muted-foreground">
+					<p class="text-xs text-muted-foreground">
 						Most fiber and broadband ISPs require CHAP-MD5 authentication.
 					</p>
 				</div>
@@ -202,7 +202,7 @@
 						placeholder="Leave empty for any"
 						class="h-9 text-xs"
 					/>
-					<p class="text-[11px] text-muted-foreground">
+					<p class="text-xs text-muted-foreground">
 						Specifies the requested ISP service tag. Leave empty to accept any.
 					</p>
 				</div>
@@ -216,7 +216,7 @@
 						placeholder="Leave empty for any"
 						class="h-9 text-xs"
 					/>
-					<p class="text-[11px] text-muted-foreground">
+					<p class="text-xs text-muted-foreground">
 						Filter discovery to a specific BRAS hostname. Leave empty for fastest response.
 					</p>
 				</div>
@@ -237,10 +237,10 @@
 		</Card.Header>
 		<Card.Content class="p-4 flex flex-col gap-5">
 			<!-- Probe Enable Switch -->
-			<div class="flex items-center justify-between rounded-xl border p-3.5 bg-muted/20">
+			<div class="flex items-center justify-between rounded-lg border p-3.5 bg-muted/20">
 				<div class="flex flex-col gap-0.5">
 					<Label class="text-xs font-semibold">Enable Underlay Terminal Probe</Label>
-					<p class="text-[11px] text-muted-foreground">
+					<p class="text-xs text-muted-foreground">
 						Verifies that the underlay hardware (optical ONT or bridge modem) has finished booting before transmitting PPPoE discovery packets.
 					</p>
 				</div>
@@ -258,7 +258,7 @@
 							placeholder="192.168.1.1"
 							class="h-9 font-mono text-xs"
 						/>
-						<p class="text-[11px] text-muted-foreground">
+						<p class="text-xs text-muted-foreground">
 							Target IPv4 address of your ONT or modem (typically 192.168.1.1 or 192.168.100.1).
 						</p>
 					</div>
@@ -286,7 +286,7 @@
 											<div class="flex items-center justify-between w-full gap-3">
 												<span class="font-mono font-medium">{iface.name}</span>
 												{#if iface.is_physical}
-													<Badge variant="secondary" class="text-[9px] px-1 py-0 font-normal">Physical</Badge>
+													<Badge variant="secondary" class="text-xs px-1 py-0 font-normal">Physical</Badge>
 												{/if}
 											</div>
 										</Select.Item>
@@ -301,7 +301,7 @@
 								class="h-9 font-mono text-xs"
 							/>
 						{/if}
-						<p class="text-[11px] text-muted-foreground">
+						<p class="text-xs text-muted-foreground">
 							Network interface for sending ARP probes. Defaults to untagged parent if WAN uses a VLAN.
 						</p>
 					</div>
@@ -317,7 +317,7 @@
 							bind:value={formProbeMaxWaitSecs}
 							class="h-9 font-mono text-xs"
 						/>
-						<p class="text-[11px] text-muted-foreground">
+						<p class="text-xs text-muted-foreground">
 							Soft-gate deadline (default 10s). If the ONT does not reply within this limit, PPPoE dials anyway.
 						</p>
 					</div>
@@ -333,7 +333,7 @@
 							bind:value={formProbePollIntervalSecs}
 							class="h-9 font-mono text-xs"
 						/>
-						<p class="text-[11px] text-muted-foreground">
+						<p class="text-xs text-muted-foreground">
 							Frequency of ARP requests while waiting for the ONT to answer (default 2s).
 						</p>
 					</div>
@@ -350,7 +350,7 @@
 							bind:value={formProbeTimeoutMs}
 							class="h-9 font-mono text-xs"
 						/>
-						<p class="text-[11px] text-muted-foreground">
+						<p class="text-xs text-muted-foreground">
 							Per-probe ARP response timeout (default 1000 ms).
 						</p>
 					</div>
@@ -364,7 +364,7 @@
 							placeholder="0.0.0.0 (RFC 5227 Probe)"
 							class="h-9 font-mono text-xs"
 						/>
-						<p class="text-[11px] text-muted-foreground">
+						<p class="text-xs text-muted-foreground">
 							Source IP inside the ARP frame. Leave empty for standard 0.0.0.0 probe request.
 						</p>
 					</div>
