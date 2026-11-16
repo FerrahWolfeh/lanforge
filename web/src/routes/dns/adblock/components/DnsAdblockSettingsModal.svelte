@@ -154,7 +154,7 @@
 			<div class="space-y-2">
 				<div class="flex items-center justify-between">
 					<Label class="text-xs font-semibold">Blocking & Sinkhole Policy</Label>
-					<Badge variant="outline" class="font-mono text-[10px] capitalize">
+					<Badge variant="outline" class="font-mono text-xs capitalize">
 						Active: {blockingMode}
 					</Badge>
 				</div>
@@ -168,7 +168,7 @@
 							class={[
 								"flex flex-col text-left p-3 rounded-lg border transition-all cursor-pointer",
 								selected
-									? "border-primary bg-primary/5 ring-1 ring-primary/40 shadow-xs"
+									? "border-primary bg-primary/5 ring-1 ring-primary/40"
 									: "border-border/60 bg-card hover:bg-muted/40",
 							].join(" ")}
 						>
@@ -178,12 +178,12 @@
 								</span>
 								<Badge
 									variant={selected ? "default" : "secondary"}
-									class="text-[10px] px-1.5 py-0 font-mono"
+									class="text-xs px-1.5 py-0 font-mono"
 								>
 									{mode.badge}
 								</Badge>
 							</div>
-							<p class="text-[11px] text-muted-foreground mt-1 leading-relaxed">
+							<p class="text-xs text-muted-foreground mt-1 leading-relaxed">
 								{mode.description}
 							</p>
 						</button>
@@ -200,7 +200,7 @@
 					</Label>
 					<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
 						<div class="flex flex-col gap-1">
-							<Label for="ipv4-sinkhole-modal" class="text-[11px] text-muted-foreground">IPv4 Address</Label>
+							<Label for="ipv4-sinkhole-modal" class="text-xs text-muted-foreground">IPv4 Address</Label>
 							<Input
 								id="ipv4-sinkhole-modal"
 								placeholder="192.168.1.100"
@@ -210,7 +210,7 @@
 							/>
 						</div>
 						<div class="flex flex-col gap-1">
-							<Label for="ipv6-sinkhole-modal" class="text-[11px] text-muted-foreground">IPv6 Address (Optional)</Label>
+							<Label for="ipv6-sinkhole-modal" class="text-xs text-muted-foreground">IPv6 Address (Optional)</Label>
 							<Input
 								id="ipv6-sinkhole-modal"
 								placeholder="fd00::100"
@@ -230,7 +230,7 @@
 						Automated Daily Refresh Schedule
 					</Label>
 					{#if nextUpdate}
-						<span class="text-[10px] text-muted-foreground font-mono">
+						<span class="text-xs text-muted-foreground font-mono">
 							Next: {new Date(nextUpdate * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
 						</span>
 					{/if}
@@ -242,7 +242,7 @@
 						bind:value={refreshTime}
 						class="font-mono text-xs w-32 h-8"
 					/>
-					<span class="text-[11px] text-muted-foreground">
+					<span class="text-xs text-muted-foreground">
 						Daily check for remote blocklist updates and compilation.
 					</span>
 				</div>

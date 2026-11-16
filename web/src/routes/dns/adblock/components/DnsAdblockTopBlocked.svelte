@@ -67,7 +67,7 @@
 		<Card.Header class="pb-3 border-b border-border/50">
 			<div class="flex items-center justify-between">
 				<div class="flex items-center gap-2">
-					<ShieldAlertIcon class="size-4 text-rose-500" />
+					<ShieldAlertIcon class="size-4 text-danger" />
 					<Card.Title class="text-base">Top Blocked Domains</Card.Title>
 				</div>
 				<span class="text-xs text-muted-foreground font-mono">
@@ -110,14 +110,14 @@
 										title="Copy domain"
 									>
 										{#if copiedDomain === item.domain}
-											<CheckIcon class="size-3 text-emerald-500" />
+											<CheckIcon class="size-3 text-success" />
 										{:else}
 											<CopyIcon class="size-3" />
 										{/if}
 									</button>
 								</div>
 								<div class="w-full bg-muted/60 rounded-full h-1 overflow-hidden">
-									<div class="bg-rose-500 h-1 rounded-full" style="width: {pct}%"></div>
+									<div class="bg-danger h-1 rounded-full" style="width: {pct}%"></div>
 								</div>
 							</div>
 
@@ -131,7 +131,7 @@
 									variant="ghost"
 									size="sm"
 									onclick={() => handleAllow(item.domain)}
-									class="h-7 px-2 text-xs gap-1 text-emerald-600 hover:text-emerald-500 hover:bg-emerald-500/10"
+									class="h-7 px-2 text-xs gap-1 text-success hover:text-success hover:bg-success/10"
 									title="Add to Allowlist"
 								>
 									<ShieldCheckIcon class="size-3.5" />
@@ -188,7 +188,7 @@
 										{client.hostname || client.ip}
 									</span>
 									{#if client.hostname}
-										<span class="text-[11px] font-mono text-muted-foreground">
+										<span class="text-xs font-mono text-muted-foreground">
 											({client.ip})
 										</span>
 									{/if}

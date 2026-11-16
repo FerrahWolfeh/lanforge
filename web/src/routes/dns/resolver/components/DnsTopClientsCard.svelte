@@ -31,19 +31,19 @@
 	<Card.Header class="pb-3 border-b border-border/50">
 		<div class="flex items-center justify-between">
 			<div class="flex items-center gap-2">
-				<UsersIcon class="size-4 text-emerald-400" />
+				<UsersIcon class="size-4 text-success" />
 				<Card.Title class="text-base">Top DNS Clients</Card.Title>
 			</div>
 			<div class="flex items-center gap-2.5">
-				<div class="hidden sm:flex items-center gap-2 text-[10px] font-mono text-muted-foreground">
+				<div class="hidden sm:flex items-center gap-2 text-xs font-mono text-muted-foreground">
 					<span class="flex items-center gap-1">
-						<span class="size-1.5 rounded-full bg-emerald-400"></span> Resolved
+						<span class="size-1.5 rounded-full bg-success"></span> Resolved
 					</span>
 					<span class="flex items-center gap-1">
-						<span class="size-1.5 rounded-full bg-rose-500"></span> Blocked
+						<span class="size-1.5 rounded-full bg-danger"></span> Blocked
 					</span>
 				</div>
-				<Badge variant="outline" class="text-[10px] font-mono">
+				<Badge variant="outline" class="text-xs font-mono">
 					{topClientsList.length} Active Clients
 				</Badge>
 			</div>
@@ -86,7 +86,7 @@
 						<div class="flex items-center justify-between gap-2">
 							<div class="flex items-center gap-2.5 min-w-0">
 								<div
-									class="flex size-7 shrink-0 items-center justify-center rounded-md border bg-emerald-500/10 border-emerald-500/20 text-emerald-400 font-mono text-[10px] font-bold"
+									class="flex size-7 shrink-0 items-center justify-center rounded-md border bg-success/10 border-success/20 text-success font-mono text-xs font-bold"
 								>
 									#{i + 1}
 								</div>
@@ -99,7 +99,7 @@
 									{#if client.hostname}
 										{@const others = (client.addresses?.length ?? 1) - 1}
 										<span
-											class="text-[10px] font-mono text-muted-foreground truncate"
+											class="text-xs font-mono text-muted-foreground truncate"
 											title={client.addresses?.join("\n")}
 										>
 											{client.ip}{others > 0 ? ` +${others} more` : ""}
@@ -113,9 +113,9 @@
 								>
 									{client.count.toLocaleString()} queries
 								</span>
-								<div class="flex items-center gap-1.5 text-[10px] font-mono">
+								<div class="flex items-center gap-1.5 text-xs font-mono">
 									{#if blocked > 0}
-										<span class="text-rose-400 font-medium">
+										<span class="text-danger font-medium">
 											{blocked.toLocaleString()} blocked ({blockedPct}%)
 										</span>
 										<span class="text-muted-foreground/50">•</span>
@@ -128,18 +128,18 @@
 						</div>
 						<!-- Progress Bar: Two-tone Allowed (Emerald/Sky) vs Blocked (Rose) -->
 						<div
-							class="flex w-full h-1.5 rounded-full bg-zinc-800/80 overflow-hidden"
+							class="flex w-full h-1.5 rounded-full bg-muted overflow-hidden"
 							title="{allowed.toLocaleString()} resolved, {blocked.toLocaleString()} blocked"
 						>
 							{#if allowedBarPct > 0}
 								<div
-									class="h-full bg-gradient-to-r from-emerald-500 to-sky-500 transition-all {blockedBarPct > 0 ? 'rounded-l-full' : 'rounded-full'}"
+									class="h-full bg-success transition-all {blockedBarPct > 0 ? 'rounded-l-full' : 'rounded-full'}"
 									style="width: {allowedBarPct}%"
 								></div>
 							{/if}
 							{#if blockedBarPct > 0}
 								<div
-									class="h-full bg-rose-500 transition-all {allowedBarPct > 0 ? 'rounded-r-full' : 'rounded-full'}"
+									class="h-full bg-danger transition-all {allowedBarPct > 0 ? 'rounded-r-full' : 'rounded-full'}"
 									style="width: {blockedBarPct}%"
 								></div>
 							{/if}

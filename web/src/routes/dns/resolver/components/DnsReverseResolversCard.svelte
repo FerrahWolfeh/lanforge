@@ -64,7 +64,7 @@
 		<div class="flex items-center justify-between">
 			<div class="flex flex-col gap-0.5">
 				<Card.Title class="text-base flex items-center gap-2">
-					<CpuIcon class="size-4 text-purple-400" />
+					<CpuIcon class="size-4 text-muted-foreground" />
 					<span>Reverse DNS (PTR) Resolvers</span>
 				</Card.Title>
 				<p class="text-muted-foreground text-xs font-normal">
@@ -115,11 +115,11 @@
 						{#each reverseResolvers as r, i (formatSubnet(r.subnet) + i)}
 							<Table.Row>
 								<Table.Cell
-									class="font-semibold text-emerald-400 font-mono"
+									class="font-semibold text-success font-mono"
 								>
 									{formatSubnet(r.subnet)}
 								</Table.Cell>
-								<Table.Cell class="text-sky-400 font-mono">
+								<Table.Cell class="text-muted-foreground font-mono">
 									{formatResolverUri(r)}
 								</Table.Cell>
 								<Table.Cell class="text-right font-sans">
@@ -176,7 +176,7 @@
 											<DropdownMenu.Item
 												onclick={() =>
 													onRemoveReverse(r)}
-												class="gap-2 text-rose-500"
+												class="gap-2 text-danger"
 											>
 												<Trash2Icon
 													class="h-3.5 w-3.5"

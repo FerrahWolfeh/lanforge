@@ -122,7 +122,7 @@
 						Filter Rule Diagnostic
 					</Card.Title>
 				</div>
-				<Badge variant="outline" class="font-mono text-[11px]">
+				<Badge variant="outline" class="font-mono text-xs">
 					Live Resolution Check
 				</Badge>
 			</div>
@@ -202,13 +202,13 @@
 				</div>
 			{/if}
 			{#if checkResult}
-				<div class="rounded-lg border p-4 space-y-3 {checkResult.matched && checkResult.filter?.action === 'block' ? 'bg-rose-500/5 border-rose-500/20' : 'bg-emerald-500/5 border-emerald-500/20'}">
+				<div class="rounded-lg border p-4 space-y-3 {checkResult.matched && checkResult.filter?.action === 'block' ? 'bg-danger/5 border-danger/20' : 'bg-success/5 border-success/20'}">
 					<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
 						<div class="flex items-center gap-2">
 							{#if checkResult.matched && checkResult.filter?.action === 'block'}
-								<ShieldAlertIcon class="size-5 text-rose-500" />
+								<ShieldAlertIcon class="size-5 text-danger" />
 								<div>
-									<div class="text-sm font-semibold text-rose-600 dark:text-rose-400">
+									<div class="text-sm font-semibold text-danger">
 										BLOCKED
 									</div>
 									<div class="text-xs text-muted-foreground">
@@ -216,9 +216,9 @@
 									</div>
 								</div>
 							{:else}
-								<ShieldCheckIcon class="size-5 text-emerald-500" />
+								<ShieldCheckIcon class="size-5 text-success" />
 								<div>
-									<div class="text-sm font-semibold text-emerald-600 dark:text-emerald-400">
+									<div class="text-sm font-semibold text-success">
 										ALLOWED
 									</div>
 									<div class="text-xs text-muted-foreground">
@@ -240,7 +240,7 @@
 					{#if checkResult.filter}
 						<div class="pt-3 border-t border-border/40 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
 							<div>
-								<span class="text-muted-foreground block text-[11px] font-medium uppercase tracking-wider">
+								<span class="text-muted-foreground block text-xs font-medium">
 									Matched Rule
 								</span>
 								<div class="flex items-center gap-2 mt-1">
@@ -248,7 +248,7 @@
 										{checkResult.filter.rule ?? checkResult.domain}
 									</code>
 									{#if checkResult.filter.important}
-										<Badge variant="secondary" class="font-mono text-[10px] bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20">
+										<Badge variant="secondary" class="font-mono text-xs bg-warning/10 text-warning border-warning/20">
 											$important
 										</Badge>
 									{/if}
@@ -256,7 +256,7 @@
 							</div>
 
 							<div>
-								<span class="text-muted-foreground block text-[11px] font-medium uppercase tracking-wider">
+								<span class="text-muted-foreground block text-xs font-medium">
 									Origin
 								</span>
 								<div class="mt-1 font-mono text-xs text-foreground">
@@ -280,7 +280,7 @@
 
 					{#if checkResult.source_matches && checkResult.source_matches.length > 0}
 						<div class="pt-3 border-t border-border/40 space-y-2">
-							<span class="text-muted-foreground block text-[11px] font-medium uppercase tracking-wider">
+							<span class="text-muted-foreground block text-xs font-medium">
 								Matching Source Lists ({checkResult.source_matches.length})
 							</span>
 							<div class="space-y-1.5">
@@ -289,7 +289,7 @@
 										<div class="flex items-center gap-2 min-w-0">
 											<Badge
 												variant="outline"
-												class="text-[10px] font-mono shrink-0 {sm.action === 'block' ? 'bg-rose-500/10 text-rose-600 border-rose-500/20' : 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'}"
+												class="text-xs font-mono shrink-0 {sm.action === 'block' ? 'bg-danger/10 text-danger border-danger/20' : 'bg-success/10 text-success border-success/20'}"
 											>
 												{sm.action.toUpperCase()}
 											</Badge>
@@ -298,7 +298,7 @@
 											</span>
 										</div>
 										{#if sm.rule}
-											<code class="font-mono text-[11px] shrink-0 text-foreground bg-muted/40 px-1 py-0.5 rounded">
+											<code class="font-mono text-xs shrink-0 text-foreground bg-muted/40 px-1 py-0.5 rounded">
 												{sm.rule}
 											</code>
 										{/if}

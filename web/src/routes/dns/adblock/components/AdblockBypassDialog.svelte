@@ -45,7 +45,7 @@
 	<Dialog.Content class="w-[95vw] sm:max-w-lg">
 		<Dialog.Header>
 			<div class="flex items-center gap-2">
-				<div class="p-2 rounded-lg bg-amber-500/10 text-amber-500">
+				<div class="p-2 rounded-lg bg-warning/10 text-warning">
 					<ShieldOffIcon class="size-4" />
 				</div>
 				<Dialog.Title>Bypass</Dialog.Title>

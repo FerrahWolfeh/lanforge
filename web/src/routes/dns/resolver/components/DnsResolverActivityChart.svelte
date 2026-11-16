@@ -33,23 +33,23 @@
 	const chartConfig = {
 		forwarded: {
 			label: "Forwarded",
-			color: "#38bdf8",
+			color: "var(--chart-1)",
 		},
 		local: {
 			label: "Local",
-			color: "#2dd4bf",
+			color: "var(--chart-3)",
 		},
 		cached: {
 			label: "Cached",
-			color: "#34d399",
+			color: "var(--chart-2)",
 		},
 		rewritten: {
 			label: "Rewritten",
-			color: "#c084fc",
+			color: "var(--chart-4)",
 		},
 		blocked: {
 			label: "Blocked",
-			color: "#f43f5e",
+			color: "var(--danger)",
 		},
 	} satisfies Chart.ChartConfig;
 
@@ -200,7 +200,7 @@
 	<Card.Header class="pb-3 border-b border-border/50">
 		<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 			<div class="flex items-center gap-2">
-				<ActivityIcon class="size-4 text-sky-400" />
+				<ActivityIcon class="size-4 text-muted-foreground" />
 				<div>
 					<Card.Title class="text-base">DNS Query Activity (24h Window)</Card.Title>
 					<p class="text-muted-foreground text-xs mt-0.5">
@@ -217,7 +217,7 @@
 						class={[
 							"inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium transition-colors",
 							chartMode === "area"
-								? "bg-background text-foreground shadow-xs"
+								? "bg-background text-foreground"
 								: "text-muted-foreground hover:text-foreground",
 						].join(" ")}
 						onclick={() => (chartMode = "area")}
@@ -231,7 +231,7 @@
 						class={[
 							"inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium transition-colors",
 							chartMode === "bar"
-								? "bg-background text-foreground shadow-xs"
+								? "bg-background text-foreground"
 								: "text-muted-foreground hover:text-foreground",
 						].join(" ")}
 						onclick={() => (chartMode = "bar")}
@@ -251,14 +251,14 @@
 				class={[
 					"flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition-all cursor-pointer select-none",
 					showForwarded
-						? "border-sky-500/40 bg-sky-500/15 text-sky-400 font-medium"
+						? "border-border bg-muted text-muted-foreground font-medium"
 						: "border-border/40 bg-muted/20 text-muted-foreground line-through opacity-60 hover:opacity-100",
 				].join(" ")}
 				onclick={() => (showForwarded = !showForwarded)}
 			>
-				<span class="size-2 rounded-full bg-sky-400"></span>
+				<span class="size-2 rounded-full" style="background: var(--chart-1)"></span>
 				<span>Forwarded</span>
-				<span class="font-mono text-[11px] opacity-80">({chartSummary.forwardedPct}%)</span>
+				<span class="font-mono text-xs opacity-80">({chartSummary.forwardedPct}%)</span>
 			</button>
 
 			<button
@@ -266,14 +266,14 @@
 				class={[
 					"flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition-all cursor-pointer select-none",
 					showCached
-						? "border-emerald-500/40 bg-emerald-500/15 text-emerald-400 font-medium"
+						? "border-success/40 bg-success/15 text-success font-medium"
 						: "border-border/40 bg-muted/20 text-muted-foreground line-through opacity-60 hover:opacity-100",
 				].join(" ")}
 				onclick={() => (showCached = !showCached)}
 			>
-				<span class="size-2 rounded-full bg-emerald-400"></span>
+				<span class="size-2 rounded-full" style="background: var(--chart-2)"></span>
 				<span>Cached</span>
-				<span class="font-mono text-[11px] opacity-80">({chartSummary.cachedPct}%)</span>
+				<span class="font-mono text-xs opacity-80">({chartSummary.cachedPct}%)</span>
 			</button>
 
 			<button
@@ -281,14 +281,14 @@
 				class={[
 					"flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition-all cursor-pointer select-none",
 					showLocal
-						? "border-teal-500/40 bg-teal-500/15 text-teal-400 font-medium"
+						? "border-border bg-muted text-muted-foreground font-medium"
 						: "border-border/40 bg-muted/20 text-muted-foreground line-through opacity-60 hover:opacity-100",
 				].join(" ")}
 				onclick={() => (showLocal = !showLocal)}
 			>
-				<span class="size-2 rounded-full bg-teal-400"></span>
+				<span class="size-2 rounded-full" style="background: var(--chart-3)"></span>
 				<span>Local</span>
-				<span class="font-mono text-[11px] opacity-80">({chartSummary.localPct}%)</span>
+				<span class="font-mono text-xs opacity-80">({chartSummary.localPct}%)</span>
 			</button>
 
 			{#if chartSummary.rewritten > 0}
@@ -297,14 +297,14 @@
 					class={[
 						"flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition-all cursor-pointer select-none",
 						showRewritten
-							? "border-purple-500/40 bg-purple-500/15 text-purple-400 font-medium"
+							? "border-border bg-muted text-muted-foreground font-medium"
 							: "border-border/40 bg-muted/20 text-muted-foreground line-through opacity-60 hover:opacity-100",
 					].join(" ")}
 					onclick={() => (showRewritten = !showRewritten)}
 				>
-					<span class="size-2 rounded-full bg-purple-400"></span>
+					<span class="size-2 rounded-full" style="background: var(--chart-4)"></span>
 					<span>Rewritten</span>
-					<span class="font-mono text-[11px] opacity-80">({chartSummary.rewrittenPct}%)</span>
+					<span class="font-mono text-xs opacity-80">({chartSummary.rewrittenPct}%)</span>
 				</button>
 			{/if}
 
@@ -313,14 +313,14 @@
 				class={[
 					"flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition-all cursor-pointer select-none",
 					showBlocked
-						? "border-rose-500/40 bg-rose-500/15 text-rose-400 font-medium"
+						? "border-danger/40 bg-danger/15 text-danger font-medium"
 						: "border-border/40 bg-muted/20 text-muted-foreground line-through opacity-60 hover:opacity-100",
 				].join(" ")}
 				onclick={() => (showBlocked = !showBlocked)}
 			>
-				<span class="size-2 rounded-full bg-rose-400"></span>
+				<span class="size-2 rounded-full bg-danger"></span>
 				<span>Blocked</span>
-				<span class="font-mono text-[11px] opacity-80">({chartSummary.blockedPct}%)</span>
+				<span class="font-mono text-xs opacity-80">({chartSummary.blockedPct}%)</span>
 			</button>
 		</div>
 	</Card.Header>
@@ -396,24 +396,24 @@
 	<Card.Footer class="border-t border-border/50 bg-muted/15 px-6 py-3">
 		<div class="grid grid-cols-2 gap-4 sm:grid-cols-4 w-full text-xs font-mono">
 			<div class="flex flex-col gap-0.5">
-				<span class="text-muted-foreground text-[10px] uppercase font-sans font-semibold tracking-wider">24h Queries</span>
+				<span class="text-muted-foreground text-xs font-medium">24h Queries</span>
 				<span class="text-foreground font-bold tabular-nums text-sm">{chartSummary.total.toLocaleString()}</span>
 			</div>
 			<div class="flex flex-col gap-0.5">
-				<span class="text-muted-foreground text-[10px] uppercase font-sans font-semibold tracking-wider">Cache Hits</span>
-				<span class="text-emerald-400 font-bold tabular-nums text-sm">
+				<span class="text-muted-foreground text-xs font-medium">Cache Hits</span>
+				<span class="text-foreground font-bold tabular-nums text-sm">
 					{chartSummary.cached.toLocaleString()} <span class="text-xs font-normal text-muted-foreground">({chartSummary.cachedPct}%)</span>
 				</span>
 			</div>
 			<div class="flex flex-col gap-0.5">
-				<span class="text-muted-foreground text-[10px] uppercase font-sans font-semibold tracking-wider">Forwarded</span>
-				<span class="text-sky-400 font-bold tabular-nums text-sm">
+				<span class="text-muted-foreground text-xs font-medium">Forwarded</span>
+				<span class="text-foreground font-bold tabular-nums text-sm">
 					{chartSummary.forwarded.toLocaleString()} <span class="text-xs font-normal text-muted-foreground">({chartSummary.forwardedPct}%)</span>
 				</span>
 			</div>
 			<div class="flex flex-col gap-0.5">
-				<span class="text-muted-foreground text-[10px] uppercase font-sans font-semibold tracking-wider">Blocked (Adblock)</span>
-				<span class="text-rose-400 font-bold tabular-nums text-sm">
+				<span class="text-muted-foreground text-xs font-medium">Blocked (Adblock)</span>
+				<span class="text-danger font-bold tabular-nums text-sm">
 					{chartSummary.blocked.toLocaleString()} <span class="text-xs font-normal text-muted-foreground">({chartSummary.blockedPct}%)</span>
 				</span>
 			</div>

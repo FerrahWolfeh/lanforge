@@ -116,7 +116,7 @@
 	<Dialog.Content class="sm:max-w-lg">
 		<Dialog.Header>
 			<Dialog.Title class="flex items-center gap-2">
-				<SlidersIcon class="size-4 text-sky-500 dark:text-sky-400" />
+				<SlidersIcon class="size-4 text-muted-foreground" />
 				<span>DNS Resolver Tuning & Maintenance</span>
 			</Dialog.Title>
 			<Dialog.Description>
@@ -128,13 +128,13 @@
 			<!-- Strategy Selection -->
 			<div class="flex flex-col gap-2">
 				<div class="flex items-center justify-between">
-					<Label class="text-xs font-semibold text-foreground uppercase tracking-wider">
+					<Label class="text-xs font-medium text-muted-foreground">
 						Upstream Resolution Strategy
 					</Label>
 					{#if loadingMode}
-						<span class="text-[10px] text-muted-foreground animate-pulse">Loading mode...</span>
+						<span class="text-xs text-muted-foreground animate-pulse">Loading mode...</span>
 					{:else if savingMode}
-						<span class="text-[10px] text-primary animate-pulse">Saving mode...</span>
+						<span class="text-xs text-primary animate-pulse">Saving mode...</span>
 					{/if}
 				</div>
 				<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -153,11 +153,11 @@
 						>
 							<div class="flex w-full items-center justify-between gap-1">
 								<span class="text-xs font-semibold text-foreground">{m.name}</span>
-								<Badge variant={selected ? "default" : "secondary"} class="text-[9px] px-1.5 py-0 font-mono">
+								<Badge variant={selected ? "default" : "secondary"} class="text-xs px-1.5 py-0 font-mono">
 									{m.badge}
 								</Badge>
 							</div>
-							<span class="text-[10px] text-muted-foreground mt-1 leading-tight">
+							<span class="text-xs text-muted-foreground mt-1 leading-tight">
 								{m.desc}
 							</span>
 						</button>
@@ -169,7 +169,7 @@
 
 			<!-- Cache Maintenance & Telemetry -->
 			<div class="flex flex-col gap-2">
-				<Label class="text-xs font-semibold text-foreground uppercase tracking-wider">
+				<Label class="text-xs font-medium text-muted-foreground">
 					In-Memory Cache Lifecycle
 				</Label>
 
@@ -197,7 +197,7 @@
 				<div class="flex items-center justify-between p-3 rounded-lg border bg-card/60 mt-1">
 					<div class="flex flex-col gap-0.5">
 						<span class="text-xs font-semibold text-foreground">Flush In-Memory Cache</span>
-						<span class="text-[11px] text-muted-foreground">
+						<span class="text-xs text-muted-foreground">
 							Purges all cached query responses, forcing next queries to resolve upstream.
 						</span>
 					</div>
@@ -206,7 +206,7 @@
 						size="sm"
 						onclick={handleFlushCache}
 						disabled={flushing}
-						class="text-xs gap-1.5 text-rose-400 hover:text-rose-300"
+						class="text-xs gap-1.5 text-danger hover:text-danger"
 					>
 						<Trash2Icon class="size-3.5 {flushing ? 'animate-spin' : ''}" />
 						Flush Cache

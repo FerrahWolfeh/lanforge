@@ -185,18 +185,18 @@
 			<div class="overflow-x-auto no-scrollbar w-full sm:w-auto -mx-1 px-1 py-0.5">
 				<Tabs.List class="inline-flex w-max h-9 p-1">
 					<Tabs.Trigger value="allow" class="gap-1.5 text-xs shrink-0">
-						<ShieldCheckIcon class="size-3.5 text-emerald-500" />
+						<ShieldCheckIcon class="size-3.5 text-success" />
 						<span class="hidden sm:inline">Allowlist (Whitelist)</span>
 						<span class="sm:hidden">Allowlist</span>
-						<Badge variant="secondary" class="ml-1 px-1.5 py-0 text-[10px] font-mono">
+						<Badge variant="secondary" class="ml-1 px-1.5 py-0 text-xs font-mono">
 							{allowRules.length}
 						</Badge>
 					</Tabs.Trigger>
 					<Tabs.Trigger value="block" class="gap-1.5 text-xs shrink-0">
-						<ShieldAlertIcon class="size-3.5 text-rose-500" />
+						<ShieldAlertIcon class="size-3.5 text-danger" />
 						<span class="hidden sm:inline">Custom Blocklist (Blacklist)</span>
 						<span class="sm:hidden">Custom Blocklist</span>
-						<Badge variant="secondary" class="ml-1 px-1.5 py-0 text-[10px] font-mono">
+						<Badge variant="secondary" class="ml-1 px-1.5 py-0 text-xs font-mono">
 							{customBlocks.length}
 						</Badge>
 					</Tabs.Trigger>
@@ -302,7 +302,7 @@
 													title="Copy domain"
 												>
 													{#if copiedDomain === ruleLabel(entry)}
-														<CheckIcon class="size-3 text-emerald-500" />
+														<CheckIcon class="size-3 text-success" />
 													{:else}
 														<CopyIcon class="size-3" />
 													{/if}
@@ -319,11 +319,11 @@
 												title="Click to toggle rule status"
 											>
 												{#if entry.enabled}
-													<Badge variant="outline" class="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 text-[10px] font-mono cursor-pointer hover:bg-emerald-500/20">
+													<Badge variant="outline" class="bg-success/10 text-success border-success/20 text-xs font-mono cursor-pointer hover:bg-success/20">
 														Allowed
 													</Badge>
 												{:else}
-													<Badge variant="outline" class="bg-muted text-muted-foreground border-border text-[10px] font-mono cursor-pointer hover:bg-muted/80">
+													<Badge variant="outline" class="bg-muted text-muted-foreground border-border text-xs font-mono cursor-pointer hover:bg-muted/80">
 														Disabled
 													</Badge>
 												{/if}
@@ -398,7 +398,7 @@
 													title="Copy domain"
 												>
 													{#if copiedDomain === ruleLabel(entry)}
-														<CheckIcon class="size-3 text-emerald-500" />
+														<CheckIcon class="size-3 text-success" />
 													{:else}
 														<CopyIcon class="size-3" />
 													{/if}
@@ -415,11 +415,11 @@
 												title="Click to toggle rule status"
 											>
 												{#if entry.enabled}
-													<Badge variant="outline" class="bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20 text-[10px] font-mono cursor-pointer hover:bg-rose-500/20">
+													<Badge variant="outline" class="bg-danger/10 text-danger border-danger/20 text-xs font-mono cursor-pointer hover:bg-danger/20">
 														Blocked
 													</Badge>
 												{:else}
-													<Badge variant="outline" class="bg-muted text-muted-foreground border-border text-[10px] font-mono cursor-pointer hover:bg-muted/80">
+													<Badge variant="outline" class="bg-muted text-muted-foreground border-border text-xs font-mono cursor-pointer hover:bg-muted/80">
 														Disabled
 													</Badge>
 												{/if}

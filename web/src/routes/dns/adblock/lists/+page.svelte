@@ -336,7 +336,7 @@
 											</span>
 										{/if}
 										<div class="flex items-center gap-2">
-											<span class="truncate font-mono {source.name ? 'text-[11px] text-muted-foreground' : 'text-foreground font-medium'}" title={source.url}>
+											<span class="truncate font-mono {source.name ? 'text-xs text-muted-foreground' : 'text-foreground font-medium'}" title={source.url}>
 												{source.url}
 											</span>
 											<button
@@ -346,7 +346,7 @@
 												title="Copy URL"
 											>
 												{#if copiedUrl === source.url}
-													<CheckIcon class="size-3.5 text-emerald-500" />
+													<CheckIcon class="size-3.5 text-success" />
 												{:else}
 													<CopyIcon class="size-3.5" />
 												{/if}
@@ -356,7 +356,7 @@
 											{#each source.usedBy as layer (layer)}
 												<Badge
 													variant="outline"
-													class="px-1.5 py-0 text-[10px] {layer === 'Global' ? '' : 'font-mono bg-primary/5'}"
+													class="px-1.5 py-0 text-xs {layer === 'Global' ? '' : 'font-mono bg-primary/5'}"
 												>
 													{layer === "Global" ? "Global" : `Group: ${layer}`}
 												</Badge>
@@ -368,11 +368,11 @@
 								<!-- Type / Purpose -->
 								<Table.Cell>
 									{#if source.kind === "blocklist"}
-										<Badge variant="outline" class="bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20 text-[11px] font-mono">
+										<Badge variant="outline" class="bg-danger/10 text-danger border-danger/20 text-xs font-mono">
 											Blocklist
 										</Badge>
 									{:else}
-										<Badge variant="outline" class="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 text-[11px] font-mono">
+										<Badge variant="outline" class="bg-success/10 text-success border-success/20 text-xs font-mono">
 											Allowlist
 										</Badge>
 									{/if}
@@ -381,11 +381,11 @@
 								<!-- Format -->
 								<Table.Cell>
 									<div class="flex items-center gap-1.5 flex-wrap">
-										<Badge variant="secondary" class="font-mono text-[10px] uppercase">
+										<Badge variant="secondary" class="font-mono text-xs uppercase">
 											{source.format}
 										</Badge>
 										{#if source.format_detected && source.format_detected !== source.format}
-											<span class="text-[10px] text-muted-foreground font-mono">
+											<span class="text-xs text-muted-foreground font-mono">
 												→ {source.format_detected}
 											</span>
 										{/if}
@@ -396,11 +396,11 @@
 								<Table.Cell>
 									<div class="flex flex-col text-xs">
 										{#if source.rules_count === 0 && !source.last_success}
-											<span class="font-mono text-[11px] text-muted-foreground animate-pulse">
+											<span class="font-mono text-xs text-muted-foreground animate-pulse">
 												Pending download...
 											</span>
 										{:else if source.kind === "allowlist"}
-											<span class="font-mono font-medium text-emerald-600 dark:text-emerald-400">
+											<span class="font-mono font-medium text-success">
 												{source.rules_count.toLocaleString()} allowed
 											</span>
 										{:else}
@@ -409,12 +409,12 @@
 											</span>
 										{/if}
 										{#if source.exceptions_count > 0}
-											<span class="text-[10px] font-mono text-emerald-600 dark:text-emerald-400">
+											<span class="text-xs font-mono text-success">
 												+{source.exceptions_count.toLocaleString()} exceptions
 											</span>
 										{/if}
 										{#if source.unsupported_count > 0}
-											<span class="text-[10px] font-mono text-amber-600 dark:text-amber-400" title="{source.unsupported_count} unsupported modifiers/syntax rules ignored">
+											<span class="text-xs font-mono text-warning" title="{source.unsupported_count} unsupported modifiers/syntax rules ignored">
 												{source.unsupported_count.toLocaleString()} unsupported
 											</span>
 										{/if}
@@ -426,24 +426,24 @@
 									{#if source.consecutive_failures > 0}
 										<Badge
 											variant="outline"
-											class="bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20 gap-1 font-mono text-[10px]"
+											class="bg-danger/10 text-danger border-danger/20 gap-1 font-mono text-xs"
 											title={source.last_error ?? "Fetch failed"}
 										>
-											<AlertCircleIcon class="size-3 text-rose-500" />
+											<AlertCircleIcon class="size-3 text-danger" />
 											Fail ({source.consecutive_failures})
 										</Badge>
 									{:else if source.last_success}
 										<Badge
 											variant="outline"
-											class="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 gap-1 font-mono text-[10px]"
+											class="bg-success/10 text-success border-success/20 gap-1 font-mono text-xs"
 											title="Last successful update: {formatTimestamp(source.last_success)}"
 										>
-											<span class="size-1.5 rounded-full bg-emerald-500"></span>
+											<span class="size-1.5 rounded-full bg-success"></span>
 											OK
 										</Badge>
 									{:else}
-										<Badge variant="outline" class="gap-1 font-mono text-[10px] text-amber-600 dark:text-amber-400 border-amber-500/20 bg-amber-500/10">
-											<span class="size-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+										<Badge variant="outline" class="gap-1 font-mono text-xs text-warning border-warning/20 bg-warning/10">
+											<span class="size-1.5 rounded-full bg-warning"></span>
 											Pending
 										</Badge>
 									{/if}

@@ -107,12 +107,12 @@
 	function statusDot(status: string | undefined): string {
 		switch (status) {
 			case "healthy":
-				return "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]";
+				return "bg-success";
 			case "degraded":
-				return "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.8)]";
+				return "bg-danger";
 			// Answered before, nothing recent.
 			case "idle":
-				return "bg-amber-500/70";
+				return "bg-warning/70";
 			// "untested" (never answered yet) and anything unknown: grey.
 			default:
 				return "bg-muted-foreground/50";
@@ -140,9 +140,9 @@
 	<Card.Header class="pb-3 border-b border-border/50">
 		<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 			<div class="flex items-center gap-2">
-				<ServerIcon class="size-4 text-indigo-400" />
+				<ServerIcon class="size-4 text-muted-foreground" />
 				<Card.Title class="text-base">Upstream DNS Resolvers</Card.Title>
-				<Badge variant="outline" class="font-mono text-[10px]">
+				<Badge variant="outline" class="font-mono text-xs">
 					{displayUpstreams.length}
 				</Badge>
 			</div>
@@ -160,7 +160,7 @@
 								class="gap-1.5 text-xs h-8"
 								disabled={applyingPreset}
 							>
-								<SparklesIcon class="size-3.5 text-amber-400" />
+								<SparklesIcon class="size-3.5 text-warning" />
 								<span>Presets</span>
 								<ChevronDownIcon class="size-3 opacity-60" />
 							</Button>
@@ -174,7 +174,7 @@
 							{#each PRESETS as p (p.id)}
 								<DropdownMenu.Item onclick={() => applyPreset(p)} class="cursor-pointer flex flex-col items-start gap-0.5 py-1.5">
 									<span class="font-semibold text-foreground">{p.name}</span>
-									<span class="text-[10px] text-muted-foreground">{p.desc}</span>
+									<span class="text-xs text-muted-foreground">{p.desc}</span>
 								</DropdownMenu.Item>
 							{/each}
 						</DropdownMenu.Group>
@@ -189,7 +189,7 @@
 					onclick={onOpenDigModal}
 					class="text-xs h-8 gap-1.5"
 				>
-					<ZapIcon data-icon="inline-start" class="text-amber-400 size-3.5" />
+					<ZapIcon data-icon="inline-start" class="text-warning size-3.5" />
 					Dig
 				</Button>
 
@@ -221,7 +221,7 @@
 				{#if canEdit}
 				<div class="flex flex-wrap items-center justify-center gap-2 mt-4">
 					<Button size="sm" variant="outline" onclick={() => applyPreset(PRESETS[0])}>
-						<SparklesIcon class="size-3.5 text-amber-400 mr-1" />
+						<SparklesIcon class="size-3.5 text-warning mr-1" />
 						Apply Quad9 Default
 					</Button>
 					<Button size="sm" onclick={onAddUpstream}>
@@ -252,7 +252,7 @@
 								<Table.Cell class="font-sans">
 									<Badge
 										variant="outline"
-										class="text-[10px] uppercase font-mono px-1.5 py-0"
+										class="text-xs uppercase font-mono px-1.5 py-0"
 									>
 										{getUpstreamProtocol(item)}
 									</Badge>
@@ -260,14 +260,14 @@
 								<Table.Cell class="text-muted-foreground font-sans">
 									{item.domain || "Global (*)"}
 								</Table.Cell>
-								<Table.Cell class="text-emerald-400 font-medium font-mono">
+								<Table.Cell class="text-success font-medium font-mono">
 									{getUpstreamLatency(item)}
 								</Table.Cell>
 								<Table.Cell class="font-sans">
 									<div class="flex items-center gap-1.5">
 										<span class={["size-2 rounded-full", statusDot(item.status)].join(" ")}
 										></span>
-										<span class="text-[11px] font-medium capitalize">
+										<span class="text-xs font-medium capitalize">
 											{item.status || "unknown"}
 										</span>
 									</div>
@@ -284,7 +284,7 @@
 												onclick={onOpenDigModal}
 												class="gap-2 cursor-pointer"
 											>
-												<SearchIcon class="h-3.5 w-3.5 text-sky-400" />
+												<SearchIcon class="h-3.5 w-3.5 text-muted-foreground" />
 												Test Resolution (Dig)
 											</DropdownMenu.Item>
 											<DropdownMenu.Item
@@ -303,7 +303,7 @@
 											<DropdownMenu.Separator />
 											<DropdownMenu.Item
 												onclick={() => onRemoveUpstream(item)}
-												class="gap-2 text-rose-500 cursor-pointer"
+												class="gap-2 text-danger cursor-pointer"
 											>
 												<Trash2Icon class="h-3.5 w-3.5" />
 												Remove Upstream

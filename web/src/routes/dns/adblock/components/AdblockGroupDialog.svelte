@@ -96,7 +96,7 @@
 						bind:value={name}
 						required
 					/>
-					<p class="text-[11px] text-muted-foreground">
+					<p class="text-xs text-muted-foreground">
 						Letters, digits, '-' and '_'. Its rules live in <span class="font-mono"
 							>adblock/&lt;name&gt;.rules</span
 						>.
@@ -112,7 +112,7 @@
 			<div class="flex flex-col gap-1.5">
 				<Label class="text-xs font-semibold">Extra lists</Label>
 				{#if offered.length === 0}
-					<p class="text-[11px] text-muted-foreground">
+					<p class="text-xs text-muted-foreground">
 						No list outside the global layer. Add one from the Blocklists tab, for this group.
 					</p>
 				{:else}
@@ -122,7 +122,7 @@
 								type="button"
 								variant={chosen.includes(list) ? "default" : "outline"}
 								size="sm"
-								class="h-7 gap-1 font-mono text-[11px]"
+								class="h-7 gap-1 font-mono text-xs"
 								onclick={() => toggle(list)}
 							>
 								{#if chosen.includes(list)}

@@ -251,9 +251,9 @@
 					variant="outline"
 					size="sm"
 					onclick={() => (tuningOpen = true)}
-					class="text-xs gap-1.5 h-8 border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300 hover:bg-sky-500/20 transition-colors font-medium shadow-xs"
+					class="text-xs gap-1.5 h-8 border-border bg-muted text-muted-foreground hover:bg-muted transition-colors font-medium"
 				>
-					<SlidersIcon class="size-3.5 text-sky-600 dark:text-sky-400" />
+					<SlidersIcon class="size-3.5 text-muted-foreground" />
 					<span>Tuning & Cache</span>
 				</Button>
 				{/if}
@@ -333,7 +333,7 @@
 	<Dialog.Content class="sm:max-w-md">
 		<Dialog.Header>
 			<Dialog.Title class="flex items-center gap-2">
-				<PlusIcon class="size-5 text-indigo-400" />
+				<PlusIcon class="size-5 text-muted-foreground" />
 				<span>Add Upstream DNS Server</span>
 			</Dialog.Title>
 		</Dialog.Header>
@@ -391,13 +391,13 @@
 
 				{#if upstreamTestResult}
 					{#if upstreamTestResult.ok}
-						<div class="flex items-center gap-2 p-2 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs">
-							<CheckCircle2Icon class="size-4 shrink-0 text-emerald-500" />
+						<div class="flex items-center gap-2 p-2 rounded-md bg-success/10 border border-success/20 text-success text-xs">
+							<CheckCircle2Icon class="size-4 shrink-0 text-success" />
 							<span>Validated reachable: responds in <strong class="font-mono">{upstreamTestResult.latency_ms} ms</strong></span>
 						</div>
 					{:else}
-						<div class="flex items-center gap-2 p-2 rounded-md bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 text-xs">
-							<AlertCircleIcon class="size-4 shrink-0 text-rose-500" />
+						<div class="flex items-center gap-2 p-2 rounded-md bg-danger/10 border border-danger/20 text-danger text-xs">
+							<AlertCircleIcon class="size-4 shrink-0 text-danger" />
 							<span>{upstreamTestResult.error || "Upstream server unreachable or timed out."}</span>
 						</div>
 					{/if}
@@ -418,7 +418,7 @@
 							></span>
 							<span>Testing...</span>
 						{:else}
-							<ZapIcon class="size-3.5 text-amber-500" />
+							<ZapIcon class="size-3.5 text-warning" />
 							<span>Test Upstream</span>
 						{/if}
 					</Button>
@@ -456,7 +456,7 @@
 	<Dialog.Content class="sm:max-w-md">
 		<Dialog.Header>
 			<Dialog.Title class="flex items-center gap-2">
-				<PlusIcon class="size-5 text-purple-400" />
+				<PlusIcon class="size-5 text-muted-foreground" />
 				<span>Add Reverse PTR Resolver</span>
 			</Dialog.Title>
 		</Dialog.Header>

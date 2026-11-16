@@ -159,23 +159,23 @@
 			>
 				{#snippet children()}
 					<div class="flex flex-col gap-2.5 text-xs text-muted-foreground">
-						<div class="flex flex-col gap-0.5 border-l-2 border-emerald-500/80 pl-2.5">
+						<div class="flex flex-col gap-0.5 border-l-2 border-success/80 pl-2.5">
 							<span class="font-semibold text-foreground flex items-center gap-1.5">
-								<span class="size-1.5 rounded-full bg-emerald-500"></span>
+								<span class="size-1.5 rounded-full bg-success"></span>
 								Tier 1: In-Memory Overrides & Exceptions
 							</span>
-							<span>User custom rules and <code class="text-primary font-mono font-medium">@@</code> exceptions evaluated in-memory with priority override and <code class="text-amber-500 font-mono font-medium">$important</code> handling.</span>
+							<span>User custom rules and <code class="text-primary font-mono font-medium">@@</code> exceptions evaluated in-memory with priority override and <code class="text-warning font-mono font-medium">$important</code> handling.</span>
 						</div>
-						<div class="flex flex-col gap-0.5 border-l-2 border-sky-500/80 pl-2.5">
+						<div class="flex flex-col gap-0.5 border-l-2 border-border pl-2.5">
 							<span class="font-semibold text-foreground flex items-center gap-1.5">
-								<span class="size-1.5 rounded-full bg-sky-500"></span>
+								<span class="size-1.5 rounded-full bg-muted"></span>
 								Tier 2: Zero-Copy Mmap Reversed FST
 							</span>
 							<span>Finite State Transducer on disk (<code class="text-foreground font-mono">blocklist.fst</code>). Traverses reversed labels (<code class="text-foreground font-mono">com.doubleclick</code>) for deterministic suffix & exact matching in ~0.2µs with zero heap bloat.</span>
 						</div>
-						<div class="flex flex-col gap-0.5 border-l-2 border-purple-500/80 pl-2.5">
+						<div class="flex flex-col gap-0.5 border-l-2 border-border pl-2.5">
 							<span class="font-semibold text-foreground flex items-center gap-1.5">
-								<span class="size-1.5 rounded-full bg-purple-500"></span>
+								<span class="size-1.5 rounded-full bg-muted"></span>
 								Tier 3: Incremental HTTP Manifest Cache
 							</span>
 							<span>Per-source ETag & Last-Modified conditional downloads. Merges sorted lists via streaming multi-way k-merge, skipping unchanged sources entirely.</span>
@@ -199,10 +199,10 @@
 								class="gap-2 text-xs h-8"
 							>
 								{#if status?.enabled}
-									<PauseIcon class="size-3.5 text-amber-500" />
+									<PauseIcon class="size-3.5 text-warning" />
 									Pause
 								{:else}
-									<PlayIcon class="size-3.5 text-emerald-500" />
+									<PlayIcon class="size-3.5 text-success" />
 									Resume
 								{/if}
 								<ChevronDownIcon class="size-3 opacity-60" />
@@ -231,8 +231,8 @@
 						<DropdownMenu.Item
 							onclick={() => toggleEnabled(!status?.enabled)}
 							class={status?.enabled
-								? "text-rose-500 font-medium"
-								: "text-emerald-500 font-medium"}
+								? "text-danger font-medium"
+								: "text-success font-medium"}
 						>
 							{#if status?.enabled}
 								Disable Indefinitely

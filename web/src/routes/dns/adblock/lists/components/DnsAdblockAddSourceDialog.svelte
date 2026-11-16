@@ -96,7 +96,7 @@
 					bind:value={name}
 					class="text-xs"
 				/>
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					Friendly identifier used in TOML configuration and dashboard views.
 				</p>
 			</div>
@@ -111,7 +111,7 @@
 					required
 					class="font-mono text-xs"
 				/>
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					Must be publicly accessible via HTTP/HTTPS.
 				</p>
 			</div>
@@ -207,7 +207,7 @@
 						</Select.Item>
 					</Select.Content>
 				</Select.Root>
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					Auto-detection inspects headers and content during download.
 				</p>
 			</div>

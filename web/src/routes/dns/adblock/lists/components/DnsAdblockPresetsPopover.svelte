@@ -70,7 +70,7 @@
 		<span>Presets</span>
 	</Popover.Trigger>
 	<Popover.Content
-		class="w-80 sm:w-96 p-3 shadow-xl border border-border/70 bg-popover text-popover-foreground z-50 rounded-lg flex flex-col gap-2.5 max-h-[80vh] overflow-y-auto"
+		class="w-80 sm:w-96 p-3 border border-border/70 bg-popover text-popover-foreground z-50 rounded-lg flex flex-col gap-2.5 max-h-[80vh] overflow-y-auto"
 		side="bottom"
 		align="end"
 	>
@@ -79,7 +79,7 @@
 				<BookmarkIcon class="size-3.5 text-primary" />
 				<span>Community Blocklist Presets</span>
 			</div>
-			<Badge variant="outline" class="text-[9px] font-mono">Curated</Badge>
+			<Badge variant="outline" class="text-xs font-mono">Curated</Badge>
 		</div>
 
 		<div class="flex flex-col gap-2">
@@ -88,20 +88,20 @@
 				<div class="flex flex-col p-2.5 rounded-md border border-border/60 bg-muted/20 gap-1.5">
 					<div class="flex items-center justify-between gap-2">
 						<span class="font-semibold text-xs text-foreground truncate">{p.title}</span>
-						<Badge variant="secondary" class="text-[9px] px-1.5 py-0 font-mono">
+						<Badge variant="secondary" class="text-xs px-1.5 py-0 font-mono">
 							{p.badge}
 						</Badge>
 					</div>
-					<p class="text-[11px] text-muted-foreground line-clamp-2">
+					<p class="text-xs text-muted-foreground line-clamp-2">
 						{p.description}
 					</p>
 					<div class="flex items-center justify-between pt-1 border-t border-border/30">
-						<span class="text-[10px] font-mono text-muted-foreground truncate max-w-[170px]" title={p.url}>
+						<span class="text-xs font-mono text-muted-foreground truncate max-w-[170px]" title={p.url}>
 							{p.url.replace(/^https?:\/\//, "")}
 						</span>
 
 						{#if installed}
-							<Badge variant="outline" class="text-[9px] bg-emerald-500/10 text-emerald-600 border-emerald-500/20 gap-1 h-5 px-1.5">
+							<Badge variant="outline" class="text-xs bg-success/10 text-success border-success/20 gap-1 h-5 px-1.5">
 								<CheckIcon class="size-2.5" />
 								Active
 							</Badge>
@@ -109,7 +109,7 @@
 							<Button
 								variant="outline"
 								size="sm"
-								class="h-6 text-[10px] px-2 gap-1"
+								class="h-6 text-xs px-2 gap-1"
 								onclick={() => onAdd(p.url, p.title, p.format)}
 							>
 								<PlusIcon class="size-2.5" />
