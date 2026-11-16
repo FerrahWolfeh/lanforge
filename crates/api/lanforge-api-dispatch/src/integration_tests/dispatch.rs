@@ -527,9 +527,13 @@ async fn test_dispatch_system_config_import_overwrite() {
 #[tokio::test]
 async fn lease_release_removes_all_leases_from_pool() {
     let client_ctx = init_test_context().await;
-    let mut rx = client_ctx.ctx.bus().subscribe();
-
     let mac = MacAddr::parse("00:11:22:33:44:55").unwrap();
+    let _ = client_ctx.ctx.apply(DeviceUpdate::V4LeaseGranted {
+        mac,
+        ip: "192.168.1.100".parse().unwrap(),
+        expires: SystemTime::now() + Duration::from_secs(3600),
+    });
+    let mut rx = client_ctx.ctx.bus().subscribe();
     let res = client_ctx.handle_lease_release(mac, None).await;
 
     assert!(matches!(res, Response::Success(_)));
