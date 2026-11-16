@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { leaseTarget } from "./lease-target";
 	import { auth } from "$lib/stores/auth.svelte";
 	import { Button } from "$lib/components/ui/button";
 	import { toast } from "svelte-sonner";
@@ -9,7 +10,7 @@
 		wol,
 		eventsUrl,
 	} from "$lib/api/client";
-	import type { LeaseEntry, LeaseTarget } from "$lib/api/types";
+	import type { LeaseEntry } from "$lib/api/types";
 	import { createDebounce } from "$lib/utils";
 
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
@@ -46,8 +47,7 @@
 
 	async function handleRenew(lease: LeaseEntry) {
 		try {
-			const target: LeaseTarget = lease.kind === "v4" ? "V4" : { V6: { iaid: 0 } };
-			await leaseRenew(lease.mac, target);
+			await leaseRenew(lease.mac, leaseTarget(lease));
 			toast.success(`Sent renewal trigger for ${lease.address}`);
 			await loadLeasesData(false);
 		} catch (err: any) {

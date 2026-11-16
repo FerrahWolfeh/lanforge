@@ -105,14 +105,19 @@
 		</DropdownMenu.Trigger>
 		<DropdownMenu.Content align="end" class="w-48 text-xs">
 			{#if canEdit}
-			<DropdownMenu.Item onclick={() => onRenew(lease)} class="gap-2">
-				<RotateCcwIcon class="size-3.5 text-muted-foreground" />
-				Renew Lease
-			</DropdownMenu.Item>
-			<DropdownMenu.Item onclick={() => onPromote(lease)} class="gap-2">
-				<BookmarkPlusIcon class="size-3.5 text-muted-foreground" />
-				Convert to Static Host
-			</DropdownMenu.Item>
+			<!-- Only DHCPv4 has a server-initiated renewal (FORCERENEW); DHCPv6 Reconfigure is not implemented. -->
+			{#if lease.kind === "v4"}
+				<DropdownMenu.Item onclick={() => onRenew(lease)} class="gap-2">
+					<RotateCcwIcon class="size-3.5 text-muted-foreground" />
+					Renew Lease
+				</DropdownMenu.Item>
+			{/if}
+			{#if lease.kind !== "v6_prefix"}
+				<DropdownMenu.Item onclick={() => onPromote(lease)} class="gap-2">
+					<BookmarkPlusIcon class="size-3.5 text-muted-foreground" />
+					Convert to Static Host
+				</DropdownMenu.Item>
+			{/if}
 			<DropdownMenu.Item onclick={() => onWol(lease.mac)} class="gap-2">
 				<ZapIcon class="size-3.5 text-muted-foreground" />
 				Send Wake-on-LAN

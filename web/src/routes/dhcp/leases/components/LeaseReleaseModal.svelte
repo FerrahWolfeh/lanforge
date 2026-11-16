@@ -4,7 +4,8 @@
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import { toast } from "svelte-sonner";
 	import { leaseRelease } from "$lib/api/client";
-	import type { LeaseEntry, LeaseTarget } from "$lib/api/types";
+	import type { LeaseEntry } from "$lib/api/types";
+	import { leaseTarget } from "../lease-target";
 
 	let {
 		open = $bindable(false),
@@ -22,8 +23,7 @@
 		if (!lease) return;
 		releasing = true;
 		try {
-			const target: LeaseTarget = lease.kind === "v4" ? "V4" : { V6: { iaid: 0 } };
-			await leaseRelease(lease.mac, target);
+			await leaseRelease(lease.mac, leaseTarget(lease));
 			toast.success(`Released DHCP lease for ${lease.address}`);
 			open = false;
 			await onReleased();

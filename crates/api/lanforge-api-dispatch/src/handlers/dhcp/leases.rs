@@ -7,7 +7,7 @@ use lanforge_core::bus::{LanforgeEvent, NetworkEvent};
 use lanforge_types::{
     device::{IPv4State, IPv6State, state::system_time_to_epoch_u32},
     identifiers::MacAddr,
-    update::LeaseTarget,
+    update::{DeviceUpdate, LeaseTarget},
 };
 use std::{net::IpAddr, time::SystemTime};
 
@@ -31,6 +31,17 @@ impl ClientContext {
         mac: MacAddr,
         target: Option<LeaseTarget>,
     ) -> Response {
+        // Only the DHCPv4 service reacts to the bus request; DHCPv6 leases are dropped here.
+        if let Some(v6 @ (LeaseTarget::V6 { .. } | LeaseTarget::V6Prefix { .. })) = &target
+            && !self.ctx.apply(DeviceUpdate::LeaseReleased {
+                mac,
+                target: v6.clone(),
+            })
+        {
+            return Response::NotFound {
+                error: format!("no {v6} lease for {mac}"),
+            };
+        }
         let _ = self.ctx.bus().publish(LanforgeEvent::Network(
             NetworkEvent::LeaseReleaseRequested { mac, target },
         ));
@@ -89,6 +100,7 @@ impl ClientContext {
                         kind: LeaseKind::V4,
                         expires: u64::from(lease.expires),
                         remaining_secs: u64::from(lease.expires.saturating_sub(now_epoch)),
+                        iaid: None,
                     });
                 }
                 for v6_state in &dev.v6 {
@@ -100,8 +112,20 @@ impl ClientContext {
                             kind: LeaseKind::V6,
                             expires: u64::from(lease.expires),
                             remaining_secs: u64::from(lease.expires.saturating_sub(now_epoch)),
+                            iaid: Some(lease.iaid),
                         });
                     }
+                }
+                for lease in &dev.v6_prefixes {
+                    list.push(LeaseEntry {
+                        mac: dev.mac,
+                        hostname: dev.display_hostname().to_string(),
+                        address: IpAddr::V6(lease.prefix),
+                        kind: LeaseKind::V6Prefix,
+                        expires: u64::from(lease.expires),
+                        remaining_secs: u64::from(lease.expires.saturating_sub(now_epoch)),
+                        iaid: Some(lease.iaid),
+                    });
                 }
             }
             list

@@ -764,6 +764,8 @@ export interface LeaseEntry {
 	kind: LeaseKind;
 	expires: number;
 	remaining_secs: number;
+	/** IA_NA/IA_PD identifier; null for DHCPv4. */
+	iaid?: number | null;
 }
 
 export type DhcpLease = LeaseEntry;
