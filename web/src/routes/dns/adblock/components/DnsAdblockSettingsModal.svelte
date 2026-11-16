@@ -1,11 +1,9 @@
 <script lang="ts">
 	import * as Dialog from "$lib/components/ui/dialog";
-	import * as Card from "$lib/components/ui/card";
 	import { Button } from "$lib/components/ui/button";
 	import { Input } from "$lib/components/ui/input";
 	import { Label } from "$lib/components/ui/label";
 	import { Badge } from "$lib/components/ui/badge";
-	import ShieldAlertIcon from "@lucide/svelte/icons/shield-alert";
 	import SaveIcon from "@lucide/svelte/icons/save";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import ClockIcon from "@lucide/svelte/icons/clock";

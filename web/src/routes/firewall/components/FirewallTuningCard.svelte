@@ -2,7 +2,6 @@
 	import * as Card from "$lib/components/ui/card";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Switch } from "$lib/components/ui/switch";
-	import { Separator } from "$lib/components/ui/separator";
 	import HelpPopover from "$lib/components/HelpPopover.svelte";
 	import ZapIcon from "@lucide/svelte/icons/zap";
 	import GaugeIcon from "@lucide/svelte/icons/gauge";

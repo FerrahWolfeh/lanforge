@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { auth } from "$lib/stores/auth.svelte";
 	import { onDestroy, onMount } from "svelte";
-	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import SaveIcon from "@lucide/svelte/icons/save";

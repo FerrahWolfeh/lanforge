@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { cn } from "$lib/utils";
-	import StatusDot, { type StatusState } from "./StatusDot.svelte";
+	import StatusDot from "./StatusDot.svelte";
 	import type { Snippet } from "svelte";
 
 	export type StatusBadgeVariant =
@@ -10,8 +10,6 @@
 		| "error"
 		| "warning"
 		| "primary"
-		| "sky"
-		| "indigo"
 		| "outline";
 
 	let {
@@ -41,9 +39,6 @@
 			case "error":
 			case "failed":
 				return "border-transparent bg-danger/12 text-danger";
-			case "sky":
-				return "border-transparent bg-info/12 text-info";
-			case "indigo":
 			case "primary":
 				return "border-transparent bg-selected text-selected-foreground";
 			case "dormant":

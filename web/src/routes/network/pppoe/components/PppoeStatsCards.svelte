@@ -6,12 +6,9 @@
 	import RadioIcon from "@lucide/svelte/icons/radio";
 	import GlobeIcon from "@lucide/svelte/icons/globe";
 	import ServerIcon from "@lucide/svelte/icons/server";
-	import CpuIcon from "@lucide/svelte/icons/cpu";
-	import ZapIcon from "@lucide/svelte/icons/zap";
 	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
 	import StatCard from "$lib/components/StatCard.svelte";
 	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
-	import StatusBadge from "$lib/components/StatusBadge.svelte";
 	import type { PppoeStatusResponse, PppoeAuthMethod, PppoeConfig } from "$lib/api/types";
 
 	let {

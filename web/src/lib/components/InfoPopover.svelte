@@ -2,28 +2,17 @@
 	import * as Popover from "$lib/components/ui/popover";
 	import InfoIcon from "@lucide/svelte/icons/info";
 	import type { Snippet } from "svelte";
-	import { cn } from "$lib/utils";
 
 	let {
 		title = "",
 		text = "",
 		description = "",
-		trigger,
 		children,
-		side = "top" as "top" | "right" | "bottom" | "left",
-		align = "center" as "start" | "center" | "end",
-		class: triggerClass = "",
-		contentClass = "",
 	}: {
 		title?: string;
 		text?: string;
 		description?: string;
-		trigger?: Snippet;
 		children?: Snippet;
-		side?: "top" | "right" | "bottom" | "left";
-		align?: "start" | "center" | "end";
-		class?: string;
-		contentClass?: string;
 	} = $props();
 
 	const body = $derived(text || description);
@@ -31,25 +20,15 @@
 
 <Popover.Root>
 	<Popover.Trigger
-		class={cn(
-			"inline-flex size-4 items-center justify-center rounded-full text-muted-foreground/70 hover:text-foreground hover:bg-muted/50 transition-colors cursor-pointer shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-			triggerClass,
-		)}
+		class="inline-flex size-4 items-center justify-center rounded-full text-muted-foreground/70 hover:text-foreground hover:bg-muted/50 transition-colors cursor-pointer shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
 		aria-label={title || body || "Information"}
 	>
-		{#if trigger}
-			{@render trigger()}
-		{:else}
-			<InfoIcon class="size-3" />
-		{/if}
+		<InfoIcon class="size-3" />
 	</Popover.Trigger>
 	<Popover.Content
-		class={cn(
-			"w-64 sm:w-72 p-3 text-xs flex flex-col gap-1.5 shadow-lg border border-border/70 bg-popover text-popover-foreground z-50 rounded-lg",
-			contentClass,
-		)}
-		{side}
-		{align}
+		class="w-64 sm:w-72 p-3 text-xs flex flex-col gap-1.5 shadow-lg border border-border/70 bg-popover text-popover-foreground z-50 rounded-lg"
+		side="top"
+		align="center"
 	>
 		{#if title}
 			<div class="flex items-center gap-1.5 font-semibold text-foreground text-xs">

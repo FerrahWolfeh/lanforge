@@ -17,7 +17,6 @@
 	import FileTextIcon from "@lucide/svelte/icons/file-text";
 	import CopyIcon from "@lucide/svelte/icons/copy";
 	import CheckIcon from "@lucide/svelte/icons/check";
-	import PowerIcon from "@lucide/svelte/icons/power";
 	import { toast } from "svelte-sonner";
 	import {
 		dnsAdblockGroups,

@@ -1,5 +1,5 @@
 <script lang="ts" module>
-	export type StatusTone = "ok" | "warning" | "danger" | "info";
+	export type StatusTone = "ok" | "warning" | "danger";
 </script>
 
 <script lang="ts">
@@ -41,9 +41,7 @@
 			? "bg-warning/10 border-warning/35 [&_svg.status-icon]:text-warning"
 			: tone === "danger"
 				? "bg-danger/10 border-danger/35 [&_svg.status-icon]:text-danger"
-				: tone === "info"
-					? "bg-card border-border [&_svg.status-icon]:text-info"
-					: "bg-card border-border [&_svg.status-icon]:text-success"
+				: "bg-card border-border [&_svg.status-icon]:text-success"
 	);
 </script>
 

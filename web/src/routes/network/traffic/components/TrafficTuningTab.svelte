@@ -9,7 +9,6 @@
 	import { Label } from "$lib/components/ui/label";
 	import HelpPopover from "$lib/components/HelpPopover.svelte";
 	import InfoPopover from "$lib/components/InfoPopover.svelte";
-	import CpuIcon from "@lucide/svelte/icons/cpu";
 	import ZapOffIcon from "@lucide/svelte/icons/zap-off";
 	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import SlidersIcon from "@lucide/svelte/icons/sliders";

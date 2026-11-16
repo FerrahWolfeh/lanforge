@@ -725,18 +725,6 @@ export interface WhoisResponse {
 	entry: DeviceEntry;
 }
 
-export interface TransientHostEntry {
-	ip: string;
-	hostname: string;
-	origin: string;
-	resolved_at: number;
-	last_seen: number;
-}
-
-export interface TransientHostsResponse {
-	hosts: TransientHostEntry[];
-}
-
 export interface HostConfigEntry {
 	mac: string;
 	hostname: string | null;

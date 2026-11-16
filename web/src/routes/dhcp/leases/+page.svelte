@@ -124,8 +124,6 @@
 		}
 	});
 
-	// Derived statistics
-	// Filtered leases
 </script>
 
 <svelte:head>

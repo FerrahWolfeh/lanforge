@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Tabs from "$lib/components/ui/tabs";
-	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import {
@@ -366,7 +365,6 @@
 					bind:formRdnss
 					bind:formDnssl
 					{interfaceOptions}
-					{status}
 					{isDirty}
 					{saving}
 					onSave={handleSaveConfig}

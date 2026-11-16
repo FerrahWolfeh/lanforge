@@ -16,8 +16,6 @@
 	import DeviceTable from "./components/DeviceTable.svelte";
 	import MonitorIcon from "@lucide/svelte/icons/monitor";
 	import BookmarkIcon from "@lucide/svelte/icons/bookmark";
-	import GlobeIcon from "@lucide/svelte/icons/globe";
-	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
 	import PageHeader from "$lib/components/PageHeader.svelte";
 

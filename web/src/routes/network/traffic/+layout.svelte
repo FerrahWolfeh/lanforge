@@ -4,7 +4,6 @@
 	import GaugeIcon from "@lucide/svelte/icons/gauge";
 	import CpuIcon from "@lucide/svelte/icons/cpu";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
-	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import { trafficStatus } from "$lib/api/client";
 	import type { TrafficStatusResponse } from "$lib/api/types";

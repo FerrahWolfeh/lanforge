@@ -8,7 +8,7 @@
 	import LinkIcon from "@lucide/svelte/icons/link";
 	import { toast } from "svelte-sonner";
 	import { dnsAdblockUrlAdd } from "$lib/api/client";
-	import type { AdblockSourceFormat, DnsAdblockUrlEntry } from "$lib/api/types";
+	import type { AdblockSourceFormat } from "$lib/api/types";
 
 	let {
 		open = $bindable(false),

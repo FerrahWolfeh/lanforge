@@ -6,7 +6,6 @@
 	import { ModeWatcher } from "mode-watcher";
 	import { Toaster } from "$lib/components/ui/sonner";
 	import { toast } from "svelte-sonner";
-	import { auth } from "$lib/stores/auth.svelte";
 	import { sidebarState } from "$lib/stores/sidebar.svelte";
 	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
 	import { status } from "$lib/api/client";

@@ -1,7 +1,6 @@
 <script lang="ts">
 	import * as Card from "$lib/components/ui/card";
 	import * as Table from "$lib/components/ui/table";
-	import * as Tooltip from "$lib/components/ui/tooltip";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import * as Empty from "$lib/components/ui/empty";
 	import { Button } from "$lib/components/ui/button";

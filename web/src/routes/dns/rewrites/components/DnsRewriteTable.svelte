@@ -2,7 +2,6 @@
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Table from "$lib/components/ui/table";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
-	import { Button } from "$lib/components/ui/button";
 	import { Badge } from "$lib/components/ui/badge";
 	import * as Select from "$lib/components/ui/select";
 	import CopyIcon from "@lucide/svelte/icons/copy";

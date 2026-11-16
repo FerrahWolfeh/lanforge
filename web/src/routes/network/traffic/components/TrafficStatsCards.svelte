@@ -4,11 +4,9 @@
 	import XCircleIcon from "@lucide/svelte/icons/x-circle";
 	import GaugeIcon from "@lucide/svelte/icons/gauge";
 	import CpuIcon from "@lucide/svelte/icons/cpu";
-	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 	import ArrowDownIcon from "@lucide/svelte/icons/arrow-down";
 	import ArrowUpIcon from "@lucide/svelte/icons/arrow-up";
 	import NetworkIcon from "@lucide/svelte/icons/network";
-	import InfoPopover from "$lib/components/InfoPopover.svelte";
 	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
 	import StatCard from "$lib/components/StatCard.svelte";
 	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";

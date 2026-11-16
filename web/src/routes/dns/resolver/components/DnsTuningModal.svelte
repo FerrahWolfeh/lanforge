@@ -8,8 +8,6 @@
 
 	import SlidersIcon from "@lucide/svelte/icons/sliders";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
-	import ZapIcon from "@lucide/svelte/icons/zap";
-	import DatabaseIcon from "@lucide/svelte/icons/database";
 	import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
 
 	import { dnsCacheFlush, dnsUpstreamModeGet, dnsUpstreamModeSet } from "$lib/api/client";

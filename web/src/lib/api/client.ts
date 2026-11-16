@@ -22,7 +22,6 @@ import type {
 	DevicesResponse,
 	DhcpLease,
 	DhcpOptionsConfig,
-	DhcpPoolEntry,
 	DhcpPoolsConfigResponse,
 	DhcpPoolsResponse,
 	DhcpReconcileResponse,
@@ -39,7 +38,6 @@ import type {
 	DnsQueryLogEntry,
 	DnsStatsResponse,
 	DnsUpstreamEntry,
-	DnsUpstreamsResponse,
 	HostConfigEntry,
 	LeaseTarget,
 	LoginRequest,
@@ -52,7 +50,6 @@ import type {
 	SetupStatusResponse,
 	StatusResponse,
 	ServiceBanner,
-	TransientHostEntry,
 	UserInfo,
 	WhoisResponse,
 	PppoeConfig,
@@ -94,7 +91,7 @@ export class ApiError extends Error {
 let memoryToken: string | null = null;
 let memoryTokenLoaded = false;
 
-export function getToken(): string | null {
+function getToken(): string | null {
 	if (!memoryTokenLoaded) {
 		memoryTokenLoaded = true;
 		if (typeof localStorage !== 'undefined') {
@@ -435,8 +432,6 @@ export const deviceRules = (mac: string) =>
 export const purge = (target: string) => del<void>(`/devices/${encodeURIComponent(target)}`);
 export const wol = (target: string) =>
 	post<void>(`/devices/${encodeURIComponent(target)}/wol`);
-export const transientHostList = async (): Promise<TransientHostEntry[]> =>
-	extractList<TransientHostEntry>(await get<any>('/devices/transient'), 'hosts');
 
 // ---------------------------------------------------------------------------
 // Hosts
@@ -477,7 +472,7 @@ export const dnsQueryLog = async (params?: {
 }): Promise<{ entries: DnsQueryLogEntry[]; total: number }> =>
 	extractPaginated<DnsQueryLogEntry>(await getRaw<any>('/dns/logs', params), 'entries');
 
-export function formatDnsAddr(addr: string): string {
+function formatDnsAddr(addr: string): string {
 	const trimmed = addr.trim();
 	if (!trimmed) return trimmed;
 	// Already formatted with port?

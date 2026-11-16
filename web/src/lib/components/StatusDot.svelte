@@ -16,13 +16,11 @@
 		state = "online",
 		size = "md",
 		pulse = false,
-		ping = false,
 		class: className = "",
 	}: {
 		state?: StatusState | string;
 		size?: "sm" | "md" | "lg";
 		pulse?: boolean;
-		ping?: boolean;
 		class?: string;
 	} = $props();
 
@@ -66,14 +64,6 @@
 </script>
 
 <span class={cn("relative inline-flex items-center justify-center shrink-0", className)}>
-	{#if ping && isLive}
-		<span
-			class={cn(
-				"absolute inline-flex rounded-full bg-success opacity-75 animate-ping",
-				sizeClasses
-			)}
-		></span>
-	{/if}
 	<span
 		class={cn(
 			"rounded-full transition-colors",

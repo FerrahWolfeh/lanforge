@@ -1,12 +1,10 @@
 <script lang="ts">
 	import { onMount } from "svelte";
 	import { createPolling } from "$lib/utils/polling";
-	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import HelpPopover from "$lib/components/HelpPopover.svelte";
 	import DatabaseIcon from "@lucide/svelte/icons/database";
-	import AlertTriangleIcon from "@lucide/svelte/icons/triangle-alert";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import LayersIcon from "@lucide/svelte/icons/layers";
 	import WrenchIcon from "@lucide/svelte/icons/wrench";

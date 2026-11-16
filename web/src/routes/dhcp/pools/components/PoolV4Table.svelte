@@ -37,24 +37,18 @@
 		if (pct >= 90) {
 			return {
 				bar: "bg-danger",
-				badge: "text-danger border-danger/30 bg-danger/10",
 				text: "text-danger",
-				label: "Critical",
 			};
 		}
 		if (pct >= 75) {
 			return {
 				bar: "bg-warning",
-				badge: "text-warning border-warning/30 bg-warning/10",
 				text: "text-warning",
-				label: "Elevated",
 			};
 		}
 		return {
 			bar: "bg-brand-gradient",
-			badge: "text-success border-success/30 bg-success/10",
 			text: "text-muted-foreground",
-			label: "Healthy",
 		};
 	}
 

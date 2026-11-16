@@ -4,7 +4,6 @@
 	import PlayIcon from "@lucide/svelte/icons/play";
 	import SquareIcon from "@lucide/svelte/icons/square";
 	import RotateCwIcon from "@lucide/svelte/icons/rotate-cw";
-	import FolderIcon from "@lucide/svelte/icons/folder";
 	import RadioIcon from "@lucide/svelte/icons/radio";
 	import StatCard from "$lib/components/StatCard.svelte";
 	import StatCardGrid from "$lib/components/StatCardGrid.svelte";

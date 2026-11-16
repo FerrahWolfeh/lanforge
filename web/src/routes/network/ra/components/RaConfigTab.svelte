@@ -9,23 +9,13 @@
 	import { Switch } from "$lib/components/ui/switch";
 	import { Separator } from "$lib/components/ui/separator";
 	import { toast } from "svelte-sonner";
-	import { fly, scale } from "svelte/transition";
-	import { cubicOut } from "svelte/easing";
 
 	import PlusIcon from "@lucide/svelte/icons/plus";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
-	import SaveIcon from "@lucide/svelte/icons/save";
-	import RotateCcwIcon from "@lucide/svelte/icons/rotate-ccw";
 	import InfoPopover from "$lib/components/InfoPopover.svelte";
 	import FloatingSaveBar from "$lib/components/FloatingSaveBar.svelte";
 
-	import type {
-		RouterPriority,
-		RaPrefix,
-		PrefixSource,
-		NetworkInterfaceInfo,
-		RaStatusResponse,
-	} from "$lib/api/types";
+	import type { RouterPriority, RaPrefix, PrefixSource, NetworkInterfaceInfo } from "$lib/api/types";
 
 	let {
 		formEnabled = $bindable(true),
@@ -45,7 +35,6 @@
 		formRdnss = $bindable<string[]>([]),
 		formDnssl = $bindable<string[]>([]),
 		interfaceOptions = [],
-		status = null,
 		isDirty = false,
 		saving = false,
 		onSave = async () => {},
@@ -68,7 +57,6 @@
 		formRdnss?: string[];
 		formDnssl?: string[];
 		interfaceOptions?: NetworkInterfaceInfo[];
-		status?: RaStatusResponse | null;
 		isDirty?: boolean;
 		saving?: boolean;
 		onSave?: () => Promise<void>;

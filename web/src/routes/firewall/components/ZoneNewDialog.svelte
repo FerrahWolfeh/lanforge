@@ -1,6 +1,5 @@
 <script lang="ts">
   import * as Dialog from "$lib/components/ui/dialog";
-  import * as Card from "$lib/components/ui/card";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Badge } from "$lib/components/ui/badge";

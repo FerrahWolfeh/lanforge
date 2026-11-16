@@ -1,7 +1,6 @@
 <script lang="ts">
 	import * as Card from "$lib/components/ui/card";
 	import { Skeleton } from "$lib/components/ui/skeleton";
-	import { Badge } from "$lib/components/ui/badge";
 	import * as Chart from "$lib/components/ui/chart/index.js";
 	import { AreaChart, BarChart } from "layerchart";
 	import ChartAreaIcon from "@lucide/svelte/icons/chart-area";

@@ -1,21 +1,16 @@
 <script lang="ts">
 	import { auth } from "$lib/stores/auth.svelte";
 	import ShieldIcon from "@lucide/svelte/icons/shield";
-	import ShieldAlertIcon from "@lucide/svelte/icons/shield-alert";
-	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 	import LayoutDashboardIcon from "@lucide/svelte/icons/layout-dashboard";
 	import ListIcon from "@lucide/svelte/icons/list";
 	import SlidersIcon from "@lucide/svelte/icons/sliders";
 	import UsersIcon from "@lucide/svelte/icons/users";
-	import BanIcon from "@lucide/svelte/icons/ban";
 	import SettingsIcon from "@lucide/svelte/icons/settings";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import PauseIcon from "@lucide/svelte/icons/pause";
 	import PlayIcon from "@lucide/svelte/icons/play";
-	import ClockIcon from "@lucide/svelte/icons/clock";
 	import ChevronDownIcon from "@lucide/svelte/icons/chevron-down";
 	import { Button } from "$lib/components/ui/button";
-	import { Badge } from "$lib/components/ui/badge";
 	import { Switch } from "$lib/components/ui/switch";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import { toast } from "svelte-sonner";

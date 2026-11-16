@@ -16,7 +16,6 @@
 	import ChevronUpIcon from "@lucide/svelte/icons/chevron-up";
 	import ArrowDownIcon from "@lucide/svelte/icons/arrow-down";
 	import ArrowUpIcon from "@lucide/svelte/icons/arrow-up";
-	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import { formatBytes } from "$lib/utils";
 
 	import type { SqmOverhead, SqmDiffserv, NetworkInterfaceInfo, TrafficTelemetryResponse } from "$lib/api/types";

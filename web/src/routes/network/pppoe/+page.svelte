@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Tabs from "$lib/components/ui/tabs";
-	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import {
 		pppoeStatus,
@@ -19,16 +18,11 @@
 	} from "$lib/api/types";
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
-	import { fly } from "svelte/transition";
-	import { cubicOut } from "svelte/easing";
 	import { createPolling } from "$lib/utils/polling";
 
 	import PlugZapIcon from "@lucide/svelte/icons/plug-zap";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import PlayIcon from "@lucide/svelte/icons/play";
-	import KeyIcon from "@lucide/svelte/icons/key";
-	import SaveIcon from "@lucide/svelte/icons/save";
-	import RotateCcwIcon from "@lucide/svelte/icons/rotate-ccw";
 	import XCircleIcon from "@lucide/svelte/icons/x-circle";
 
 	import PppoeStatsCards from "./components/PppoeStatsCards.svelte";

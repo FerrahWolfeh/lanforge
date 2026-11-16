@@ -8,14 +8,13 @@
 
 	interface Props {
 		status: FirewallStatus | null;
-		loading: boolean;
 		activeTxId: string | null;
 		rollbackSecsLeft: number | null;
 		onAbort: () => void;
 		onConfirmNow: () => void;
 	}
 
-	let { status, loading, activeTxId, rollbackSecsLeft, onAbort, onConfirmNow }: Props = $props();
+	let { status, activeTxId, rollbackSecsLeft, onAbort, onConfirmNow }: Props = $props();
 
 </script>
 

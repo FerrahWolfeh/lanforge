@@ -3,7 +3,6 @@
 	import { Badge } from "$lib/components/ui/badge";
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import FilterIcon from "@lucide/svelte/icons/filter";
-	import type { DnsRecordType } from "$lib/api/types";
 
 	let {
 		loading = true,

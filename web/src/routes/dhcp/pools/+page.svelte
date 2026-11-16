@@ -11,7 +11,6 @@
 	import RotateCcwIcon from "@lucide/svelte/icons/rotate-ccw";
 	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 	import SlidersIcon from "@lucide/svelte/icons/sliders";
-	import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
 
 	import {
 		dhcpPools,

@@ -2,18 +2,12 @@
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Tabs from "$lib/components/ui/tabs";
 	import * as Card from "$lib/components/ui/card";
-	import * as Alert from "$lib/components/ui/alert";
 	import { Button } from "$lib/components/ui/button";
-	import { Switch } from "$lib/components/ui/switch";
-	import { Badge } from "$lib/components/ui/badge";
-	import { Separator } from "$lib/components/ui/separator";
 	import { Spinner } from "$lib/components/ui/spinner";
 	import { toast } from "svelte-sonner";
 	import { onMount, onDestroy } from "svelte";
 	import { page } from "$app/state";
 	import { replaceState } from "$app/navigation";
-	import { fly } from "svelte/transition";
-	import { cubicOut } from "svelte/easing";
 
 	import ShieldIcon from "@lucide/svelte/icons/shield";
 	import ShieldOffIcon from "@lucide/svelte/icons/shield-off";
@@ -384,7 +378,6 @@
 	<!-- Live Status Cards Grid -->
 	<FirewallStatsCards
 		status={fwStatus}
-		{loading}
 		{activeTxId}
 		{rollbackSecsLeft}
 		onAbort={handleAbort}

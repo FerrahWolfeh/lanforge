@@ -23,7 +23,7 @@
 	import SnowflakeIcon from "@lucide/svelte/icons/snowflake";
 	import { toast } from "svelte-sonner";
 	import { dnsBlock, dnsAllow } from "$lib/api/client";
-	import type { DnsQueryLogEntry, DnsRecordType, FilterMatch } from "$lib/api/types";
+	import type { DnsQueryLogEntry, FilterMatch } from "$lib/api/types";
 
 	// Block, allow and rewrites need dns_write.
 	const canDnsWrite = $derived(auth.can("dns_write"));

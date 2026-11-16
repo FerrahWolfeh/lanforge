@@ -61,27 +61,7 @@
 		{ value: "1000", label: "1,000 Events" },
 	];
 
-	function getTopicBadgeClass(topic?: string): string {
-		switch (topic?.toLowerCase()) {
-			case "firewall":
-				return "bg-muted text-muted-foreground border-border";
-			case "device":
-			case "dhcp":
-				return "bg-muted text-muted-foreground border-border";
-			case "pppoe":
-				return "bg-muted text-muted-foreground border-border";
-			case "traffic":
-				return "bg-muted text-muted-foreground border-border";
-			case "network":
-				return "bg-muted text-muted-foreground border-border";
-			case "storage":
-			case "db":
-				return "bg-muted text-muted-foreground border-border";
-			case "system":
-			default:
-				return "bg-muted text-muted-foreground border-border";
-		}
-	}
+	const topicBadgeClass = "bg-muted text-muted-foreground border-border";
 
 	function formatTime(ts: number): string {
 		if (!ts) return "—";
@@ -330,7 +310,7 @@
 					<span class="flex min-w-0 items-center gap-2">
 						<Badge
 							variant="outline"
-							class="text-xs font-medium {getTopicBadgeClass(ev.topic)}"
+							class="text-xs font-medium {topicBadgeClass}"
 						>
 							{ev.topic || "system"}
 						</Badge>
@@ -367,7 +347,7 @@
 			<Table.Cell class="whitespace-nowrap w-[95px] sm:w-[110px]">
 				<Badge
 					variant="outline"
-					class="text-xs font-medium {getTopicBadgeClass(ev.topic)}"
+					class="text-xs font-medium {topicBadgeClass}"
 				>
 					{ev.topic || "system"}
 				</Badge>
