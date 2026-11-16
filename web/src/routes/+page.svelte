@@ -231,57 +231,57 @@
 		{
 			id: "ra",
 			name: "IPv6 Router Advertisements",
-			tag: "RADVD / SLAAC",
-			proto: "ICMPv6 (NDP)",
-			desc: "Autoconfiguration prefix announcements (GUA/ULA)",
+			tag: "SLAAC",
+			proto: "ICMPv6",
+			desc: "Tells LAN devices the IPv6 prefix, router and DNS server",
 			href: "/network/ra",
 		},
 		{
 			id: "dhcpv4",
 			name: "DHCPv4 Server",
-			tag: "Dynamic Leases",
-			proto: "UDP Port 67",
-			desc: "IPv4 address allocation with option 3 (gateway) & 6 (DNS)",
+			tag: "IPv4",
+			proto: "UDP 67",
+			desc: "Hands out IPv4 addresses, gateway and DNS server",
 			href: "/dhcp/server",
 		},
 		{
 			id: "dhcpv6",
 			name: "DHCPv6 Server",
-			tag: "Stateful / Stateless",
-			proto: "UDP Port 547",
-			desc: "IPv6 stateful address & prefix delegation",
+			tag: "IPv6",
+			proto: "UDP 547",
+			desc: "Hands out IPv6 addresses and delegated prefixes",
 			href: "/dhcp/pools",
 		},
 		{
 			id: "dns",
-			name: "DNS Resolver & Engine",
-			tag: "DNS Cache & Block",
-			proto: "UDP/TCP Port 53",
-			desc: "Upstream recursive forwarding, cache, & adblock filtering",
+			name: "DNS Resolver",
+			tag: "DNS",
+			proto: "UDP/TCP 53",
+			desc: "Answers DNS for the LAN, with cache and adblock",
 			href: "/dns/resolver",
 		},
 		{
 			id: "tftp",
-			name: "Bootstrapping TFTP",
-			tag: "PXE Boot",
-			proto: "UDP Port 69",
-			desc: "Network boot firmware & image distribution server",
+			name: "TFTP Server",
+			tag: "PXE",
+			proto: "UDP 69",
+			desc: "Serves boot files for network boot",
 			href: "/tftp",
 		},
 		{
 			id: "pppoe",
-			name: "PPPoE Concentrator",
-			tag: "Relay / Tunnel",
-			proto: "PPPoverEthernet",
-			desc: "DSL/FTTH encapsulation & point-to-point tunneling",
+			name: "PPPoE WAN",
+			tag: "WAN",
+			proto: "PPPoE",
+			desc: "The internet connection over PPPoE",
 			href: "/network/pppoe",
 		},
 		{
 			id: "monitor",
-			name: "Neighbor Monitor",
-			tag: "Passive / Netlink",
-			proto: "Kernel Netlink",
-			desc: "Real-time L2/L3 neighbor discovery and device tracking",
+			name: "Device Discovery",
+			tag: "ARP / NDP",
+			proto: "Netlink",
+			desc: "Finds devices on the LAN and tracks whether they are online",
 			href: "/network/devices",
 		},
 	];
@@ -294,8 +294,8 @@
 <div class="flex flex-col gap-5 sm:gap-6">
 	<!-- Page Header -->
 	<PageHeader
-		title="Router Dashboard"
-		description="Network status, DHCP leases, DNS activity, and connected devices"
+		title="Dashboard"
+		description="What the router and the LAN are doing right now."
 		icon={MonitorIcon}
 	>
 		{#snippet actions()}

@@ -129,7 +129,7 @@
 	<!-- Top Action Bar -->
 	<PageHeader
 		title="DNS Rewrites"
-		description="Custom DNS response overrides, domain wildcards, and dynamic LAN device bindings."
+		description="Fixed answers for names on your network, including names that follow a device."
 		icon={ArrowRightLeftIcon}
 	>
 		{#snippet actions()}

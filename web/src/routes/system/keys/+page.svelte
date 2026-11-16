@@ -19,7 +19,7 @@
 	import PageHeader from "$lib/components/PageHeader.svelte";
 
 	const accessTabs: NavTabItem[] = [
-		{ label: "Users & Access", href: "/system/users", icon: UsersIcon },
+		{ label: "Users", href: "/system/users", icon: UsersIcon },
 		{ label: "API & Auth Keys", href: "/system/keys", icon: KeyRoundIcon },
 	];
 
@@ -57,8 +57,8 @@
 <div class="flex flex-col gap-6 w-full pb-12">
 	<!-- Top Header -->
 	<PageHeader
-		title="Authentication & API Keys"
-		description="Manage long-lived Bearer API tokens for integrations, automation scripts, and remote clients."
+		title="API Tokens"
+		description="Long-lived tokens for scripts and other programs that use the API."
 		icon={KeyRoundIcon}
 	>
 		{#snippet actions()}

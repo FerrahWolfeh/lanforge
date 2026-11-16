@@ -44,14 +44,14 @@
 </script>
 
 <svelte:head>
-	<title>Database & Persistence — Lanforge</title>
+	<title>Database — Lanforge</title>
 </svelte:head>
 
 <div class="flex flex-col gap-6 w-full">
 	<!-- Page Header -->
 	<PageHeader
-		title="Database & Persistence"
-		description="Storage engine health, persistent inventory, background flushes, and configuration management."
+		title="Database"
+		description="Where lanforge keeps devices, leases, users and statistics. Configuration lives in lanforge.toml."
 		icon={DatabaseIcon}
 	>
 		{#snippet badge()}

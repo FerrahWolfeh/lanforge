@@ -55,8 +55,8 @@
 <div class="flex flex-col gap-6 w-full pb-24">
 	<!-- Page Header -->
 	<PageHeader
-		title="Traffic & Network Tuning"
-		description="Hardware network interface optimization, kernel offloads, and CAKE bufferbloat management."
+		title="Traffic & SQM"
+		description="Interface throughput, CAKE queue management and NIC offloads."
 		icon={SlidersHorizontalIcon}
 	>
 		{#snippet badge()}

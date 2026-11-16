@@ -253,8 +253,8 @@
 <div class="flex flex-col gap-6 w-full">
 	<!-- Page Header -->
 	<PageHeader
-		title="IPv6 Router Advertisement"
-		description="Autonomous SLAAC orchestration, RFC 4861/8106 ICMPv6 telemetry, and runtime parameters."
+		title="IPv6 Router Advertisements"
+		description="How devices on the LAN learn the IPv6 prefix, router and DNS server."
 		icon={RadioIcon}
 	>
 		{#snippet badge()}

@@ -173,7 +173,7 @@
 <div class="flex flex-col gap-6 w-full pb-12">
 	<PageHeader
 		title="System"
-		description="Daemon status, hardware resources, and service operations."
+		description="Daemon version, uptime, memory and logging."
 		icon={ServerIcon}
 	>
 	{#snippet actions()}

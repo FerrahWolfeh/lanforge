@@ -126,8 +126,8 @@
 <div class="flex flex-col gap-5">
 	<!-- Page Header -->
 	<PageHeader
-		title="Static Hosts & Reservations"
-		description="Fixed IP reservations, DNS name overrides, and predictable interface suffixes."
+		title="Static Hosts"
+		description="Devices with a fixed name and address."
 		icon={BookmarkIcon}
 	/>
 

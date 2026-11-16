@@ -19,34 +19,34 @@
 
 	const titleMap: Record<string, string> = {
 		"/": "Dashboard",
-		"/network/devices": "Network Devices",
-		"/network/hosts": "Static Host Reservations",
+		"/network/devices": "Devices",
+		"/network/hosts": "Static Hosts",
 		"/network/traffic": "Traffic & SQM",
 		"/network/traffic/sqm": "Bufferbloat (CAKE)",
-		"/network/traffic/tuning": "Hardware NIC Tuning",
-		"/firewall": "Firewall & Security",
+		"/network/traffic/tuning": "NIC Tuning",
+		"/firewall": "Firewall",
 		"/network/ra": "IPv6 Router Advertisements",
-		"/network/pppoe": "PPPoE WAN Client",
+		"/network/pppoe": "PPPoE WAN",
 		"/dns/resolver": "DNS Resolver",
 		"/dns/log": "DNS Query Log",
-		"/dns/rewrites": "Custom DNS Rewrites",
-		"/dns/cache": "DNS Cache Entries",
-		"/dns/adblock": "Adblock & Domain Filtering",
+		"/dns/rewrites": "DNS Rewrites",
+		"/dns/cache": "DNS Cache",
+		"/dns/adblock": "Adblock",
 		"/dns/adblock/lists": "Adblock Lists",
 		"/dns/adblock/rules": "Adblock Custom Rules",
 		"/dns/adblock/settings": "Adblock Settings",
 		"/dhcp": "DHCP Server",
-		"/dhcp/leases": "DHCP Active Leases",
-		"/dhcp/pools": "DHCP Scopes & Pools",
+		"/dhcp/leases": "DHCP Leases",
+		"/dhcp/pools": "DHCP Pools",
 		"/dhcp/server": "DHCP Server Options",
 		"/tftp": "TFTP Server",
 		"/system": "System Status",
-		"/system/services": "System Services",
-		"/system/database": "Database & Persistence",
+		"/system/services": "Services",
+		"/system/database": "Database",
 		"/system/database/maintenance": "Database Maintenance",
 		"/system/database/backup": "Database Backup & Restore",
-		"/system/users": "User Accounts",
-		"/system/keys": "API & Auth Keys",
+		"/system/users": "Users",
+		"/system/keys": "API Tokens",
 	};
 
 	const currentTitle = $derived(
@@ -54,7 +54,7 @@
 		(page.url.pathname.startsWith("/dhcp")
 			? "DHCP Server"
 			: page.url.pathname.startsWith("/dns")
-			? "DNS & Security"
+			? "DNS"
 			: page.url.pathname.startsWith("/network")
 			? "Network"
 			: page.url.pathname.startsWith("/system")

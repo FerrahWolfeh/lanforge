@@ -141,8 +141,8 @@
 <div class="space-y-6">
 	<!-- Top Action Bar -->
 	<PageHeader
-		title="DNS Cache Inspection"
-		description="Inspect live in-memory DNS resolution records, memory footprint, and lifetime expirations."
+		title="DNS Cache"
+		description="Answers the resolver is holding and when they expire."
 		icon={DatabaseIcon}
 	>
 		{#snippet actions()}

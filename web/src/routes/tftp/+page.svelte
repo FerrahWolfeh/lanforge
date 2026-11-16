@@ -249,14 +249,14 @@
 </script>
 
 <svelte:head>
-	<title>TFTP Server & Netboot — Lanforge</title>
+	<title>TFTP Server — Lanforge</title>
 </svelte:head>
 
 <div class="flex flex-col gap-6">
 	<!-- Page Header -->
 	<PageHeader
-		title="TFTP Server & Netboot"
-		description="TFTP file server for PXE network boot and operating system provisioning."
+		title="TFTP Server"
+		description="Serves boot files to devices that start from the network (PXE)."
 		icon={HardDriveDownloadIcon}
 	>
 		{#snippet badge()}

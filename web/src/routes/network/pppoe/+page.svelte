@@ -304,8 +304,8 @@
 <div class="flex flex-col gap-6 w-full">
 	<!-- Page Header -->
 	<PageHeader
-		title="PPPoE WAN Concentrator"
-		description="Carrier broadband link orchestration, credentials, and MSS clamping."
+		title="PPPoE WAN"
+		description="The internet connection: login, session and link settings."
 		icon={PlugZapIcon}
 	>
 		{#snippet badge()}

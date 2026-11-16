@@ -287,8 +287,8 @@
 <div class="flex flex-col gap-6 w-full pb-16">
 	<!-- Page Header -->
 	<PageHeader
-		title="Firewall & Security"
-		description="Configure zone policies, inter-zone routing, port forwarding, and kernel acceleration."
+		title="Firewall"
+		description="Zones, port forwards and host rules for traffic in and out of the router."
 		icon={ShieldIcon}
 	>
 		{#snippet badge()}

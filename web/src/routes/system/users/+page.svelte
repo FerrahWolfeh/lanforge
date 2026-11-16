@@ -18,7 +18,7 @@
 	import PageHeader from "$lib/components/PageHeader.svelte";
 
 	const accessTabs: NavTabItem[] = [
-		{ label: "Users & Access", href: "/system/users", icon: UsersIcon },
+		{ label: "Users", href: "/system/users", icon: UsersIcon },
 		{ label: "API & Auth Keys", href: "/system/keys", icon: KeyRoundIcon },
 	];
 
@@ -55,14 +55,14 @@
 </script>
 
 <svelte:head>
-	<title>Users & Access — Lanforge</title>
+	<title>Users — Lanforge</title>
 </svelte:head>
 
 <div class="flex flex-col gap-6 w-full pb-12">
 	<!-- Top Header -->
 	<PageHeader
-		title="Users & Access"
-		description="Manage local user accounts for web authentication and permission controls in Lanforge."
+		title="Users"
+		description="Accounts that can sign in to this WebUI."
 		icon={UsersIcon}
 	>
 		{#snippet actions()}

@@ -85,7 +85,7 @@
 					</li>
 					<li class="flex items-center gap-1.5">
 						<CheckIcon class="size-3.5 text-emerald-500" />
-						PPPoE WAN Concentrator
+						PPPoE WAN
 					</li>
 				</ul>
 			</div>

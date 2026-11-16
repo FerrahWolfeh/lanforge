@@ -252,7 +252,7 @@
 				</Dialog.Title>
 			</div>
 			<Dialog.Description class="text-xs">
-				Detailed DNS query telemetry, client attribution, and quick actions.
+				The full answer, which device asked, and quick actions.
 			</Dialog.Description>
 		</Dialog.Header>
 

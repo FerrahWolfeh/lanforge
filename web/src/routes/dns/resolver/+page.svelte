@@ -241,8 +241,8 @@
 	<div class="flex flex-col gap-6">
 		<!-- Page Header -->
 		<PageHeader
-			title="DNS Resolver & Analytics"
-			description="Recursive DNS resolver, query cache, and upstream forwarders"
+			title="DNS Resolver"
+			description="How the router answers DNS: upstream servers, cache and the most asked names."
 			icon={GlobeIcon}
 		>
 			{#snippet actions()}
@@ -280,7 +280,7 @@
 		<!-- 1. Top Summary Metric Cards -->
 		<DnsResolverTopCards {loading} {statsData} {analyticsData} {upstreams} />
 
-		<!-- 2. Time-Series Activity Chart & Query Types Breakdown (Pi-hole Style) -->
+		<!-- 2. Time-Series Activity Chart & Query Types Breakdown  -->
 		<div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
 			<div class="lg:col-span-2">
 				<DnsResolverActivityChart {loading} {analyticsData} {statsData} />

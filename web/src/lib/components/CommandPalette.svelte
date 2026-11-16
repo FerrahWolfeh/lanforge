@@ -112,7 +112,7 @@
 		},
 		{
 			id: "page-devices",
-			title: "Network Devices",
+			title: "Devices",
 			subtitle: "/network/devices",
 			keywords: ["devices", "computers", "clients", "mac", "ip"],
 			category: "Pages & Navigation",
@@ -150,7 +150,7 @@
 		},
 		{
 			id: "page-firewall",
-			title: "Firewall & Security",
+			title: "Firewall",
 			subtitle: "/firewall",
 			keywords: ["firewall", "nftables", "port forward", "dmz", "pinhole", "rules", "zones"],
 			category: "Pages & Navigation",
@@ -260,7 +260,7 @@
 		},
 		{
 			id: "page-system",
-			title: "System Status & Telemetry",
+			title: "System Status",
 			subtitle: "/system",
 			keywords: ["status", "cpu", "memory", "uptime", "system", "hardware"],
 			category: "Pages & Navigation",
@@ -296,7 +296,7 @@
 		},
 		{
 			id: "page-users",
-			title: "Local Users & Access",
+			title: "Users",
 			subtitle: "/system/users",
 			keywords: ["users", "accounts", "login", "passwords", "permissions", "admin"],
 			category: "Pages & Navigation",

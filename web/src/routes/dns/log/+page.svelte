@@ -227,7 +227,7 @@
 	<!-- Top Action Bar -->
 	<PageHeader
 		title="DNS Query Log"
-		description="Network resolution telemetry, live packet stream, and client query audit trail."
+		description="Every DNS question your devices asked, newest first."
 		icon={ListFilterIcon}
 	>
 		{#snippet actions()}

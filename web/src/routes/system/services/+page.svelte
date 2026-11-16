@@ -207,8 +207,8 @@
 <div class="flex flex-col gap-6">
 	<!-- Page Header -->
 	<PageHeader
-		title="Services & Subsystems"
-		description="View runtime status, telemetry, and control daemon services. Click Configure to change boot defaults."
+		title="Services"
+		description="Start, stop and restart the router's services."
 		icon={LayersIcon}
 	>
 		{#snippet actions()}

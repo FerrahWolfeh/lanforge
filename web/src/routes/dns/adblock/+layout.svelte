@@ -120,14 +120,14 @@
 </script>
 
 <svelte:head>
-	<title>Adblock & Domain Filtering — Lanforge</title>
+	<title>Adblock — Lanforge</title>
 </svelte:head>
 
 <div class="flex flex-col gap-6">
 	<!-- Adblock Header Banner -->
 	<PageHeader
-		title="Adblock & Domain Filtering"
-		description="Zero-copy FST sinkhole blocking ads, trackers, and telemetry at sub-microsecond wire latency."
+		title="Adblock"
+		description="Blocks ads and trackers for every device that uses this router for DNS."
 		icon={ShieldIcon}
 		class="border-b pb-5"
 	>

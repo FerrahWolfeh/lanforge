@@ -159,7 +159,7 @@
 	<!-- Page Header -->
 	<PageHeader
 		title="System Events"
-		description="Real-time monitoring of daemon lifecycles, network discovery, firewall changes, and DHCP leases."
+		description="What happened on the router: devices, leases, services and configuration changes."
 		icon={ActivityIcon}
 	>
 		{#snippet badge()}

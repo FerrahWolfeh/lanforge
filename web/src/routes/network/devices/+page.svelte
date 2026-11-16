@@ -194,8 +194,8 @@
 <div class="flex flex-col gap-5">
 	<!-- Page Header -->
 	<PageHeader
-		title="Network Devices"
-		description="Discovered LAN endpoints tracked via ARP, NDP, and DHCP."
+		title="Devices"
+		description="Everything seen on the LAN through ARP, NDP and DHCP."
 		icon={MonitorIcon}
 	/>
 

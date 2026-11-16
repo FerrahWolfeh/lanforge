@@ -126,7 +126,7 @@
 				<div>
 					<Card.Title class="text-base">Adblocking Activity (24h Timeline)</Card.Title>
 					<p class="text-muted-foreground text-xs mt-0.5">
-						Allowed DNS traffic versus blocked advertisements and telemetry
+						Allowed and blocked queries per hour
 					</p>
 				</div>
 			</div>

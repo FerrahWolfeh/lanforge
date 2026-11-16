@@ -67,7 +67,7 @@
 <DataTableCard
 	title="IPv4 Dynamic Address Scopes"
 	icon={ServerIcon}
-	description="Dynamic allocation ranges for IPv4 clients with per-pool gateway, netmask, and capacity telemetry"
+	description="Address ranges handed out to IPv4 clients, with gateway, netmask and usage"
 	total={v4Pools.length}
 	itemName="scopes"
 	showSearch={false}

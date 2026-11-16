@@ -131,7 +131,7 @@
 					<div class="flex items-center gap-2">
 						<GaugeIcon class="size-4 text-emerald-500" />
 						<Card.Title class="text-sm font-semibold text-foreground">
-							Live CAKE Queue & Latency Telemetry
+							CAKE Queue & Latency
 						</Card.Title>
 					</div>
 					<Badge variant="outline" class="border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-[10px] font-mono shrink-0">

@@ -204,7 +204,7 @@
 				<div>
 					<Card.Title class="text-base">DNS Query Activity (24h Window)</Card.Title>
 					<p class="text-muted-foreground text-xs mt-0.5">
-						Interactive Pi-hole style timeline categorized by resolution destination
+						Queries per hour, by how they were answered
 					</p>
 				</div>
 			</div>
