@@ -22,6 +22,7 @@ import type {
 	DevicesResponse,
 	DhcpLease,
 	DhcpOptionsConfig,
+	DhcpOptionsResponse,
 	DhcpPoolsConfigResponse,
 	DhcpPoolsResponse,
 	DhcpReconcileResponse,
@@ -87,17 +88,27 @@ export class ApiError extends Error {
 	}
 }
 
+/** localStorage key of the session token; the client owns it, the auth store mirrors it. */
+export const TOKEN_KEY = 'lf_session';
+
 let memoryToken: string | null = null;
 let memoryTokenLoaded = false;
+const tokenListeners = new Set<(token: string | null) => void>();
 
-function getToken(): string | null {
+export function getToken(): string | null {
 	if (!memoryTokenLoaded) {
 		memoryTokenLoaded = true;
 		if (typeof localStorage !== 'undefined') {
-			memoryToken = localStorage.getItem('lf_session');
+			memoryToken = localStorage.getItem(TOKEN_KEY);
 		}
 	}
 	return memoryToken;
+}
+
+/** Calls `listener` whenever the token changes (set, cleared by a 401, ...); returns the unsubscribe. */
+export function onTokenChange(listener: (token: string | null) => void): () => void {
+	tokenListeners.add(listener);
+	return () => tokenListeners.delete(listener);
 }
 
 export function setClientToken(token: string | null) {
@@ -105,11 +116,12 @@ export function setClientToken(token: string | null) {
 	memoryTokenLoaded = true;
 	if (typeof localStorage !== 'undefined') {
 		if (token) {
-			localStorage.setItem('lf_session', token);
+			localStorage.setItem(TOKEN_KEY, token);
 		} else {
-			localStorage.removeItem('lf_session');
+			localStorage.removeItem(TOKEN_KEY);
 		}
 	}
+	for (const listener of tokenListeners) listener(token);
 }
 
 function handleUnauthorized(path: string) {
@@ -137,31 +149,14 @@ function buildPath(
 	return url.pathname + url.search;
 }
 
-function extractList<T>(res: any, key?: string): T[] {
-	if (!res) return [];
-	if (Array.isArray(res)) return res;
-	if (key && Array.isArray(res[key])) return res[key];
-	if (Array.isArray(res.data)) return res.data;
-	if (key && Array.isArray(res.data?.[key])) return res.data[key];
-	return [];
+/** The `{ data, meta }` body of a paginated endpoint (fetched with `getRaw`). */
+interface Paginated<T> {
+	data: T[];
+	meta?: { total?: number };
 }
 
-function extractPaginated<T>(res: any, key: string): { entries: T[]; total: number } {
-	if (!res) return { entries: [], total: 0 };
-	const list: T[] = Array.isArray(res)
-		? res
-		: Array.isArray(res.data)
-			? res.data
-			: Array.isArray(res[key])
-				? res[key]
-				: [];
-	const total =
-		typeof res.meta?.total === 'number'
-			? res.meta.total
-			: typeof res.total === 'number'
-				? res.total
-				: list.length;
-	return { entries: list, total };
+function paginated<T>(res: Paginated<T>): { entries: T[]; total: number } {
+	return { entries: res.data, total: res.meta?.total ?? res.data.length };
 }
 
 // ---------------------------------------------------------------------------
@@ -295,18 +290,15 @@ const requestRaw = <T>(
 	extraHeaders?: Record<string, string>
 ) => requestCore<T>(method, path, body, extraHeaders, true);
 
+// `/system/config` needs the config_write permission but no elevation (authz.rs `requirement`),
+// so this skips the re-authentication retry of `requestCore`.
 async function requestText(
 	path: string,
 	params?: Record<string, string | number | boolean | undefined>
 ): Promise<string> {
-	const token = getToken();
-	const headers: Record<string, string> = {};
-	if (token) headers['Authorization'] = `Bearer ${token}`;
-
-	const fullPath = buildPath(path, params);
-	const res = await fetch(`/api/v1${fullPath}`, {
+	const res = await fetch(`/api/v1${buildPath(path, params)}`, {
 		method: 'GET',
-		headers
+		headers: authHeaders()
 	});
 
 	if (!res.ok) {
@@ -340,11 +332,7 @@ const del = <T>(path: string, body?: unknown, extraHeaders?: Record<string, stri
 export const authStatus = () => get<AuthStatusResponse>('/auth/status');
 export const login = (req: LoginRequest) => post<LoginResponse>('/auth/login', req);
 export const logout = () => post<void>('/auth/logout');
-export const me = async (): Promise<UserInfo> => {
-	const res = await get<any>('/auth/me');
-	if (res?.data) return res.data as UserInfo;
-	return res as UserInfo;
-};
+export const me = () => get<UserInfo>('/auth/me');
 /** Changing the password ends every session of the user; keep this one on the new token. */
 export const changePassword = async (current_password: string, new_password: string) => {
 	const res = await post<{ message: string; token?: string }>('/auth/change-password', {
@@ -354,20 +342,15 @@ export const changePassword = async (current_password: string, new_password: str
 	if (res?.token) setClientToken(res.token);
 };
 export const listTokens = async (): Promise<AuthToken[]> =>
-	extractList<AuthToken>(await get<any>('/auth/tokens'), 'tokens');
+	(await get<{ tokens: AuthToken[] }>('/auth/tokens')).tokens;
 
-export const generateToken = async (req: GenerateTokenRequest): Promise<AuthToken> => {
-	const res = await post<any>('/auth/tokens', req);
-	return (res?.data ?? res) as AuthToken;
-};
+export const generateToken = (req: GenerateTokenRequest) => post<AuthToken>('/auth/tokens', req);
 
 export const deleteToken = (idOrName: string | number) =>
 	del<void>(`/auth/tokens/${encodeURIComponent(String(idOrName))}`);
 
-export const renewToken = async (idOrName: string | number): Promise<AuthToken> => {
-	const res = await post<any>(`/auth/tokens/${encodeURIComponent(String(idOrName))}/renew`, {});
-	return (res?.data ?? res) as AuthToken;
-};
+export const renewToken = (idOrName: string | number) =>
+	post<AuthToken>(`/auth/tokens/${encodeURIComponent(String(idOrName))}/renew`, {});
 
 export const validateToken = (token: string) =>
 	post<{ valid: boolean }>('/auth/validate', { token });
@@ -400,28 +383,14 @@ export const listDevices = async (params?: {
 	offset?: number;
 	grouped?: boolean;
 }): Promise<DevicesResponse> => {
-	const raw = await getRaw<any>('/devices', params);
-	if (!raw) {
-		return { devices: [], meta: { total: 0, online: 0, last_scan_secs_ago: 0 } };
-	}
-	const devList = extractList<DeviceEntry>(raw, 'devices');
-	const onlineCount = devList.filter((d) => d.online).length;
-	const meta: DevicesMeta = {
-		total: typeof raw.meta?.total === 'number' ? raw.meta.total : devList.length,
-		online: typeof raw.meta?.online === 'number' ? raw.meta.online : onlineCount,
-		last_scan_secs_ago:
-			typeof raw.meta?.last_scan_secs_ago === 'number' ? raw.meta.last_scan_secs_ago : 0
-	};
-	return { devices: devList, meta };
+	const raw = await getRaw<{ data: DeviceEntry[]; meta: DevicesMeta }>('/devices', params);
+	return { devices: raw.data, meta: raw.meta };
 };
 
 export const whois = async (target: string): Promise<WhoisResponse> => {
-	const res = await get<any>(`/devices/${encodeURIComponent(target)}`);
-	if (res && typeof res === 'object') {
-		const entry = (res.entry ?? res.data?.entry ?? res) as DeviceEntry;
-		return { entry };
-	}
-	throw new ApiError(404, `Device not found: ${target}`);
+	const res = await get<WhoisResponse>(`/devices/${encodeURIComponent(target)}`);
+	if (!res?.entry) throw new ApiError(404, `Device not found: ${target}`);
+	return res;
 };
 
 /** The device's DNS activity over the last day. */
@@ -441,7 +410,7 @@ export const wol = (target: string) => post<void>(`/devices/${encodeURIComponent
 // ---------------------------------------------------------------------------
 
 export const hostList = async (): Promise<HostConfigEntry[]> =>
-	extractList<HostConfigEntry>(await get<any>('/hosts'), 'hosts');
+	(await get<{ hosts: HostConfigEntry[] }>('/hosts')).hosts;
 
 export const hostAdd = (entry: HostConfigEntry) => post<void>('/hosts', entry);
 export const hostSet = (mac: string, field: string, value: string) =>
@@ -449,7 +418,7 @@ export const hostSet = (mac: string, field: string, value: string) =>
 export const hostRemove = (mac: string) => del<void>(`/hosts/${mac}`);
 
 export const hostExport = async (): Promise<HostConfigEntry[]> =>
-	extractList<HostConfigEntry>(await get<any>('/hosts/export'), 'hosts');
+	(await get<{ hosts: HostConfigEntry[] }>('/hosts/export')).hosts;
 
 export const hostImport = (entries: HostConfigEntry[]) => post<void>('/hosts/import', entries);
 
@@ -473,7 +442,7 @@ export const dnsQueryLog = async (params?: {
 	limit?: number;
 	offset?: number;
 }): Promise<{ entries: DnsQueryLogEntry[]; total: number }> =>
-	extractPaginated<DnsQueryLogEntry>(await getRaw<any>('/dns/logs', params), 'entries');
+	paginated(await getRaw<Paginated<DnsQueryLogEntry>>('/dns/logs', params));
 
 function formatDnsAddr(addr: string): string {
 	const trimmed = addr.trim();
@@ -501,7 +470,7 @@ function formatDnsAddr(addr: string): string {
 }
 
 export const dnsUpstreams = async (): Promise<DnsUpstreamEntry[]> =>
-	extractList<DnsUpstreamEntry>(await get<any>('/dns/upstreams'), 'upstreams');
+	(await get<{ upstreams: DnsUpstreamEntry[] }>('/dns/upstreams')).upstreams;
 export const dnsUpstreamAdd = (entry: { addr: string; protocol: string; domain?: string }) => {
 	const formattedAddr = formatDnsAddr(entry.addr);
 	const proto = (entry.protocol || 'udp').toLowerCase();
@@ -541,7 +510,7 @@ export const dnsUpstreamTest = (entry: { addr: string; protocol?: string; domain
 };
 
 export const dnsReverseResolverList = async (): Promise<ReverseResolverEntry[]> =>
-	extractList<ReverseResolverEntry>(await get<any>('/dns/reverse-resolvers'), 'resolvers');
+	(await get<{ resolvers: ReverseResolverEntry[] }>('/dns/reverse-resolvers')).resolvers;
 export const dnsReverseResolverAdd = (subnet: string, resolver_uri: string) => {
 	const s = subnet.trim();
 	const r = resolver_uri.trim();
@@ -564,7 +533,7 @@ export const dnsCacheDump = async (params?: {
 	q?: string;
 	kind?: string;
 }): Promise<{ entries: DnsCacheEntry[]; total: number }> =>
-	extractPaginated<DnsCacheEntry>(await getRaw<any>('/dns/cache', params), 'entries');
+	paginated(await getRaw<Paginated<DnsCacheEntry>>('/dns/cache', params));
 export const dnsCacheFlush = () => del<void>('/dns/cache');
 export const dnsCacheStatsExt = () => get<DnsCacheStatsResponse>('/dns/cache/stats');
 
@@ -579,7 +548,7 @@ export const dnsAdblockReload = () => post<void>('/dns/adblock/reload');
 export const dnsBlock = (domain: string) => dnsAdblockRuleAdd(domain, 'block');
 export const dnsAllow = (domain: string) => dnsAdblockRuleAdd(domain, 'allow');
 export const dnsAdblockUrls = async (): Promise<DnsAdblockUrlEntry[]> =>
-	extractList<DnsAdblockUrlEntry>(await get<any>('/dns/adblock/urls'), 'urls');
+	(await get<{ urls: DnsAdblockUrlEntry[] }>('/dns/adblock/urls')).urls;
 export const dnsAdblockSources = () => get<DnsAdblockSourcesResponse>('/dns/adblock/sources');
 export const dnsAdblockCheck = (domain: string, client?: string) =>
 	get<AdblockCheckResponse>(
@@ -602,7 +571,7 @@ export const dnsAdblockConfigSet = (config: {
 }) => post<void>('/dns/adblock/config', config);
 // The rules calls act on the global rules file, or on `group`'s.
 export const dnsAdblockRules = async (group?: string | null): Promise<AdblockRuleEntry[]> =>
-	extractList<AdblockRuleEntry>(await get<any>(`/dns/adblock/rules${groupQuery(group)}`), 'rules');
+	(await get<{ rules: AdblockRuleEntry[] }>(`/dns/adblock/rules${groupQuery(group)}`)).rules;
 export const dnsAdblockRuleAdd = (
 	domain: string,
 	action: 'block' | 'allow',
@@ -642,14 +611,14 @@ export const dnsAdblockDeviceSet = (mac: string, groups: string[], bypass: boole
 // ---------------------------------------------------------------------------
 
 export const dnsRewriteList = async (): Promise<RewriteRule[]> =>
-	extractList<RewriteRule>(await get<any>('/dns/rewrites'), 'rewrites');
+	(await get<{ rewrites: RewriteRule[] }>('/dns/rewrites')).rewrites;
 export const dnsRewriteAdd = (rule: { domain: string; rtype: DnsRecordType; answer: string }) =>
 	post<void>('/dns/rewrites', rule);
 export const dnsRewriteRemove = (rule: RewriteRule) =>
 	del<void>('/dns/rewrites/rule', { domain: rule.domain, rtype: rule.rtype, answer: rule.answer });
 export const dnsRewriteClear = () => del<void>('/dns/rewrites');
 export const dnsRewriteExport = async (): Promise<RewriteRule[]> =>
-	extractList<RewriteRule>(await get<any>('/dns/rewrites/export'), 'rewrites');
+	(await get<{ rewrites: RewriteRule[] }>('/dns/rewrites/export')).rewrites;
 export const dnsRewriteImport = (rules: RewriteRule[]) => post<void>('/dns/rewrites/import', rules);
 
 // ---------------------------------------------------------------------------
@@ -657,37 +626,17 @@ export const dnsRewriteImport = (rules: RewriteRule[]) => post<void>('/dns/rewri
 // ---------------------------------------------------------------------------
 
 export const leases = async (): Promise<DhcpLease[]> =>
-	extractList<DhcpLease>(await get<any>('/dhcp/leases'), 'leases');
+	(await get<{ leases: DhcpLease[] }>('/dhcp/leases')).leases;
 
-export const dhcpPools = async (): Promise<DhcpPoolsResponse> => {
-	const res = await get<any>('/dhcp/pools');
-	if (!res) return { v4_pools: [], v6_pools: [] };
-	const data = res.data ?? res;
-	return {
-		v4_pools: Array.isArray(data.v4_pools) ? data.v4_pools : [],
-		v6_pools: Array.isArray(data.v6_pools) ? data.v6_pools : []
-	};
-};
+export const dhcpPools = () => get<DhcpPoolsResponse>('/dhcp/pools');
 
-export const dhcpOptionsGet = async (): Promise<DhcpOptionsConfig> => {
-	const res = await get<any>('/dhcp/options');
-	const data = res?.data ?? res;
-	return data?.options ?? data;
-};
+export const dhcpOptionsGet = async (): Promise<DhcpOptionsConfig> =>
+	(await get<DhcpOptionsResponse>('/dhcp/options')).options;
 
 export const dhcpOptionsUpdate = (options: DhcpOptionsConfig) =>
 	put<void>('/dhcp/options', options);
 
-export const dhcpPoolsConfigGet = async (): Promise<DhcpPoolsConfigResponse> => {
-	const res = await get<any>('/dhcp/pools/config');
-	const data = res?.data ?? res;
-	return {
-		v4_pools: Array.isArray(data?.v4_pools) ? data.v4_pools : [],
-		v6_pools: Array.isArray(data?.v6_pools) ? data.v6_pools : [],
-		active_ula_prefix: data?.active_ula_prefix ?? null,
-		active_gua_prefix: data?.active_gua_prefix ?? null
-	};
-};
+export const dhcpPoolsConfigGet = () => get<DhcpPoolsConfigResponse>('/dhcp/pools/config');
 
 export const dhcpPoolsConfigUpdate = (
 	v4_pools: Dhcpv4PoolConfig[],
@@ -723,10 +672,7 @@ export const leaseRelease = (mac: string, target?: LeaseTarget) =>
 		target !== undefined ? { target } : {}
 	);
 
-export const dhcpReconcile = async (): Promise<DhcpReconcileResponse> => {
-	const res = await post<any>('/dhcp/reconcile', {});
-	return res?.data ?? res;
-};
+export const dhcpReconcile = () => post<DhcpReconcileResponse>('/dhcp/reconcile', {});
 
 // ---------------------------------------------------------------------------
 // Database & Configuration
@@ -746,18 +692,14 @@ export const importSystemConfig = (config: SystemConfigExport) =>
 // ---------------------------------------------------------------------------
 
 export const userList = async (): Promise<UserInfo[]> =>
-	extractList<UserInfo>(await get<any>('/users'), 'users');
+	(await get<{ users: UserInfo[] }>('/users')).users;
 
 export const userCreate = async (
 	username: string,
 	password: string,
 	role?: string
-): Promise<UserInfo> => {
-	const res = await post<any>('/users', { username, password, role });
-	if (res?.data?.user) return res.data.user;
-	if (res?.user) return res.user;
-	return res as UserInfo;
-};
+): Promise<UserInfo> =>
+	(await post<{ user: UserInfo }>('/users', { username, password, role })).user;
 export const userDelete = (username: string) => del<void>(`/users/${encodeURIComponent(username)}`);
 export const userPasswd = (username: string, new_password: string) =>
 	put<void>(`/users/${encodeURIComponent(username)}/password`, { new_password });
@@ -860,12 +802,8 @@ export const eventsHistory = async (params?: {
 	limit?: number;
 	offset?: number;
 }): Promise<{ entries: SseEvent[]; total: number }> => {
-	const raw = await getRaw<any>('/events/history', params);
-	const paginated = extractPaginated<unknown>(raw, 'events');
-	return {
-		entries: paginated.entries.map((item) => parseTimedEvent(item)),
-		total: paginated.total
-	};
+	const page = paginated(await getRaw<Paginated<unknown>>('/events/history', params));
+	return { entries: page.entries.map((item) => parseTimedEvent(item)), total: page.total };
 };
 
 // ---------------------------------------------------------------------------

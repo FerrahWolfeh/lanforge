@@ -46,7 +46,7 @@
 	let poolsData = $state<DhcpPoolsResponse | null>(null);
 	let devicesData = $state<{
 		devices: DeviceEntry[];
-		meta?: { total: number; online: number; last_scan_secs_ago: number };
+		meta?: { total: number; online: number };
 	} | null>(null);
 	let analyticsData = $state<DnsAnalyticsResponse | null>(null);
 	let telemetryData = $state<TrafficTelemetryResponse | null>(null);

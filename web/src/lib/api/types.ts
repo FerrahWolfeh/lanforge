@@ -713,7 +713,6 @@ export interface DeviceRulesResponse {
 export interface DevicesMeta {
 	total: number;
 	online: number;
-	last_scan_secs_ago: number;
 }
 
 export interface DevicesResponse {
