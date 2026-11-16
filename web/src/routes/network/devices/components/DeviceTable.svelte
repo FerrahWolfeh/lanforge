@@ -17,6 +17,7 @@
 
 	let {
 		devices = [],
+		dns,
 		totalCount,
 		onlineCount,
 		loading = false,
@@ -28,6 +29,8 @@
 		onPurge,
 	}: {
 		devices?: DeviceEntry[];
+		/** DNS counts per device MAC over the daemon's 7-day analytics window. */
+		dns?: Map<string, { count: number; blocked: number }>;
 		totalCount?: number;
 		onlineCount?: number;
 		loading?: boolean;
@@ -42,6 +45,7 @@
 	const nameOf = (dev: DeviceEntry) =>
 		dev.hostname && dev.hostname !== "?" ? dev.hostname : "Unnamed device";
 	const pageOf = (dev: DeviceEntry) => `/network/devices/${encodeURIComponent(dev.mac)}`;
+	const dnsOf = (dev: DeviceEntry) => dns?.get(dev.mac);
 
 	let searchQuery = $state("");
 	let statusFilter = $state<"all" | "online" | "offline">("all");
@@ -140,8 +144,8 @@
 	bind:pageSize
 	pageSizeOptions={[10, 15, 25, 50]}
 	{loading}
-	columns={6}
-	minTableWidth="min-w-[680px]"
+	columns={7}
+	minTableWidth="min-w-[790px]"
 	emptyMessage="No network devices discovered."
 	emptyFilteredMessage="No devices matched your search or status filter criteria."
 >
@@ -217,6 +221,7 @@
 		{#each paginatedDevices as dev (dev.mac)}
 			{@const v4 = dev.primary_v4 || dev.v4?.ip}
 			{@const v6 = dev.primary_v6 || dev.v6?.ip}
+			{@const dnsCount = dnsOf(dev)}
 			<div class="flex items-start gap-2 px-4 py-3">
 				<span
 					class={[
@@ -252,6 +257,11 @@
 								{dev.learning_method}
 							</Badge>
 						{/if}
+						{#if dnsCount}
+							<span class="font-sans text-xs text-muted-foreground">
+								· {dnsCount.count.toLocaleString()} DNS (7 d){#if dnsCount.blocked > 0}, {dnsCount.blocked.toLocaleString()} blocked{/if}
+							</span>
+						{/if}
 					</span>
 				</a>
 				{@render actionsMenu(dev)}
@@ -263,12 +273,14 @@
 		<Table.Head class="w-[90px]">Status</Table.Head>
 		<Table.Head>Host / MAC</Table.Head>
 		<Table.Head>IP Address</Table.Head>
+		<Table.Head>DNS (7 d)</Table.Head>
 		<Table.Head>Discovery</Table.Head>
 		<Table.Head>Last Seen</Table.Head>
 		<Table.Head class="text-right w-[60px]">Actions</Table.Head>
 	{/snippet}
 
 	{#each paginatedDevices as dev (dev.mac)}
+		{@const dnsCount = dnsOf(dev)}
 		<Table.Row
 			class="hover:bg-muted/50 transition-colors font-mono text-xs cursor-pointer"
 			onclick={(e: MouseEvent) => {
@@ -339,6 +351,22 @@
 						<span class="text-muted-foreground font-sans text-xs">—</span>
 					{/if}
 				</div>
+			</Table.Cell>
+
+			<!-- DNS queries and blocked ones over the analytics window -->
+			<Table.Cell class="font-sans">
+				{#if dnsCount}
+					<div class="flex items-center gap-1.5 flex-wrap">
+						<span class="text-foreground text-xs font-medium">{dnsCount.count.toLocaleString()}</span>
+						{#if dnsCount.blocked > 0}
+							<span class="rounded px-1.5 py-0.5 text-xs bg-danger/10 text-danger">
+								{dnsCount.blocked.toLocaleString()} blocked
+							</span>
+						{/if}
+					</div>
+				{:else}
+					<span class="text-muted-foreground text-xs">—</span>
+				{/if}
 			</Table.Cell>
 
 			<!-- Method & Class -->

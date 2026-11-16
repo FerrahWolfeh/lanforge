@@ -8,8 +8,9 @@
 		wol,
 		scan,
 		eventsUrl,
+		dnsAnalytics,
 	} from "$lib/api/client";
-	import type { DeviceEntry } from "$lib/api/types";
+	import type { DeviceEntry, TopClientEntry } from "$lib/api/types";
 	import { createDebounce } from "$lib/utils";
 
 	import DeviceTable from "./components/DeviceTable.svelte";
@@ -29,6 +30,59 @@
 	let meta = $state<{ total: number; online: number } | null>(null);
 	let loading = $state(true);
 	let scanning = $state(false);
+
+	// The daemon's DNS analytics, one row per client device, over its hourly stats (about 7 days).
+	let dnsRows = $state<TopClientEntry[]>([]);
+	let dnsTimer: ReturnType<typeof setInterval> | null = null;
+
+	/** Maps each device to its DNS counts: a row matches a device when any address is the device's. */
+	function dnsByDevice(list: DeviceEntry[], rows: TopClientEntry[]) {
+		const rowOf = new Map<string, number>();
+		rows.forEach((row, i) => {
+			for (const addr of [row.ip, ...(row.addresses ?? [])]) {
+				const key = addr?.toLowerCase();
+				if (key && !rowOf.has(key)) rowOf.set(key, i);
+			}
+		});
+		const out = new Map<string, { count: number; blocked: number }>();
+		for (const dev of list) {
+			const addrs = [
+				dev.primary_v4,
+				dev.v4?.ip,
+				dev.primary_v6,
+				dev.v6?.ip,
+				...dev.ipv6_addrs.map((a) => a.addr),
+				...(dev.linked_addresses ?? []),
+			];
+			// A device can own addresses in more than one row; each row counts once.
+			const hits = new Set<number>();
+			for (const addr of addrs) {
+				const i = addr ? rowOf.get(addr.toLowerCase()) : undefined;
+				if (i !== undefined) hits.add(i);
+			}
+			if (hits.size === 0) continue;
+			let count = 0;
+			let blocked = 0;
+			for (const i of hits) {
+				count += rows[i].count;
+				blocked += rows[i].blocked_count ?? 0;
+			}
+			out.set(dev.mac, { count, blocked });
+		}
+		return out;
+	}
+
+	const dnsByMac = $derived(dnsByDevice(devices, dnsRows));
+
+	async function loadDns() {
+		try {
+			const res = await dnsAnalytics(500);
+			dnsRows = res.top_clients ?? [];
+		} catch {
+			// The columns stay empty; the device list does not depend on DNS analytics.
+			dnsRows = [];
+		}
+	}
 
 	let eventSource: EventSource | null = null;
 
@@ -86,6 +140,8 @@
 
 	onMount(() => {
 		loadDevices();
+		loadDns();
+		dnsTimer = setInterval(loadDns, 60_000);
 
 		try {
 			const url = eventsUrl({ filter: "device" });
@@ -120,6 +176,10 @@
 
 	onDestroy(() => {
 		debouncedLoad.cancel();
+		if (dnsTimer) {
+			clearInterval(dnsTimer);
+			dnsTimer = null;
+		}
 		if (eventSource) {
 			eventSource.close();
 			eventSource = null;
@@ -151,6 +211,7 @@
 	<!-- Device Table with integrated DataTableCard -->
 	<DeviceTable
 		{devices}
+		dns={dnsByMac}
 		{totalCount}
 		{onlineCount}
 		{loading}
