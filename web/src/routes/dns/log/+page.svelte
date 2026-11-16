@@ -10,6 +10,7 @@
 	import { toast } from "svelte-sonner";
 	import { onMount, onDestroy } from "svelte";
 	import { page } from "$app/state";
+	import { replaceState } from "$app/navigation";
 	import { dnsQueryLog, dnsLogSseUrl } from "$lib/api/client";
 	import type { DnsQueryLogEntry } from "$lib/api/types";
 	import PageHeader from "$lib/components/PageHeader.svelte";
@@ -99,6 +100,10 @@
 	/** Filters both tabs by one client; the live stream restarts with the new filter. */
 	function clearClient() {
 		selectedClient = "";
+		// Drop the param too, so a reload or a shared link does not bring the filter back.
+		const url = new URL(page.url);
+		url.searchParams.delete("client");
+		replaceState(url, page.state);
 		offset = 0;
 		loadHistoricalLogs();
 		if (eventSource) {
