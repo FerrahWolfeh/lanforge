@@ -607,7 +607,8 @@ export function formatEventPayload(
 
 export interface LeaseInfo {
 	ip: string;
-	expires: string;
+	/** Unix seconds; 0 = does not expire (a reservation, or an address only seen on the network). */
+	expires: number;
 	reserved: boolean;
 }
 

@@ -239,7 +239,7 @@
 
 	function leaseText(): string {
 		if (!device?.v4) return "";
-		const expires = Number(device.v4.expires);
+		const expires = device.v4.expires;
 		if (device.origin === "Static" && v4Reserved) return "reserved in lanforge.toml";
 		if (v4Reserved) return "reserved";
 		if (expires > 0) {
@@ -316,7 +316,7 @@
 		}
 	}
 
-	const dynamicLease = $derived(Boolean(device?.v4) && !v4Reserved && Number(device?.v4?.expires ?? 0) > 0);
+	const dynamicLease = $derived(Boolean(device?.v4) && !v4Reserved && (device?.v4?.expires ?? 0) > 0);
 
 	async function leaseAction(kind: "renew" | "release") {
 		if (kind === "release" && !confirm(`Release the IPv4 lease of ${name}? The device loses the address until it asks again.`)) return;

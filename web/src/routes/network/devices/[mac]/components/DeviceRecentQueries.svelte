@@ -86,7 +86,7 @@
 							result: String(e.result ?? "").toLowerCase(),
 							upstream_us: Number(e.upstream_us ?? 0),
 							cached: Boolean(e.cached),
-							repeats: 1,
+							repeats: Number(e.repeats ?? 1),
 						},
 						...entries,
 					].slice(0, KEEP);
@@ -142,6 +142,9 @@
 				<li class="flex items-center gap-3 px-3 py-2 text-xs">
 					<span class="shrink-0 tabular-nums text-muted-foreground">{time(e.timestamp)}</span>
 					<span class="min-w-0 flex-1 truncate font-mono" title={e.domain}>{e.domain}</span>
+					{#if e.repeats > 1}
+						<span class="shrink-0 tabular-nums text-muted-foreground" title="{e.repeats} identical queries, folded into one line">×{e.repeats}</span>
+					{/if}
 					<span class="hidden shrink-0 text-muted-foreground sm:inline">{e.qtype}</span>
 					<span class="shrink-0 rounded px-1.5 py-0.5 {tone(String(e.result))}">{label(String(e.result))}</span>
 				</li>
