@@ -38,7 +38,7 @@
 <Dialog.Root bind:open>
 	<Dialog.Content class="w-[95vw] sm:max-w-md">
 		<Dialog.Header>
-			<Dialog.Title class="flex items-center gap-2 text-rose-500">
+			<Dialog.Title class="flex items-center gap-2 text-danger">
 				<Trash2Icon class="size-5" />
 				<span>Confirm Lease Release</span>
 			</Dialog.Title>
@@ -55,7 +55,7 @@
 				</div>
 				<div class="flex justify-between">
 					<span class="text-muted-foreground font-sans">IP Address:</span>
-					<span class="text-emerald-400 font-medium">{lease.address}</span>
+					<span class="text-foreground font-medium">{lease.address}</span>
 				</div>
 				<div class="flex justify-between">
 					<span class="text-muted-foreground font-sans">MAC Address:</span>

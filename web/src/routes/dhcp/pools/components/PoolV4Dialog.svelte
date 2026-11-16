@@ -128,7 +128,7 @@
 				</span>
 				<div class="grid grid-cols-2 gap-3">
 					<div class="flex flex-col gap-1.5">
-						<Label class="text-[11px]">Next Server / TFTP (Option 66)</Label>
+						<Label class="text-xs">Next Server / TFTP (Option 66)</Label>
 						<Input
 							bind:value={v4TftpServer}
 							placeholder="192.168.1.1"
@@ -136,7 +136,7 @@
 						/>
 					</div>
 					<div class="flex flex-col gap-1.5">
-						<Label class="text-[11px]">Boot Filename (Option 67)</Label>
+						<Label class="text-xs">Boot Filename (Option 67)</Label>
 						<Input
 							bind:value={v4BootFile}
 							placeholder="ipxe.efi"

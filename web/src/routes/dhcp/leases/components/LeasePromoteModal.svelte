@@ -70,7 +70,7 @@
 	<Dialog.Content class="w-[95vw] sm:max-w-md">
 		<Dialog.Header>
 			<Dialog.Title class="flex items-center gap-2">
-				<BookmarkPlusIcon class="size-5 text-amber-400" />
+				<BookmarkPlusIcon class="size-5 text-muted-foreground" />
 				<span>Convert Lease to Static Reservation</span>
 			</Dialog.Title>
 			<Dialog.Description class="text-xs">

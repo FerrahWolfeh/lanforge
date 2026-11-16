@@ -328,7 +328,7 @@
 				{#if isDirty}
 					<Badge
 						variant="outline"
-						class="text-amber-400 border-amber-500/30 bg-amber-500/10 text-xs font-semibold animate-pulse"
+						class="text-warning border-warning/30 bg-warning/10 text-xs font-semibold"
 					>
 						Unsaved Changes
 					</Badge>
@@ -366,7 +366,7 @@
 			>
 				<ShieldCheckIcon
 					data-icon="inline-start"
-					class={`size-3.5 mr-1 ${reconciling ? "animate-spin text-primary" : "text-emerald-400"}`}
+					class={`size-3.5 mr-1 ${reconciling ? "animate-spin text-primary" : "text-muted-foreground"}`}
 				/>
 				{reconciling ? "Auditing..." : "Reconcile Leases"}
 			</Button>
@@ -397,7 +397,7 @@
 					size="sm"
 					onclick={saveScopes}
 					disabled={saving || loading}
-					class="h-8 text-xs shadow-sm"
+					class="h-8 text-xs"
 				>
 					<SaveIcon
 						data-icon="inline-start"

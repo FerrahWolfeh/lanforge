@@ -42,10 +42,10 @@
 	<Card.Header class="pb-4 border-b border-border/50">
 		<div class="flex items-center justify-between">
 			<div class="flex items-center gap-2">
-				<HardDriveDownloadIcon class="size-4 text-emerald-400" />
+				<HardDriveDownloadIcon class="size-4 text-muted-foreground" />
 				<Card.Title class="text-base">Server Parameters</Card.Title>
 			</div>
-			<Badge variant="outline" class="font-mono text-[10px]">RFC 1350 / 2348</Badge>
+			<Badge variant="outline" class="font-mono text-xs">RFC 1350 / 2348</Badge>
 		</div>
 		<Card.Description>
 			Configure daemon listening socket, filesystem root, and transmission block sizes
@@ -128,7 +128,7 @@
 
 			<!-- Transmission Tuning Grid -->
 			<div class="flex flex-col gap-3">
-				<span class="text-xs font-semibold text-foreground uppercase tracking-wider">
+				<span class="text-xs font-medium text-muted-foreground">
 					Protocol Transmission Tuning
 				</span>
 
@@ -143,7 +143,7 @@
 							bind:value={blockSize}
 							class="font-mono text-xs"
 						/>
-						<span class="text-[11px] text-muted-foreground">
+						<span class="text-xs text-muted-foreground">
 							Default: 512 bytes
 						</span>
 					</div>
@@ -158,7 +158,7 @@
 							bind:value={timeoutSecs}
 							class="font-mono text-xs"
 						/>
-						<span class="text-[11px] text-muted-foreground">
+						<span class="text-xs text-muted-foreground">
 							Retransmission window
 						</span>
 					</div>
@@ -173,7 +173,7 @@
 							bind:value={maxRetries}
 							class="font-mono text-xs"
 						/>
-						<span class="text-[11px] text-muted-foreground">
+						<span class="text-xs text-muted-foreground">
 							Fail after N drops
 						</span>
 					</div>
@@ -181,12 +181,12 @@
 
 				<!-- Block Size Quick Presets -->
 				<div class="flex flex-wrap items-center gap-1.5 pt-1">
-					<span class="text-[11px] text-muted-foreground mr-1">Presets:</span>
+					<span class="text-xs text-muted-foreground mr-1">Presets:</span>
 					{#each BLOCK_SIZE_PRESETS as preset (preset.value)}
 						<Button
 							variant={blockSize === preset.value ? "secondary" : "outline"}
 							size="sm"
-							class="h-6 text-[11px] px-2 py-0 cursor-pointer"
+							class="h-6 text-xs px-2 py-0 cursor-pointer"
 							onclick={() => { blockSize = preset.value; }}
 						>
 							{preset.label}

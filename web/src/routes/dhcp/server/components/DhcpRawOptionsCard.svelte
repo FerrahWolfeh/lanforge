@@ -52,10 +52,10 @@
 	}
 </script>
 
-<Card.Root class="border-border/80 shadow-sm overflow-hidden">
+<Card.Root class="border-border/80 overflow-hidden">
 	<Card.Header class="bg-muted/20 border-b pb-4">
 		<div class="flex items-center gap-2.5">
-			<SlidersIcon class="size-5 text-emerald-500" />
+			<SlidersIcon class="size-5 text-muted-foreground" />
 			<div>
 				<Card.Title class="text-base font-bold">Custom Raw DHCP Options</Card.Title>
 				<Card.Description class="text-xs">
@@ -70,7 +70,7 @@
 			<!-- IPv4 Raw Options -->
 			<div class="flex flex-col gap-3">
 				<div class="flex items-center gap-2">
-					<Badge variant="outline" class="font-mono text-[10px] text-blue-500 border-blue-500/30">
+					<Badge variant="outline" class="font-mono text-xs text-muted-foreground border-muted-foreground/30">
 						IPv4
 					</Badge>
 					<span class="text-xs font-bold text-foreground">Raw Option Codes</span>
@@ -131,7 +131,7 @@
 			<!-- IPv6 Raw Options -->
 			<div class="flex flex-col gap-3">
 				<div class="flex items-center gap-2">
-					<Badge variant="outline" class="font-mono text-[10px] text-purple-500 border-purple-500/30">
+					<Badge variant="outline" class="font-mono text-xs text-muted-foreground border-muted-foreground/30">
 						IPv6
 					</Badge>
 					<span class="text-xs font-bold text-foreground">Raw Option Codes</span>

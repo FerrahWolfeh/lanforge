@@ -106,15 +106,15 @@
 		<DropdownMenu.Content align="end" class="w-48 text-xs">
 			{#if canEdit}
 			<DropdownMenu.Item onclick={() => onRenew(lease)} class="gap-2">
-				<RotateCcwIcon class="size-3.5 text-sky-400" />
+				<RotateCcwIcon class="size-3.5 text-muted-foreground" />
 				Renew Lease
 			</DropdownMenu.Item>
 			<DropdownMenu.Item onclick={() => onPromote(lease)} class="gap-2">
-				<BookmarkPlusIcon class="size-3.5 text-amber-400" />
+				<BookmarkPlusIcon class="size-3.5 text-muted-foreground" />
 				Convert to Static Host
 			</DropdownMenu.Item>
 			<DropdownMenu.Item onclick={() => onWol(lease.mac)} class="gap-2">
-				<ZapIcon class="size-3.5 text-emerald-400" />
+				<ZapIcon class="size-3.5 text-muted-foreground" />
 				Send Wake-on-LAN
 			</DropdownMenu.Item>
 			<DropdownMenu.Separator />
@@ -129,7 +129,7 @@
 			</DropdownMenu.Item>
 			{#if canEdit}
 			<DropdownMenu.Separator />
-			<DropdownMenu.Item onclick={() => onRelease(lease)} class="gap-2 text-rose-500">
+			<DropdownMenu.Item onclick={() => onRelease(lease)} class="gap-2 text-danger">
 				<Trash2Icon class="size-3.5" />
 				Release Lease
 			</DropdownMenu.Item>
@@ -160,7 +160,7 @@
 				class={[
 					"rounded px-2.5 py-1 text-xs font-medium transition-colors",
 					selectedKind === "all"
-						? "bg-background text-foreground shadow-xs"
+						? "bg-selected text-selected-foreground"
 						: "text-muted-foreground hover:text-foreground",
 				].join(" ")}
 				onclick={() => (selectedKind = "all")}
@@ -171,7 +171,7 @@
 				class={[
 					"rounded px-2.5 py-1 text-xs font-medium transition-colors",
 					selectedKind === "v4"
-						? "bg-background text-emerald-400 shadow-xs"
+						? "bg-selected text-selected-foreground"
 						: "text-muted-foreground hover:text-foreground",
 				].join(" ")}
 				onclick={() => (selectedKind = "v4")}
@@ -182,7 +182,7 @@
 				class={[
 					"rounded px-2.5 py-1 text-xs font-medium transition-colors",
 					selectedKind === "v6"
-						? "bg-background text-sky-400 shadow-xs"
+						? "bg-selected text-selected-foreground"
 						: "text-muted-foreground hover:text-foreground",
 				].join(" ")}
 				onclick={() => (selectedKind = "v6")}
@@ -193,7 +193,7 @@
 				class={[
 					"rounded px-2.5 py-1 text-xs font-medium transition-colors",
 					selectedKind === "v6_prefix"
-						? "bg-background text-purple-400 shadow-xs"
+						? "bg-selected text-selected-foreground"
 						: "text-muted-foreground hover:text-foreground",
 				].join(" ")}
 				onclick={() => (selectedKind = "v6_prefix")}
@@ -215,8 +215,8 @@
 						</span>
 						<span
 							class={[
-								"shrink-0 font-mono text-[11px] font-medium",
-								isExpired ? "text-destructive" : isExpiring ? "text-amber-500" : "text-muted-foreground",
+								"shrink-0 font-mono text-xs font-medium",
+								isExpired ? "text-destructive" : isExpiring ? "text-warning" : "text-muted-foreground",
 							].join(" ")}
 						>
 							{formatDuration(lease.remaining_secs)}
@@ -225,14 +225,14 @@
 					<span
 						class={[
 							"truncate font-mono text-xs font-medium",
-							lease.kind === "v4" ? "text-emerald-400" : "text-sky-400",
+							"text-foreground",
 						].join(" ")}
 					>
 						{lease.kind === "v6_prefix" ? `${lease.address}/64` : lease.address}
 					</span>
-					<span class="flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
+					<span class="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
 						{lease.mac}
-						<Badge variant="outline" class="text-[10px] px-1.5 py-0">
+						<Badge variant="outline" class="text-xs px-1.5 py-0">
 							{lease.kind === "v4" ? "IPv4" : lease.kind === "v6" ? "IPv6" : "IA_PD"}
 						</Badge>
 					</span>
@@ -282,7 +282,7 @@
 					<span
 						class={[
 							"font-medium",
-							lease.kind === "v4" ? "text-emerald-400" : "text-sky-400",
+							"text-foreground",
 						].join(" ")}
 					>
 						{lease.kind === "v6_prefix" ? `${lease.address}/64` : lease.address}
@@ -300,15 +300,15 @@
 			<!-- Type Badge -->
 			<Table.Cell class="font-sans">
 				{#if lease.kind === "v4"}
-					<Badge variant="outline" class="font-mono text-[10px] text-blue-400 border-blue-500/30">
+					<Badge variant="outline" class="font-mono text-xs text-muted-foreground border-muted-foreground/30">
 						IPv4
 					</Badge>
 				{:else if lease.kind === "v6"}
-					<Badge variant="outline" class="font-mono text-[10px] text-purple-400 border-purple-500/30">
+					<Badge variant="outline" class="font-mono text-xs text-muted-foreground border-muted-foreground/30">
 						IPv6
 					</Badge>
 				{:else}
-					<Badge variant="outline" class="font-mono text-[10px] text-emerald-400 border-emerald-500/30">
+					<Badge variant="outline" class="font-mono text-xs text-muted-foreground border-muted-foreground/30">
 						IA_PD
 					</Badge>
 				{/if}
@@ -319,7 +319,7 @@
 				<span
 					class={[
 						"font-mono font-medium text-xs",
-						isExpired ? "text-destructive" : isExpiring ? "text-amber-500" : "text-foreground",
+						isExpired ? "text-destructive" : isExpiring ? "text-warning" : "text-foreground",
 					].join(" ")}
 				>
 					{formatDuration(lease.remaining_secs)}

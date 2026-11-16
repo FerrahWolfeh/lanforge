@@ -404,14 +404,14 @@
 	<!-- Main Content / Mode-Specific Views -->
 	{#if loading && draft === null}
 		<div class="flex flex-col gap-4">
-			<div class="h-10 w-72 bg-muted rounded-xl animate-pulse"></div>
-			<div class="h-64 w-full bg-muted rounded-2xl animate-pulse"></div>
+			<div class="h-10 w-72 bg-muted rounded-lg animate-pulse"></div>
+			<div class="h-64 w-full bg-muted rounded-lg animate-pulse"></div>
 		</div>
 	{:else if draft !== null}
 		{#if draft.mode === "full"}
 			<!-- Full Standalone Router: 5 Tabs -->
 			<Tabs.Root bind:value={activeTab} class="w-full">
-				<Tabs.List class="flex w-full overflow-x-auto justify-start sm:inline-flex sm:w-auto p-1 mb-4 no-scrollbar bg-muted/60 border border-border/50 rounded-xl gap-1">
+				<Tabs.List class="flex w-full overflow-x-auto justify-start sm:inline-flex sm:w-auto p-1 mb-4 no-scrollbar bg-muted/60 border border-border/50 rounded-lg gap-1">
 					<Tabs.Trigger value="zones" class="flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg">
 						<LayersIcon class="size-3.5" />
 						<span>Zones</span>
@@ -490,7 +490,7 @@
 		{:else if draft.mode === "minimal"}
 			<!-- Minimal Helper Mode: Notice + Tuning Card -->
 			<div class="flex flex-col gap-4">
-				<div class="rounded-xl border border-primary/30 bg-primary/5 p-4 flex items-start justify-between gap-3 text-foreground">
+				<div class="rounded-lg border border-primary/30 bg-primary/5 p-4 flex items-start justify-between gap-3 text-foreground">
 					<div class="flex items-start gap-2.5">
 						<InfoIcon class="size-4 text-primary mt-0.5 shrink-0" />
 						<div class="flex flex-col gap-1">
@@ -520,7 +520,7 @@
 		{:else}
 			<!-- Disabled Mode -->
 			<Card.Root class="p-8 text-center flex flex-col items-center justify-center gap-3">
-				<div class="flex size-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
+				<div class="flex size-12 items-center justify-center rounded-lg bg-muted text-muted-foreground">
 					<ShieldOffIcon class="size-6" />
 				</div>
 				<div class="flex flex-col gap-1 max-w-md">

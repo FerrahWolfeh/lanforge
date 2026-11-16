@@ -18,7 +18,7 @@
 	<!-- Full Mode -->
 	<button
 		type="button"
-		class="flex flex-col text-left rounded-xl border p-4 transition-all duration-150 {mode === 'full' ? 'border-primary bg-primary/5 ring-1 ring-primary shadow-xs' : 'border-border bg-card hover:bg-muted/40'} {disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}"
+		class="flex flex-col text-left rounded-lg border p-4 transition-all duration-150 {mode === 'full' ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'border-border bg-card hover:bg-muted/40'} {disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}"
 		onclick={() => !disabled && onSelect("full")}
 		{disabled}
 	>
@@ -27,7 +27,7 @@
 				<ShieldCheckIcon class="size-4 text-primary" />
 				<span class="font-semibold text-sm text-foreground">Full Router</span>
 			</div>
-			<Badge variant={mode === 'full' ? 'default' : 'secondary'} class="text-[10px]">
+			<Badge variant={mode === 'full' ? 'default' : 'secondary'} class="text-xs">
 				Recommended
 			</Badge>
 		</div>
@@ -39,7 +39,7 @@
 	<!-- Minimal Mode -->
 	<button
 		type="button"
-		class="flex flex-col text-left rounded-xl border p-4 transition-all duration-150 {mode === 'minimal' ? 'border-primary bg-primary/5 ring-1 ring-primary shadow-xs' : 'border-border bg-card hover:bg-muted/40'} {disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}"
+		class="flex flex-col text-left rounded-lg border p-4 transition-all duration-150 {mode === 'minimal' ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'border-border bg-card hover:bg-muted/40'} {disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}"
 		onclick={() => !disabled && onSelect("minimal")}
 		{disabled}
 	>
@@ -48,7 +48,7 @@
 				<LayersIcon class="size-4 text-primary" />
 				<span class="font-semibold text-sm text-foreground">Minimal Helper</span>
 			</div>
-			<Badge variant={mode === 'minimal' ? 'default' : 'outline'} class="text-[10px]">
+			<Badge variant={mode === 'minimal' ? 'default' : 'outline'} class="text-xs">
 				firewalld / ufw
 			</Badge>
 		</div>
@@ -60,7 +60,7 @@
 	<!-- Disabled Mode -->
 	<button
 		type="button"
-		class="flex flex-col text-left rounded-xl border p-4 transition-all duration-150 {mode === 'disabled' ? 'border-destructive bg-destructive/5 ring-1 ring-destructive shadow-xs' : 'border-border bg-card hover:bg-muted/40'} {disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}"
+		class="flex flex-col text-left rounded-lg border p-4 transition-all duration-150 {mode === 'disabled' ? 'border-destructive bg-destructive/5 ring-1 ring-destructive' : 'border-border bg-card hover:bg-muted/40'} {disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}"
 		onclick={() => !disabled && onSelect("disabled")}
 		{disabled}
 	>
@@ -69,7 +69,7 @@
 				<ShieldOffIcon class="size-4 text-muted-foreground" />
 				<span class="font-semibold text-sm text-foreground">Disabled</span>
 			</div>
-			<Badge variant="outline" class="text-[10px]">
+			<Badge variant="outline" class="text-xs">
 				Unmanaged
 			</Badge>
 		</div>

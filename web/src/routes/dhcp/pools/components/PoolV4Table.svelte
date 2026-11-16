@@ -35,24 +35,24 @@
 	function getUtilizationStyles(pct: number) {
 		if (pct >= 90) {
 			return {
-				bar: "bg-rose-500",
-				badge: "text-rose-400 border-rose-500/30 bg-rose-500/10",
-				text: "text-rose-400",
+				bar: "bg-danger",
+				badge: "text-danger border-danger/30 bg-danger/10",
+				text: "text-danger",
 				label: "Critical",
 			};
 		}
 		if (pct >= 75) {
 			return {
-				bar: "bg-amber-500",
-				badge: "text-amber-400 border-amber-500/30 bg-amber-500/10",
-				text: "text-amber-400",
+				bar: "bg-warning",
+				badge: "text-warning border-warning/30 bg-warning/10",
+				text: "text-warning",
 				label: "Elevated",
 			};
 		}
 		return {
-			bar: "bg-emerald-500",
-			badge: "text-emerald-400 border-emerald-500/30 bg-emerald-500/10",
-			text: "text-emerald-400",
+			bar: "bg-brand-gradient",
+			badge: "text-success border-success/30 bg-success/10",
+			text: "text-muted-foreground",
 			label: "Healthy",
 		};
 	}
@@ -80,7 +80,7 @@
 	emptyMessage="Lanforge is currently not serving dynamic IPv4 leases. Add an address scope to begin allocating IP ranges."
 >
 	{#snippet titleExtra()}
-		<Badge variant="outline" class="font-mono text-[10px]">
+		<Badge variant="outline" class="font-mono text-xs">
 			{v4Pools.length} {v4Pools.length === 1 ? "Pool" : "Pools"}
 		</Badge>
 	{/snippet}
@@ -121,8 +121,8 @@
 						{pool.name || `Scope #${idx + 1}`}
 					</span>
 					{#if pool.boot_file}
-						<div class="flex items-center gap-1 text-[10px] text-muted-foreground">
-							<HardDriveDownloadIcon class="size-3 text-emerald-400" />
+						<div class="flex items-center gap-1 text-xs text-muted-foreground">
+							<HardDriveDownloadIcon class="size-3" />
 							<span class="font-mono">{pool.boot_file}</span>
 						</div>
 					{/if}
@@ -131,9 +131,9 @@
 
 			<Table.Cell>
 				<div class="flex items-center gap-1.5 font-mono text-xs">
-					<span class="text-emerald-400 font-semibold">{pool.range_start}</span>
+					<span class="text-foreground font-semibold">{pool.range_start}</span>
 					<span class="text-muted-foreground">–</span>
-					<span class="text-emerald-400 font-semibold">{pool.range_end}</span>
+					<span class="text-foreground font-semibold">{pool.range_end}</span>
 				</div>
 			</Table.Cell>
 
@@ -142,7 +142,7 @@
 					<span class="text-foreground">
 						GW: {pool.router || globalV4Router || "Default"}
 					</span>
-					<span class="text-muted-foreground text-[11px]">
+					<span class="text-muted-foreground text-xs">
 						Mask: {pool.subnet_mask || globalV4SubnetMask}
 					</span>
 				</div>
@@ -150,7 +150,7 @@
 
 			<Table.Cell>
 				<div class="flex flex-col gap-1.5">
-					<div class="flex items-center justify-between text-[11px] font-mono">
+					<div class="flex items-center justify-between text-xs font-mono">
 						<span class="font-medium text-foreground">
 							{used} / {total > 0 ? total : "—"} used
 						</span>
@@ -183,7 +183,7 @@
 					<Button
 						variant="ghost"
 						size="icon-sm"
-						class="text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 cursor-pointer"
+						class="text-danger hover:text-danger hover:bg-danger/10 cursor-pointer"
 						onclick={() => onDelete(idx)}
 						title="Delete Scope"
 					>

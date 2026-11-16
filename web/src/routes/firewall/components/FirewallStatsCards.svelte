@@ -3,8 +3,7 @@
 	import AlertTriangleIcon from "@lucide/svelte/icons/alert-triangle";
 	import ZapIcon from "@lucide/svelte/icons/zap";
 	import LayersIcon from "@lucide/svelte/icons/layers";
-	import StatCard from "$lib/components/StatCard.svelte";
-	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
+	import StatStrip from "$lib/components/StatStrip.svelte";
 	import type { FirewallStatus } from "$lib/api/types";
 
 	interface Props {
@@ -23,9 +22,9 @@
 <div class="flex flex-col gap-4 w-full">
 	<!-- Rollback & Transaction Alert Banners -->
 	{#if rollbackSecsLeft !== null}
-		<div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3.5 text-xs font-medium text-amber-700 dark:text-amber-400">
+		<div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning/40 bg-warning/10 p-3.5 text-xs font-medium text-warning">
 			<div class="flex items-center gap-2">
-				<AlertTriangleIcon class="size-4 shrink-0 text-amber-500" />
+				<AlertTriangleIcon class="size-4 shrink-0 text-warning" />
 				<span>
 					Auto-rollback in <strong class="font-mono text-foreground font-bold">{rollbackSecsLeft}s</strong> — confirm your connection to keep new nftables rules.
 				</span>
@@ -33,7 +32,7 @@
 			<div class="flex items-center gap-2">
 				<Button
 					size="sm"
-					class="h-7 px-3 text-xs bg-amber-600 hover:bg-amber-500 text-white font-medium shadow-xs"
+					class="h-7 px-3 text-xs bg-warning hover:bg-warning/90 text-white font-medium"
 					onclick={onConfirmNow}
 				>
 					Confirm Connection
@@ -41,7 +40,7 @@
 				<Button
 					variant="outline"
 					size="sm"
-					class="h-7 px-3 text-xs border-amber-500/40 text-amber-700 dark:text-amber-300 hover:bg-amber-500/10"
+					class="h-7 px-3 text-xs border-warning/40 text-warning hover:bg-warning/10"
 					onclick={onAbort}
 				>
 					Rollback Now
@@ -49,13 +48,12 @@
 			</div>
 		</div>
 	{:else if activeTxId !== null}
-		<div class="flex items-center justify-between gap-3 rounded-xl border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+		<div class="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
 			<div class="flex items-center gap-2">
 				<span class="relative flex size-2">
-					<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
 					<span class="relative inline-flex rounded-full size-2 bg-primary"></span>
 				</span>
-				<span>Transaction pending: <code class="font-mono text-[11px] text-foreground">{activeTxId}</code></span>
+				<span>Transaction pending: <code class="font-mono text-xs text-foreground">{activeTxId}</code></span>
 			</div>
 			<Button
 				variant="outline"
@@ -68,23 +66,17 @@
 		</div>
 	{/if}
 
-	<StatCardGrid cols={2}>
-		<StatCard
-			label="Rules"
-			value={status ? status.rules_count : "—"}
-			icon={LayersIcon}
-			color="sky"
-			subtext={status ? `${status.open_ports_count} open ports · anything else is ${status.default_drop_active ? "dropped" : "accepted"}` : "Rules unavailable"}
-			loading={loading && !status}
-		/>
-
-		<StatCard
-			label="Flow Offload"
-			value={status ? (status.flow_offload_suspended ? "Paused" : status.flow_offload_active ? "On" : "Off") : "—"}
-			icon={ZapIcon}
-			color={status?.flow_offload_suspended ? "amber" : status?.flow_offload_active ? "emerald" : "zinc"}
-			subtext={status ? (status.flow_offload_suspended ? "Paused so CAKE can shape the traffic" : status.flow_offload_active ? "Established connections skip the full routing path" : "Every packet takes the full routing path") : "Offload status unavailable"}
-			loading={loading && !status}
-		/>
-	</StatCardGrid>
+	<StatStrip
+		items={[
+			{ label: "rules", value: status ? status.rules_count : null, icon: LayersIcon },
+			{ label: "open ports", value: status ? status.open_ports_count : null },
+			{ label: "default policy", value: status ? (status.default_drop_active ? "Drop" : "Accept") : null },
+			{
+				label: "flow offload",
+				value: status ? (status.flow_offload_suspended ? "Paused" : status.flow_offload_active ? "On" : "Off") : null,
+				icon: ZapIcon,
+				tone: status?.flow_offload_suspended ? "warning" : undefined
+			}
+		]}
+	/>
 </div>

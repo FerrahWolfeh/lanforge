@@ -59,7 +59,7 @@
 					<Button
 						variant="outline"
 						size="sm"
-						class="h-7 px-2.5 text-xs text-rose-500 hover:text-rose-400 border-rose-500/20 hover:bg-rose-500/10"
+						class="h-7 px-2.5 text-xs text-danger hover:text-danger border-danger/20 hover:bg-danger/10"
 						onclick={() => onServiceControl("Stop")}
 						disabled={serviceActionLoading !== null}
 						title="Stop TFTP Server"
@@ -71,7 +71,7 @@
 					<Button
 						variant="outline"
 						size="sm"
-						class="h-7 px-2.5 text-xs text-emerald-500 hover:text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/10"
+						class="h-7 px-2.5 text-xs text-success hover:text-success border-success/20 hover:bg-success/10"
 						onclick={() => onServiceControl("Start")}
 						disabled={serviceActionLoading !== null}
 						title="Start TFTP Server"

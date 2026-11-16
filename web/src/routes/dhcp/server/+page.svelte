@@ -264,8 +264,8 @@
 
 	{#if loading}
 		<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-			<Skeleton class="h-96 rounded-xl" />
-			<Skeleton class="h-96 rounded-xl" />
+			<Skeleton class="h-96 rounded-lg" />
+			<Skeleton class="h-96 rounded-lg" />
 		</div>
 	{:else}
 		<fieldset disabled={!canEdit} class="contents">

@@ -90,7 +90,7 @@
 				{/if}
 
 				{#if report.warnings.length > 0}
-					<Alert.Root class="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400">
+					<Alert.Root class="border-warning/40 bg-warning/10 text-warning">
 						<AlertTriangleIcon data-icon="inline-start" />
 						<Alert.Title>Warnings</Alert.Title>
 						<Alert.Description>
@@ -104,7 +104,7 @@
 				{/if}
 			{:else}
 				{#if report.warnings.length > 0}
-					<Alert.Root class="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400">
+					<Alert.Root class="border-warning/40 bg-warning/10 text-warning">
 						<AlertTriangleIcon data-icon="inline-start" />
 						<Alert.Title>Warnings</Alert.Title>
 						<Alert.Description>
@@ -118,8 +118,8 @@
 				{/if}
 
 				{#if rollbackSecsLeft !== null}
-					<div class="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-xs font-medium text-amber-700 dark:text-amber-400">
-						<AlertTriangleIcon class="size-4 shrink-0 text-amber-500" />
+					<div class="flex items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2.5 text-xs font-medium text-warning">
+						<AlertTriangleIcon class="size-4 shrink-0 text-warning" />
 						<span>
 							Auto-rollback active in
 							<strong class="font-mono text-foreground font-bold">{rollbackSecsLeft}s</strong>
@@ -138,9 +138,9 @@
 									<div
 										class={cn(
 											"py-0.5 pl-2 border-l-2",
-											kind === "add" && "text-emerald-600 dark:text-emerald-400 border-emerald-500",
+											kind === "add" && "text-success border-success",
 											kind === "remove" && "text-destructive border-destructive",
-											kind === "change" && "text-amber-600 dark:text-amber-400 border-amber-500",
+											kind === "change" && "text-warning border-warning",
 											kind === "header" && "text-muted-foreground border-transparent pl-0 font-semibold",
 										)}
 									>

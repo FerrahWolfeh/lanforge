@@ -48,7 +48,7 @@
 							<strong class="text-foreground">Source → Destination:</strong> Each cell determines if packets entering from the row zone are permitted to route into the column zone.
 						</p>
 						<p>
-							<strong class="text-emerald-600 dark:text-emerald-400 font-semibold">Allowed:</strong> Routed traffic traverses freely. For example, <code>internal → external</code> allows LAN clients to reach the Internet.
+							<strong class="text-success font-semibold">Allowed:</strong> Routed traffic traverses freely. For example, <code>internal → external</code> allows LAN clients to reach the Internet.
 						</p>
 						<p>
 							<strong class="text-foreground font-semibold">Blocked:</strong> Routed packets are dropped by default. For example, <code>external → internal</code> blocks incoming connections from the Internet.
@@ -64,7 +64,7 @@
 	</div>
 
 	<!-- Matrix table -->
-	<div class="overflow-x-auto rounded-xl border border-border">
+	<div class="overflow-x-auto rounded-lg border border-border">
 		<table class="min-w-full border-collapse text-sm">
 			<!-- Header row -->
 			<thead>
@@ -137,7 +137,7 @@
 															'transition-all duration-150',
 															'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
 															allowed
-																? 'border-emerald-500/30 bg-emerald-500/20 text-emerald-700 hover:bg-emerald-500/30 dark:text-emerald-400'
+																? 'border-success/30 bg-success/20 text-success hover:bg-success/30'
 																: 'border-border bg-muted text-muted-foreground hover:bg-muted/80'
 														)}
 														aria-label={allowed
@@ -185,7 +185,7 @@
 		<span class="font-medium text-foreground">Legend:</span>
 		<span class="flex items-center gap-1.5">
 			<span
-				class="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/20 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-400"
+				class="inline-flex items-center gap-1 rounded-full border border-success/30 bg-success/20 px-2 py-0.5 text-xs font-medium text-success"
 			>
 				<CheckIcon data-icon="inline-start" />
 				Allowed

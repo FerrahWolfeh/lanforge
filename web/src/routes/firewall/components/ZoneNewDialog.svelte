@@ -201,18 +201,18 @@
               <div class="mt-2 flex flex-wrap gap-1">
                 <Badge
                   variant={tpl.input_policy === "Accept" ? "default" : "secondary"}
-                  class="text-[10px]"
+                  class="text-xs"
                 >
                   in: {tpl.input_policy}
                 </Badge>
                 <Badge
                   variant={tpl.forward_policy === "Accept" ? "default" : "secondary"}
-                  class="text-[10px]"
+                  class="text-xs"
                 >
                   fwd: {tpl.forward_policy}
                 </Badge>
                 {#if tpl.mtu_fix}
-                  <Badge variant="outline" class="text-[10px]">MTU fix</Badge>
+                  <Badge variant="outline" class="text-xs">MTU fix</Badge>
                 {/if}
               </div>
             </button>

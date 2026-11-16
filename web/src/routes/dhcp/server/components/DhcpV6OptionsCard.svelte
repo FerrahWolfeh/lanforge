@@ -20,11 +20,11 @@
 	} = $props();
 </script>
 
-<Card.Root class="border-border/80 shadow-sm overflow-hidden">
+<Card.Root class="border-border/80 overflow-hidden">
 	<Card.Header class="bg-muted/20 border-b pb-4">
 		<div class="flex items-center justify-between">
 			<div class="flex items-center gap-2.5">
-				<GlobeIcon class="size-5 text-purple-500" />
+				<GlobeIcon class="size-5 text-muted-foreground" />
 				<div>
 					<Card.Title class="text-base font-bold">IPv6 Network Parameters</Card.Title>
 					<Card.Description class="text-xs">
@@ -50,7 +50,7 @@
 					placeholder="fd00::1, 2606:4700:4700::1111"
 					class="font-mono text-xs"
 				/>
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					Comma-separated list of IPv6 recursive DNS servers.
 				</p>
 			</div>
@@ -64,7 +64,7 @@
 					placeholder="86400"
 					class="font-mono text-xs"
 				/>
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					Valid lifetime for stateful IPv6 leases.
 				</p>
 			</div>
@@ -77,7 +77,7 @@
 					placeholder="lan, internal.corp"
 					class="font-mono text-xs"
 				/>
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					Comma-separated search domains for IPv6 hosts.
 				</p>
 			</div>
@@ -90,7 +90,7 @@
 					placeholder="time.cloudflare.com, time.google.com"
 					class="font-mono text-xs"
 				/>
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					SNTP/NTP network time servers for IPv6.
 				</p>
 			</div>

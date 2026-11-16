@@ -132,21 +132,21 @@
 			</Table.Cell>
 			<Table.Cell>
 				{#if isDevice}
-					<Badge variant="outline" class="border-emerald-500/30 text-emerald-400 bg-emerald-500/10 font-mono text-[10px]">
+					<Badge variant="outline" class="border-muted-foreground/30 text-muted-foreground bg-muted-foreground/10 font-mono text-xs">
 						{rule.family === "ipv4" ? "Device · IPv4" : rule.family === "ipv6" ? "Device · IPv6" : "Device · v4 + v6"}
 					</Badge>
 				{:else if isV6}
-					<Badge variant="outline" class="border-purple-500/30 text-purple-400 bg-purple-500/10 font-mono text-[10px]">
+					<Badge variant="outline" class="border-muted-foreground/30 text-muted-foreground bg-muted-foreground/10 font-mono text-xs">
 						IPv6 Pinhole
 					</Badge>
 				{:else}
-					<Badge variant="outline" class="border-blue-500/30 text-blue-400 bg-blue-500/10 font-mono text-[10px]">
+					<Badge variant="outline" class="border-muted-foreground/30 text-muted-foreground bg-muted-foreground/10 font-mono text-xs">
 						IPv4 DNAT
 					</Badge>
 				{/if}
 			</Table.Cell>
 			<Table.Cell>
-				<Badge variant="outline" class="font-mono text-[11px]">
+				<Badge variant="outline" class="font-mono text-xs">
 					{rule.protocol}
 				</Badge>
 			</Table.Cell>
@@ -167,7 +167,7 @@
 			</Table.Cell>
 			<Table.Cell class="text-center">
 				{#if isV6}
-					<span class="text-[11px] text-muted-foreground font-mono" title="Not applicable to routed IPv6 pinholes">—</span>
+					<span class="text-xs text-muted-foreground font-mono" title="Not applicable to routed IPv6 pinholes">—</span>
 				{:else}
 					<Switch
 						checked={rule.enable_hairpin}
