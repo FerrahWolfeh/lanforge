@@ -574,8 +574,12 @@ async fn test_auth_persistence_unavailable_contract() {
     {
         let write_txn = db.redb().begin_write().unwrap();
         let mut table = write_txn.open_table(TABLE_API_TOKENS).unwrap();
+        // Tokens are keyed by their SHA-256 digest (hex of "corrupt_token_key").
         table
-            .insert("corrupt_token_key", &[0xff, 0xff][..])
+            .insert(
+                "a898428a3c33583455beed9cc410f60bc5bb998f916a19d60f7debb733bb66eb",
+                &[0xff, 0xff][..],
+            )
             .unwrap();
         drop(table);
         write_txn.commit().unwrap();

@@ -18,6 +18,6 @@ pub mod tls;
 
 pub use hash::{
     content_hash_hex, content_hash_short_hex, content_hash64, content_hash128, slugify,
-    stable_id_or_hash,
+    stable_id_or_hash, token_digest,
 };
 pub use password::{hash_password, verify_password};

@@ -9,6 +9,7 @@ authors.workspace = true
 argon2 = { workspace = true }
 password-hash = { workspace = true }
 xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
+sha2 = "0.10.9"
 rustls = { workspace = true, optional = true }
 rustls-pki-types = { version = "1.14.1", features = ["std"], optional = true }
 thiserror = { workspace = true, optional = true }

@@ -2199,6 +2199,7 @@ dependencies = [
  "ring",
  "rustls",
  "rustls-pki-types",
+ "sha2",
  "thiserror 2.0.21",
  "xxhash-rust",
 ]
@@ -2237,6 +2238,7 @@ name = "lanforge-db-redb"
 version = "0.64.0"
 dependencies = [
  "lanforge-core",
+ "lanforge-crypto",
  "lanforge-db-core",
  "lanforge-types",
  "postcard",

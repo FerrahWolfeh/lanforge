@@ -1,13 +1,10 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use crate::ClientContext;
 use lanforge_api::api::{
-    DnsUpstreamConfig, ExportedApiToken, ImportResult, ImportSection, Response, SystemConfigExport,
+    DnsUpstreamConfig, ImportResult, ImportSection, Response, SystemConfigExport,
     SystemConfigImportResponse,
 };
 use lanforge_api::config_file::{NamedUpstream, SectionSet};
 use lanforge_core::context::ConfigPatch;
-use lanforge_db_core::Stores;
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::rules_file::RulesFile;
 use lanforge_types::network::dns::adblock::{AdblockRuleAction, AdblockRuleEntry};
@@ -79,27 +76,8 @@ impl ClientContext {
                 .with_config(|c| RulesFile::new(&c.dns_adblock_rules.0).rule_entries()),
         );
 
-        // 7. API Tokens
-        let api_tokens = if let Some(storage) = self.ctx.storage_handle() {
-            match storage.call(|s: &Stores| s.auth().load_api_tokens()).await {
-                Ok(tokens) => Some(
-                    tokens
-                        .into_iter()
-                        .map(|t| ExportedApiToken {
-                            token: t.token,
-                            name: t.name,
-                            created_at: t.created_at,
-                            last_used: t.last_used,
-                            scopes: t.scopes,
-                            expires_at: t.expires_at,
-                        })
-                        .collect(),
-                ),
-                _ => None,
-            }
-        } else {
-            None
-        };
+        // 7. API tokens are stored as digests and never leave the daemon.
+        let api_tokens = None;
 
         // 8. Dynamic Configs (pools, prefixes, pppoe, options, reverse resolvers)
         let dhcp_v4_pools = Some(self.ctx.get_dhcp_v4_pools());
@@ -168,27 +146,8 @@ impl ClientContext {
             self.ctx.set_target_interface_name(iface);
         }
 
-        let Some(storage) = self.ctx.storage_handle() else {
-            return Response::Error {
-                error: "Storage service not available".into(),
-            };
-        };
-
         let mut total_success = true;
         let mut results = Vec::new();
-
-        if overwrite {
-            // Clear API Tokens
-            if let Ok(existing_tokens) = storage.call(|s: &Stores| s.auth().load_api_tokens()).await
-            {
-                for token in existing_tokens {
-                    let tok = token.token;
-                    let _ = storage
-                        .call(move |s: &Stores| s.auth().delete_api_token(&tok))
-                        .await;
-                }
-            }
-        }
 
         // 1. Import hosts. File-owned: imported only if they reach `[hosts]`; overwrite makes
         // the static hosts not imported discovered devices again (their history stays).
@@ -373,41 +332,13 @@ impl ClientContext {
             total_success = false;
         }
 
-        // 7. Import API Tokens
-        if let Some(tokens) = api_tokens {
-            let mut imported_tokens = 0;
-            let mut tokens_success = true;
-            let mut tokens_err = None;
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64;
-            for t in tokens {
-                let tok = t.token.clone();
-                let nm = t.name.clone();
-                let sc = t.scopes.clone();
-                if let Err(e) = storage
-                    .call(move |s: &Stores| -> Result<(), lanforge_db_core::DbError> {
-                        s.auth()
-                            .store_api_token(&tok, &nm, &sc, t.expires_at, now)
-                            .map(|_| ())
-                    })
-                    .await
-                {
-                    tokens_success = false;
-                    tokens_err = Some(e.to_string());
-                } else {
-                    imported_tokens += 1;
-                }
-            }
-            if !tokens_success {
-                total_success = false;
-            }
+        // 7. API tokens are not imported: the database keeps only their digests.
+        if api_tokens.is_some() {
             results.push(ImportResult {
                 section: ImportSection::ApiTokens,
-                success: tokens_success,
-                count: imported_tokens,
-                error: tokens_err,
+                success: false,
+                count: 0,
+                error: Some("API tokens are not imported".to_string()),
             });
         }
 
