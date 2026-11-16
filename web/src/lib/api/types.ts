@@ -207,6 +207,16 @@ export interface StatusResponse {
 	capabilities?: CapabilitiesInfo | ServerCapabilities;
 	server_caps: ServerCapabilities;
 	service_banners?: ServiceBanner[];
+	devices?: DevicesStats;
+}
+
+/** Device counts from the status call (lanforge-api `DevicesStats`). */
+export interface DevicesStats {
+	total: number;
+	online: number;
+	static_toml: number;
+	managed_cli: number;
+	dynamic: number;
 }
 
 export function normalizeServices(status?: StatusResponse | null): ServiceBanner[] {

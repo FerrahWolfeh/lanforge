@@ -5,6 +5,6 @@
 
 <DbInventoryTab
 	inventoryItems={dbState.inventoryItems}
-	totalStoredEntities={dbState.totalStoredEntities}
+	loading={dbState.loading}
 	isInMemory={dbState.isInMemory}
 />
