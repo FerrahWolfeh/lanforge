@@ -38,6 +38,9 @@
 		onPurge?: (mac: string) => void;
 	} = $props();
 
+	/** The daemon sends "?" for a device that never told its name. */
+	const nameOf = (dev: DeviceEntry) =>
+		dev.hostname && dev.hostname !== "?" ? dev.hostname : "Unnamed device";
 	const pageOf = (dev: DeviceEntry) => `/network/devices/${encodeURIComponent(dev.mac)}`;
 
 	let searchQuery = $state("");
@@ -230,7 +233,7 @@
 				>
 					<span class="flex items-baseline justify-between gap-2">
 						<span class="truncate text-sm font-semibold tracking-tight text-foreground">
-							{dev.hostname || "Unassigned Host"}
+							{nameOf(dev)}
 						</span>
 						<span class="shrink-0 text-xs text-muted-foreground">
 							{formatLastSeen(dev.last_seen)}
@@ -295,7 +298,7 @@
 			<Table.Cell class="font-sans">
 				<div class="flex flex-col">
 					<a href={pageOf(dev)} class="text-foreground text-xs sm:text-sm font-semibold tracking-tight hover:underline">
-						{dev.hostname || "Unassigned Host"}
+						{nameOf(dev)}
 					</a>
 					<div class="flex items-center gap-1.5 text-muted-foreground font-mono text-xs">
 						<span>{dev.mac}</span>
