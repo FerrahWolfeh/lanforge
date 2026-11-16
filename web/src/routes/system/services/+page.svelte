@@ -7,7 +7,7 @@
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import { serviceBanners, status, controlService, reload } from "$lib/api/client";
 	import { normalizeServices, type ServiceBanner } from "$lib/api/types";
-	import { getServiceMeta } from "$lib/services";
+	import { degradedReason, getServiceMeta } from "$lib/services";
 	import { toast } from "svelte-sonner";
 	import { goto } from "$app/navigation";
 	import { onMount } from "svelte";
@@ -493,6 +493,9 @@
 							</span>
 						</div>
 
+						{#if degradedReason(banner.detail)}
+							<p class="text-[11px] text-amber-500 pt-0.5">{degradedReason(banner.detail)}</p>
+						{/if}
 						{#if banner.summary}
 							<p class="font-mono text-[11px] text-foreground pt-0.5">{banner.summary}</p>
 						{/if}

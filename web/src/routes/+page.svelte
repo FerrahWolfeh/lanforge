@@ -42,6 +42,7 @@
 	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 	import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
+	import { degradedReason } from "$lib/services";
 
 	const trafficTelemetry = trafficTelemetryFeed();
 
@@ -401,7 +402,9 @@
 
 						<div class="flex items-center gap-3 shrink-0 font-mono text-[11px]">
 							<span class="text-muted-foreground text-[10px] hidden md:inline">
-								{#if banner?.summary}
+								{#if degradedReason(banner?.detail)}
+									<span class="text-amber-500">{degradedReason(banner?.detail)}</span>
+								{:else if banner?.summary}
 									{banner.summary}
 								{:else}
 									{svc.proto}

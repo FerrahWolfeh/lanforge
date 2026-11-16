@@ -218,3 +218,25 @@ export function getServiceMeta(id?: string, name?: string): ServiceMeta {
 		canControl: true
 	};
 }
+
+/**
+ * Why a degraded service is degraded, in plain words, or null. A degraded service still serves,
+ * so the daemon sends live numbers as its summary and the reason only in `detail`
+ * (`{ degraded: "upstream_unreachable" | ... | { custom: "..." } }`).
+ */
+export function degradedReason(detail: unknown): string | null {
+	if (!detail || typeof detail !== 'object' || !('degraded' in detail)) return null;
+	const reason = (detail as { degraded: unknown }).degraded;
+	switch (reason) {
+		case 'upstream_unreachable':
+			return 'WAN is down: upstream servers unreachable';
+		case 'interface_flapping':
+			return 'Interface link keeps going up and down';
+		case 'transport_errors':
+			return 'Socket errors outnumber traffic';
+	}
+	if (reason && typeof reason === 'object' && 'custom' in reason) {
+		return String((reason as { custom: unknown }).custom);
+	}
+	return null;
+}

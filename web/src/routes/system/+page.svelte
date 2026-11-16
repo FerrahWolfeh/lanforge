@@ -8,7 +8,7 @@
 	import * as AlertDialog from "$lib/components/ui/alert-dialog";
 	import { status, scan, reload, controlService } from "$lib/api/client";
 	import { normalizeServices, type StatusResponse } from "$lib/api/types";
-	import { getServiceMeta } from "$lib/services";
+	import { degradedReason, getServiceMeta } from "$lib/services";
 	import { formatBytes, formatBuild, formatUptime, formatIpv6Prefix } from "$lib/utils";
 	import InfoPopover from "$lib/components/InfoPopover.svelte";
 	import { toast } from "svelte-sonner";
@@ -571,6 +571,9 @@
 								</div>
 							</div>
 
+							{#if degradedReason(svc.detail)}
+								<p class="text-[11px] text-amber-500 pt-1">{degradedReason(svc.detail)}</p>
+							{/if}
 							{#if svc.summary}
 								<p class="font-mono text-[11px] text-foreground pt-1">{svc.summary}</p>
 							{/if}
