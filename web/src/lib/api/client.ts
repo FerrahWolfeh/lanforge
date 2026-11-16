@@ -73,7 +73,6 @@ import type {
 } from './types';
 import { parseTimedEvent } from './types';
 
-
 // ---------------------------------------------------------------------------
 // Core transport
 // ---------------------------------------------------------------------------
@@ -406,7 +405,7 @@ export const listDevices = async (params?: {
 		total: typeof raw.meta?.total === 'number' ? raw.meta.total : devList.length,
 		online: typeof raw.meta?.online === 'number' ? raw.meta.online : onlineCount,
 		last_scan_secs_ago:
-			typeof raw.meta?.last_scan_secs_ago === 'number' ? raw.meta.last_scan_secs_ago : 0,
+			typeof raw.meta?.last_scan_secs_ago === 'number' ? raw.meta.last_scan_secs_ago : 0
 	};
 	return { devices: devList, meta };
 };
@@ -430,8 +429,7 @@ export const dnsDomain = (domain: string) =>
 export const deviceRules = (mac: string) =>
 	get<DeviceRulesResponse>(`/devices/${encodeURIComponent(mac)}/rules`);
 export const purge = (target: string) => del<void>(`/devices/${encodeURIComponent(target)}`);
-export const wol = (target: string) =>
-	post<void>(`/devices/${encodeURIComponent(target)}/wol`);
+export const wol = (target: string) => post<void>(`/devices/${encodeURIComponent(target)}/wol`);
 
 // ---------------------------------------------------------------------------
 // Hosts
@@ -477,7 +475,12 @@ function formatDnsAddr(addr: string): string {
 	if (!trimmed) return trimmed;
 	// Already formatted with port?
 	if (trimmed.startsWith('[') && trimmed.includes(']:')) return trimmed;
-	if (trimmed.includes(':') && !trimmed.includes('::') && trimmed.split(':').length === 2 && trimmed.includes('.')) {
+	if (
+		trimmed.includes(':') &&
+		!trimmed.includes('::') &&
+		trimmed.split(':').length === 2 &&
+		trimmed.includes('.')
+	) {
 		return trimmed;
 	}
 	// IPv6 address without port
@@ -520,13 +523,16 @@ export const dnsUpstreamRemove = (entry: { addr: string; protocol: string; domai
 export const dnsUpstreamSetDefault = (addrs: string[]) =>
 	put<void>('/dns/upstreams', { upstreams: addrs.map(formatDnsAddr) });
 export const dnsUpstreamModeGet = () => get<{ mode: string }>('/dns/upstreams/mode');
-export const dnsUpstreamModeSet = (mode: string) => put<{ mode: string }>('/dns/upstreams/mode', { mode });
+export const dnsUpstreamModeSet = (mode: string) =>
+	put<{ mode: string }>('/dns/upstreams/mode', { mode });
 export const dnsUpstreamTest = (entry: { addr: string; protocol?: string; domain?: string }) => {
 	const formattedAddr = formatDnsAddr(entry.addr);
 	const proto = (entry.protocol || 'udp').toLowerCase();
 	const params = new URLSearchParams({ addr: formattedAddr, protocol: proto });
 	if (entry.domain) params.set('domain', entry.domain);
-	return get<{ ok: boolean; latency_ms: number; error?: string }>(`/dns/upstreams/test?${params.toString()}`);
+	return get<{ ok: boolean; latency_ms: number; error?: string }>(
+		`/dns/upstreams/test?${params.toString()}`
+	);
 };
 
 export const dnsReverseResolverList = async (): Promise<ReverseResolverEntry[]> =>
@@ -576,8 +582,7 @@ export const dnsAdblockCheck = (domain: string, client?: string) =>
 			(client ? `&client=${encodeURIComponent(client)}` : '')
 	);
 /** `?group=<name>` for a group's rules or lists; nothing for the global layer. */
-const groupQuery = (group?: string | null) =>
-	group ? `?group=${encodeURIComponent(group)}` : '';
+const groupQuery = (group?: string | null) => (group ? `?group=${encodeURIComponent(group)}` : '');
 
 /** Adds a list to the global layer, or to `group`. */
 export const dnsAdblockUrlAdd = (entry: DnsAdblockUrlEntry, group?: string | null) =>
@@ -675,11 +680,14 @@ export const dhcpPoolsConfigGet = async (): Promise<DhcpPoolsConfigResponse> => 
 		v4_pools: Array.isArray(data?.v4_pools) ? data.v4_pools : [],
 		v6_pools: Array.isArray(data?.v6_pools) ? data.v6_pools : [],
 		active_ula_prefix: data?.active_ula_prefix ?? null,
-		active_gua_prefix: data?.active_gua_prefix ?? null,
+		active_gua_prefix: data?.active_gua_prefix ?? null
 	};
 };
 
-export const dhcpPoolsConfigUpdate = (v4_pools: Dhcpv4PoolConfig[], v6_pools: Dhcpv6PoolConfig[]) => {
+export const dhcpPoolsConfigUpdate = (
+	v4_pools: Dhcpv4PoolConfig[],
+	v6_pools: Dhcpv6PoolConfig[]
+) => {
 	const sanitizedV4 = v4_pools.map((p) => ({
 		...p,
 		name: p.name?.trim() || null,
@@ -688,21 +696,27 @@ export const dhcpPoolsConfigUpdate = (v4_pools: Dhcpv4PoolConfig[], v6_pools: Dh
 		domain_name: p.domain_name?.trim() || null,
 		boot_file: p.boot_file?.trim() || null,
 		tftp_server: p.tftp_server?.trim() || null,
-		lease_time: p.lease_time ? Number(p.lease_time) : null,
+		lease_time: p.lease_time ? Number(p.lease_time) : null
 	}));
 	const sanitizedV6 = v6_pools.map((p) => ({
 		...p,
 		name: p.name?.trim() || null,
-		address: p.address?.trim() || null,
+		address: p.address?.trim() || null
 	}));
 	return put<void>('/dhcp/pools/config', { v4_pools: sanitizedV4, v6_pools: sanitizedV6 });
 };
 
 export const leaseRenew = (mac: string, target?: LeaseTarget) =>
-	post<void>(`/dhcp/leases/${encodeURIComponent(mac)}/renew`, target !== undefined ? { target } : {});
+	post<void>(
+		`/dhcp/leases/${encodeURIComponent(mac)}/renew`,
+		target !== undefined ? { target } : {}
+	);
 
 export const leaseRelease = (mac: string, target?: LeaseTarget) =>
-	post<void>(`/dhcp/leases/${encodeURIComponent(mac)}/release`, target !== undefined ? { target } : {});
+	post<void>(
+		`/dhcp/leases/${encodeURIComponent(mac)}/release`,
+		target !== undefined ? { target } : {}
+	);
 
 export const dhcpReconcile = async (): Promise<DhcpReconcileResponse> => {
 	const res = await post<any>('/dhcp/reconcile', {});
@@ -729,7 +743,11 @@ export const importSystemConfig = (config: SystemConfigExport) =>
 export const userList = async (): Promise<UserInfo[]> =>
 	extractList<UserInfo>(await get<any>('/users'), 'users');
 
-export const userCreate = async (username: string, password: string, role?: string): Promise<UserInfo> => {
+export const userCreate = async (
+	username: string,
+	password: string,
+	role?: string
+): Promise<UserInfo> => {
 	const res = await post<any>('/users', { username, password, role });
 	if (res?.data?.user) return res.data.user;
 	if (res?.user) return res.user;
@@ -768,10 +786,8 @@ export const firewallPropose = (config: FirewallConfig) =>
 	post<FirewallValidationReport>('/firewall/propose', config);
 export const firewallCommit = (req: FirewallCommitRequest) =>
 	post<FirewallCommitResponse>('/firewall/commit', req);
-export const firewallConfirm = (tx_id: string) =>
-	post<void>('/firewall/confirm', { tx_id });
-export const firewallAbort = (tx_id: string) =>
-	post<void>('/firewall/abort', { tx_id });
+export const firewallConfirm = (tx_id: string) => post<void>('/firewall/confirm', { tx_id });
+export const firewallAbort = (tx_id: string) => post<void>('/firewall/abort', { tx_id });
 
 export const trafficStatus = () => get<TrafficStatusResponse>('/traffic/status');
 /**
@@ -797,14 +813,11 @@ export function trafficTelemetryFeed() {
 	return () => (inflight ??= fetchOnce().finally(() => (inflight = null)));
 }
 export const trafficConfig = () => get<TrafficConfig>('/traffic/config');
-export const trafficUpdateConfig = (config: TrafficConfig) =>
-	post<void>('/traffic/config', config);
-
+export const trafficUpdateConfig = (config: TrafficConfig) => post<void>('/traffic/config', config);
 
 // ---------------------------------------------------------------------------
 // Setup & Onboarding
 // ---------------------------------------------------------------------------
-
 
 export const getSetupStatus = () => get<SetupStatusResponse>('/system/setup-status');
 export const submitSetup = (payload: SetupPayload) => post<SetupResponse>('/system/setup', payload);
@@ -827,7 +840,8 @@ export const controlService = (
 export const logLevel = () => get<LogLevelStatus>('/system/log-level');
 
 /** Saves the filter (`duration_secs: null`), sets it for a while, or resets it (`filter: null`). */
-export const setLogLevel = (req: SetLogLevelRequest) => put<LogLevelStatus>('/system/log-level', req);
+export const setLogLevel = (req: SetLogLevelRequest) =>
+	put<LogLevelStatus>('/system/log-level', req);
 
 /** What stopping `id` does to the running services that require it (dry-run, D-20). */
 export const serviceStopImpact = (id: string) =>
