@@ -629,7 +629,7 @@ fn render_status_dashboard(
     println!(
         " {} {}  {}",
         printer.status_badge(status.enabled),
-        "Firewall & NAT Orchestrator (nftables)".bold().white(),
+        "Firewall (nftables)".bold().white(),
         badge
     );
 

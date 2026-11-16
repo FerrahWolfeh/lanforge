@@ -467,7 +467,7 @@ impl<A: NftApplier> LanforgeService for NftService<A> {
     fn spec(&self) -> ServiceSpec {
         ServiceSpec {
             id: Self::SERVICE_ID,
-            display_name: "Firewall & NAT Orchestrator",
+            display_name: "Firewall",
             runtime: RuntimeClass::Shared,
             restart: RestartPolicy {
                 base_backoff: Duration::from_secs(5),
