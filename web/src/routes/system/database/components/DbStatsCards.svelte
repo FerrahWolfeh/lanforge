@@ -28,7 +28,7 @@
 		engineLabel?: string;
 		isHealthy?: boolean;
 		formatBytes?: (b: number) => string;
-		formatTimeAgo?: (secs: number | null | undefined) => string;
+		formatTimeAgo?: (epochSecs: number | null | undefined) => string;
 	} = $props();
 </script>
 
@@ -63,7 +63,7 @@
 	<!-- Card 2: Persistence Cadence -->
 	<StatCard
 		label="Last Disk Sync"
-		value={formatTimeAgo(systemStatus?.db?.last_flush_secs_ago)}
+		value={systemStatus?.db ? formatTimeAgo(Math.floor(Date.now() / 1000) - systemStatus.db.last_flush_secs_ago) : "—"}
 		icon={ActivityIcon}
 		color="emerald"
 		badge={{

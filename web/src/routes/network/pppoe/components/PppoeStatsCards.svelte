@@ -32,7 +32,7 @@
 		if (status?.state === "connected" && (!seconds || seconds <= 0)) {
 			return "< 1m";
 		}
-		if (!seconds || seconds <= 0) return "Disconnected";
+		if (!seconds || seconds <= 0) return "—";
 		const d = Math.floor(seconds / 86400);
 		const h = Math.floor((seconds % 86400) / 3600);
 		const m = Math.floor((seconds % 3600) / 60);
@@ -42,6 +42,11 @@
 		if (m > 0) return `${m}m ${s}s`;
 		return `${s}s`;
 	}
+
+	// Only these states mean the client is actually negotiating; disabled or disconnected is not "waiting".
+	const sessionStarting = $derived(
+		status?.state === "discovering" || status?.state === "authenticating" || status?.state === "reconnecting"
+	);
 
 	function formatAuthMethod(auth?: string): string {
 		switch (auth) {
@@ -91,7 +96,7 @@
 					<span class="text-base text-amber-400 font-bold">Waiting for ONT...</span>
 				{:else}
 					<XCircleIcon class="size-5 text-muted-foreground shrink-0" />
-					<span class="text-base text-muted-foreground font-normal">Offline / Idle</span>
+					<span class="text-base text-muted-foreground font-normal">{status && !status.enabled ? "Disabled" : "Disconnected"}</span>
 				{/if}
 			</div>
 		{/snippet}
@@ -110,10 +115,7 @@
 			title: "IPCP Network Layer",
 			description: "Public IPv4 address and peer gateway allocated by broadband ISP.",
 		}}
-		badge={{
-			text: status?.local_ip ? "IPCP Active" : "Waiting",
-			variant: status?.local_ip ? "online" : "dormant",
-		}}
+		badge={status?.local_ip ? { text: "IPCP Active", variant: "online" } : undefined}
 	>
 		{#snippet valueExtra()}
 			<div class="pt-0.5">
@@ -122,14 +124,14 @@
 						{status.local_ip}
 					</span>
 				{:else}
-					<span class="text-sm text-muted-foreground font-normal">Waiting for IPCP…</span>
+					<span class="text-sm text-muted-foreground font-normal">{sessionStarting ? "Waiting for IPCP…" : "—"}</span>
 				{/if}
 			</div>
 		{/snippet}
 
 		{#snippet footer()}
 			<StatCardFooterItem label="Gateway Peer" value={status?.peer_ip ?? "—"} />
-			<StatCardFooterItem label="Negotiated MRU" value={status?.mru ? `${status.mru} B` : "1492 B"} />
+			<StatCardFooterItem label="Negotiated MRU" value={status?.mru ? `${status.mru} B` : "—"} />
 		{/snippet}
 	</StatCard>
 
@@ -150,7 +152,7 @@
 		{#snippet valueExtra()}
 			<div class="pt-0.5">
 				<span class="text-base sm:text-lg font-bold text-foreground truncate block" title={status?.ac_name ?? "None"}>
-					{status?.ac_name || (status?.state === "connected" ? "ISP Concentrator" : "Searching…")}
+					{status?.ac_name || (status?.state === "discovering" ? "Searching…" : "—")}
 				</span>
 			</div>
 		{/snippet}

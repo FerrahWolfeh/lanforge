@@ -20,7 +20,7 @@
 		logCleaning?: boolean;
 		lastPruneTime?: number | null;
 		lastLogCleanTime?: number | null;
-		formatTimeAgo?: (secs: number | null | undefined) => string;
+		formatTimeAgo?: (epochSecs: number | null | undefined) => string;
 		onPrune?: () => void;
 		onLogClean?: () => void;
 		onOpenWipeDialog?: () => void;
@@ -45,7 +45,7 @@
 				{#if lastPruneTime}
 					<p class="text-[11px] text-emerald-500 flex items-center gap-1 font-medium">
 						<CheckIcon class="size-3" />
-						Executed {formatTimeAgo(Math.floor(Date.now() / 1000) - lastPruneTime)}
+						Executed {formatTimeAgo(lastPruneTime)}
 					</p>
 				{/if}
 				<Button
@@ -76,7 +76,7 @@
 				{#if lastLogCleanTime}
 					<p class="text-[11px] text-emerald-500 flex items-center gap-1 font-medium">
 						<CheckIcon class="size-3" />
-						Executed {formatTimeAgo(Math.floor(Date.now() / 1000) - lastLogCleanTime)}
+						Executed {formatTimeAgo(lastLogCleanTime)}
 					</p>
 				{/if}
 				<Button
