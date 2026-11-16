@@ -16,6 +16,8 @@
 		hostList,
 		hostSet,
 		eventsUrl,
+		openEventStream,
+		type EventStream,
 		leaseRenew,
 		leaseRelease,
 	} from "$lib/api/client";
@@ -71,7 +73,7 @@
 	let hostEntry = $state<HostConfigEntry | null>(null);
 	let adblockOpen = $state(false);
 	let linkedOpen = $state(false);
-	let eventSource: EventSource | null = null;
+	let eventSource: EventStream | null = null;
 	let stopDnsPolling: (() => void) | undefined;
 
 	// The component is reused when only `mac` changes: a response for another MAC is dropped.
@@ -148,11 +150,12 @@
 
 	onMount(() => {
 		try {
-			eventSource = new EventSource(eventsUrl({ filter: "device" }));
-			eventSource.onmessage = (event) => {
-				// Other devices' events are not for this page.
-				if (String(event.data).toLowerCase().includes(mac.toLowerCase())) debouncedDevice();
-			};
+			eventSource = openEventStream(eventsUrl({ filter: "device" }), {
+				onmessage: (event) => {
+					// Other devices' events are not for this page.
+					if (String(event.data).toLowerCase().includes(mac.toLowerCase())) debouncedDevice();
+				},
+			});
 		} catch {
 			// no live updates
 		}

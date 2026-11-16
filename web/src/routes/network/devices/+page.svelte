@@ -8,6 +8,8 @@
 		wol,
 		scan,
 		eventsUrl,
+		openEventStream,
+		type EventStream,
 		dnsAnalytics,
 	} from "$lib/api/client";
 	import type { DeviceEntry, TopClientEntry } from "$lib/api/types";
@@ -77,7 +79,7 @@
 		}
 	}
 
-	let eventSource: EventSource | null = null;
+	let eventSource: EventStream | null = null;
 
 	async function loadDevices(showSpinner = true) {
 		if (showSpinner) loading = true;
@@ -138,9 +140,8 @@
 
 		try {
 			const url = eventsUrl({ filter: "device" });
-			eventSource = new EventSource(url);
-
-			eventSource.onmessage = (e) => {
+			eventSource = openEventStream(url, {
+				onmessage: (e) => {
 				try {
 					const data = JSON.parse(e.data);
 					const kindStr = typeof data?.kind === "string" ? data.kind : "";
@@ -161,7 +162,8 @@
 				} catch {
 					// silent parse error
 				}
-			};
+				},
+			});
 		} catch {
 			// SSE unsupported
 		}

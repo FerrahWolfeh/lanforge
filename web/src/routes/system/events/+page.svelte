@@ -2,7 +2,7 @@
 	import { onMount, onDestroy } from "svelte";
 	import { Button } from "$lib/components/ui/button";
 	import { toast } from "svelte-sonner";
-	import { eventsUrl, eventsHistory, me } from "$lib/api/client";
+	import { eventsUrl, eventsHistory, openEventStream, type EventStream } from "$lib/api/client";
 	import { parseTimedEvent, type SseEvent } from "$lib/api/types";
 	import EventTable from "./components/EventTable.svelte";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
@@ -21,9 +21,7 @@
 	let bufferLimit = $state(500);
 	let events = $state<SseEvent[]>([]);
 
-	let eventSource: EventSource | null = null;
-	let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
-	let reconnectAttempts = 0;
+	let eventSource: EventStream | null = null;
 	let destroyed = false;
 
 	async function loadHistoricalEvents() {
@@ -47,14 +45,15 @@
 
 		try {
 			const url = eventsUrl();
-			eventSource = new EventSource(url);
-
-			eventSource.onopen = () => {
-				reconnecting = false;
-				reconnectAttempts = 0;
-			};
-
-			eventSource.onmessage = (msgEvent) => {
+			eventSource = openEventStream(url, {
+				onopen: () => {
+					reconnecting = false;
+				},
+				// The stream reconnects on its own; a 401 logs out inside it.
+				onerror: () => {
+					reconnecting = isLive;
+				},
+				onmessage: (msgEvent) => {
 				if (!msgEvent.data || msgEvent.data === "keepalive") return;
 
 				try {
@@ -67,29 +66,8 @@
 				} catch {
 					// Ignore malformed JSON chunks
 				}
-			};
-
-			eventSource.onerror = () => {
-				stopSseStream();
-				if (!isLive) return;
-
-				reconnecting = true;
-				const delay = Math.min(1000 * Math.pow(1.5, reconnectAttempts), 15000);
-				reconnectAttempts++;
-
-				reconnectTimeout = setTimeout(async () => {
-					reconnectTimeout = null;
-					// EventSource cannot see a 401: probe the session first (a 401 redirects to login).
-					try {
-						await me();
-					} catch (err: any) {
-						if (err?.status === 401) return;
-					}
-					if (isLive && !destroyed) {
-						startSseStream();
-					}
-				}, delay);
-			};
+				},
+			});
 		} catch {
 			reconnecting = true;
 		}
@@ -99,10 +77,6 @@
 		if (eventSource) {
 			eventSource.close();
 			eventSource = null;
-		}
-		if (reconnectTimeout) {
-			clearTimeout(reconnectTimeout);
-			reconnectTimeout = null;
 		}
 	}
 

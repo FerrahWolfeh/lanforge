@@ -11,7 +11,7 @@
 	import { onMount, onDestroy } from "svelte";
 	import { page } from "$app/state";
 	import { replaceState } from "$app/navigation";
-	import { dnsQueryLog, dnsLogSseUrl } from "$lib/api/client";
+	import { dnsQueryLog, dnsLogSseUrl, openEventStream, type EventStream } from "$lib/api/client";
 	import type { DnsQueryLogEntry } from "$lib/api/types";
 	import PageHeader from "$lib/components/PageHeader.svelte";
 	import { createSequence } from "$lib/utils";
@@ -45,7 +45,7 @@
 	let isLivePaused = $state(false);
 	let isLiveConnected = $state(false);
 	let bufferLimit = $state(200);
-	let eventSource: EventSource | null = null;
+	let eventSource: EventStream | null = null;
 
 	// --- Shared Dialog States ---
 	let inspectRecord = $state<DnsQueryLogEntry | null>(null);
@@ -144,12 +144,14 @@
 		stopLiveStream();
 		try {
 			const url = dnsLogSseUrl({ client: selectedClient || undefined });
-			eventSource = new EventSource(url);
-			eventSource.onopen = () => {
-				isLiveConnected = true;
-			};
-
-			eventSource.onmessage = (event) => {
+			eventSource = openEventStream(url, {
+				onopen: () => {
+					isLiveConnected = true;
+				},
+				onerror: () => {
+					isLiveConnected = false;
+				},
+				onmessage: (event) => {
 				isLiveConnected = true;
 				if (isLivePaused) return;
 				try {
@@ -194,11 +196,8 @@
 				} catch {
 					// Ignore invalid frame
 				}
-			};
-
-			eventSource.onerror = () => {
-				isLiveConnected = false;
-			};
+				},
+			});
 		} catch {
 			isLiveConnected = false;
 		}

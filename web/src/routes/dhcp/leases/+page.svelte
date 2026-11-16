@@ -9,6 +9,8 @@
 		leaseRenew,
 		wol,
 		eventsUrl,
+		openEventStream,
+		type EventStream,
 	} from "$lib/api/client";
 	import type { LeaseEntry } from "$lib/api/types";
 	import { createDebounce } from "$lib/utils";
@@ -29,8 +31,8 @@
 	let releaseOpen = $state(false);
 	let selectedLeaseForRelease = $state<LeaseEntry | null>(null);
 
-	// Real-time EventSource
-	let eventSource: EventSource | null = null;
+	// Real-time event stream
+	let eventSource: EventStream | null = null;
 
 	async function loadLeasesData(showSpinner = true) {
 		if (showSpinner) loading = true;
@@ -83,9 +85,8 @@
 
 		try {
 			const url = eventsUrl({ filter: "Dhcp" });
-			eventSource = new EventSource(url);
-
-			eventSource.onmessage = (e) => {
+			eventSource = openEventStream(url, {
+				onmessage: (e) => {
 				try {
 					const data = JSON.parse(e.data);
 					const kindStr = typeof data?.kind === "string" ? data.kind : "";
@@ -110,7 +111,8 @@
 				} catch {
 					// silent parse error
 				}
-			};
+				},
+			});
 		} catch {
 			// SSE unsupported
 		}

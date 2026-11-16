@@ -7,7 +7,7 @@
 	import { Input } from "$lib/components/ui/input";
 	import * as Popover from "$lib/components/ui/popover";
 	import { Switch } from "$lib/components/ui/switch";
-	import { dnsQueryLog, dnsLogSseUrl, hostSet } from "$lib/api/client";
+	import { dnsQueryLog, dnsLogSseUrl, hostSet, openEventStream, type EventStream } from "$lib/api/client";
 	import type { DnsQueryLogEntry } from "$lib/api/types";
 	import { createSequence, toMillis } from "$lib/utils";
 
@@ -36,7 +36,7 @@
 	let entries = $state<DnsQueryLogEntry[]>([]);
 	let live = $state(false);
 	let seq = 0;
-	let source: EventSource | null = null;
+	let source: EventStream | null = null;
 	/** Bumped by every stop(), so a start() that was awaiting a fetch knows it is no longer wanted. */
 	const generation = createSequence();
 	let newDomain = $state("");
@@ -79,10 +79,10 @@
 		}
 		if (!generation.isCurrent(gen)) return;
 		try {
-			source = new EventSource(dnsLogSseUrl({ client: target }));
-			source.onopen = () => (live = true);
-			source.onerror = () => (live = false);
-			source.onmessage = (event) => {
+			source = openEventStream(dnsLogSseUrl({ client: target }), {
+				onopen: () => (live = true),
+				onerror: () => (live = false),
+				onmessage: (event) => {
 				try {
 					const e = JSON.parse(event.data);
 					entries = [
@@ -103,7 +103,8 @@
 				} catch {
 					// a malformed line is skipped
 				}
-			};
+				},
+			});
 		} catch {
 			// no SSE: the list stays as loaded
 		}

@@ -216,6 +216,15 @@ async function reauthenticate(): Promise<boolean> {
 	}
 }
 
+/** Adds the session bearer token and, when active, the elevation header. */
+function authHeaders(base: Record<string, string> = {}): Record<string, string> {
+	const token = getToken();
+	if (token) base['Authorization'] = `Bearer ${token}`;
+	const elevated = currentElevation();
+	if (elevated) base['X-Lanforge-Elevation'] = elevated;
+	return base;
+}
+
 async function requestCore<T>(
 	method: string,
 	path: string,
@@ -224,14 +233,10 @@ async function requestCore<T>(
 	raw: boolean = false,
 	noReauth: boolean = false
 ): Promise<T> {
-	const token = getToken();
-	const headers: Record<string, string> = {
+	const headers = authHeaders({
 		'Content-Type': 'application/json',
 		...extraHeaders
-	};
-	if (token) headers['Authorization'] = `Bearer ${token}`;
-	const elevated = currentElevation();
-	if (elevated) headers['X-Lanforge-Elevation'] = elevated;
+	});
 
 	const res = await fetch(`/api/v1${path}`, {
 		method,
@@ -869,14 +874,12 @@ export const eventsHistory = async (params?: {
 
 /**
  * Build the URL for the global event SSE stream.
- * The caller is responsible for creating the EventSource and managing it.
+ * Open it with `openEventStream`; the session token is never put in the URL.
  */
 export function eventsUrl(params?: { filter?: string; initial?: number }): string {
 	const url = new URL('/api/v1/events', window.location.origin);
 	if (params?.filter) url.searchParams.set('filter', params.filter);
 	if (params?.initial) url.searchParams.set('initial', String(params.initial));
-	const token = getToken();
-	if (token) url.searchParams.set('token', token);
 	return url.toString();
 }
 
@@ -897,7 +900,122 @@ export function dnsLogSseUrl(params?: {
 	if (params?.qtype) url.searchParams.set('qtype', params.qtype);
 	if (params?.result) url.searchParams.set('result', params.result);
 	if (params?.limit) url.searchParams.set('limit', String(params.limit));
-	const token = getToken();
-	if (token) url.searchParams.set('token', token);
 	return url.toString();
+}
+
+export interface EventStream {
+	close(): void;
+}
+
+export interface EventStreamHandlers {
+	onopen?(): void;
+	onmessage(ev: { data: string; lastEventId: string }): void;
+	onerror?(): void;
+}
+
+/**
+ * Fetch-based EventSource replacement that authenticates with the bearer header.
+ * Reconnects after the stream ends or fails (honours `retry:`, backs off on HTTP errors);
+ * a 401 logs out and stops. `close()` is safe at any time.
+ */
+export function openEventStream(url: string, handlers: EventStreamHandlers): EventStream {
+	const abort = new AbortController();
+	let retryMs = 3000;
+	let lastEventId = '';
+	let failures = 0;
+
+	const dispatch = (data: string[], id: string) => {
+		if (data.length === 0) return;
+		handlers.onmessage({ data: data.join('\n'), lastEventId: id });
+	};
+
+	async function connect(): Promise<void> {
+		const headers = authHeaders({ Accept: 'text/event-stream' });
+		if (lastEventId) headers['Last-Event-ID'] = lastEventId;
+		const res = await fetch(url, {
+			headers,
+			cache: 'no-store',
+			signal: abort.signal
+		});
+		if (res.status === 401) {
+			handleUnauthorized(url);
+			abort.abort();
+			return;
+		}
+		if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+		failures = 0;
+		handlers.onopen?.();
+
+		const reader = res.body.getReader();
+		const decoder = new TextDecoder();
+		let buf = '';
+		let data: string[] = [];
+		let id = lastEventId;
+		let skipLf = false;
+		try {
+			for (;;) {
+				const { done, value } = await reader.read();
+				if (done) return;
+				buf += decoder.decode(value, { stream: true });
+				let start = 0;
+				for (let i = 0; i < buf.length; i++) {
+					const c = buf.charCodeAt(i);
+					if (c !== 10 && c !== 13) continue;
+					if (c === 10 && skipLf && i === start) {
+						skipLf = false;
+						start = i + 1;
+						continue;
+					}
+					skipLf = c === 13;
+					const line = buf.slice(start, i);
+					start = i + 1;
+					if (line === '') {
+						dispatch(data, id);
+						data = [];
+						continue;
+					}
+					if (line.charCodeAt(0) === 58) continue;
+					const colon = line.indexOf(':');
+					const field = colon < 0 ? line : line.slice(0, colon);
+					let val = colon < 0 ? '' : line.slice(colon + 1);
+					if (val.charCodeAt(0) === 32) val = val.slice(1);
+					if (field === 'data') data.push(val);
+					else if (field === 'id' && !val.includes('\0')) {
+						id = val;
+						lastEventId = val;
+					} else if (field === 'retry' && /^\d+$/.test(val)) retryMs = Number(val);
+				}
+				buf = buf.slice(start);
+			}
+		} finally {
+			reader.cancel().catch(() => {});
+		}
+	}
+
+	(async () => {
+		while (!abort.signal.aborted) {
+			try {
+				await connect();
+			} catch {
+				failures++;
+			}
+			if (abort.signal.aborted) return;
+			handlers.onerror?.();
+			const delay = failures > 0 ? Math.min(retryMs * 1.5 ** (failures - 1), 15000) : retryMs;
+			await new Promise<void>((resolve) => {
+				const wake = () => {
+					clearTimeout(timer);
+					resolve();
+				};
+				// One listener per wait, removed when the timer fires, so reconnects do not pile them up.
+				const timer = setTimeout(() => {
+					abort.signal.removeEventListener('abort', wake);
+					resolve();
+				}, delay);
+				abort.signal.addEventListener('abort', wake, { once: true });
+			});
+		}
+	})();
+
+	return { close: () => abort.abort() };
 }
