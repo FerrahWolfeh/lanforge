@@ -212,15 +212,15 @@ impl AuthManager {
     }
 }
 
-pub fn extract_token_str(headers: &HeaderMap) -> Option<&str> {
-    if let Some(auth_header) = headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok()) {
-        if let Some(stripped) = auth_header.strip_prefix("Bearer ") {
-            return Some(stripped);
-        }
-        if !auth_header.contains(' ') {
-            return Some(auth_header);
-        }
+fn header_token(headers: &HeaderMap) -> Option<&str> {
+    let auth_header = headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok())?;
+    if let Some(stripped) = auth_header.strip_prefix("Bearer ") {
+        return Some(stripped);
     }
+    (!auth_header.contains(' ')).then_some(auth_header)
+}
+
+fn cookie_token(headers: &HeaderMap) -> Option<&str> {
     if let Some(cookie_header) = headers.get(COOKIE).and_then(|v| v.to_str().ok()) {
         for cookie in cookie_header.split(';') {
             let cookie = cookie.trim();
@@ -235,23 +235,24 @@ pub fn extract_token_str(headers: &HeaderMap) -> Option<&str> {
     None
 }
 
-/// Extract authentication token from headers (Authorization, Cookie) or query string (`token`, `access_token`).
+fn query_token(query: Option<&str>) -> Option<&str> {
+    query?.split('&').find_map(|pair| {
+        let (k, v) = pair.split_once('=')?;
+        ((k == "token" || k == "access_token") && !v.is_empty()).then_some(v)
+    })
+}
+
+/// Extract the authentication token: `Authorization` header, query string, session cookie.
+///
+/// The explicit forms (`token` / `access_token` in the query) come before the cookie, so a
+/// stale cookie left in the browser cannot shadow the token a request carries on purpose:
+/// the web UI's `EventSource` streams can only send it in the query.
 #[must_use]
 pub fn extract_token(headers: &HeaderMap, query: Option<&str>) -> Option<String> {
-    if let Some(tok) = extract_token_str(headers) {
-        return Some(tok.to_string());
-    }
-    if let Some(q) = query {
-        for pair in q.split('&') {
-            if let Some((k, v)) = pair.split_once('=')
-                && (k == "token" || k == "access_token")
-                && !v.is_empty()
-            {
-                return Some(v.to_string());
-            }
-        }
-    }
-    None
+    header_token(headers)
+        .or_else(|| query_token(query))
+        .or_else(|| cookie_token(headers))
+        .map(str::to_string)
 }
 
 impl Default for AuthManager {

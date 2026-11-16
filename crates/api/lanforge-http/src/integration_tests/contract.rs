@@ -440,6 +440,23 @@ async fn test_auth_middleware_contract() {
     );
 }
 
+/// The WebUI's `EventSource` streams can only send the token in `?token=`. A stale session
+/// cookie left in the browser (expired, or from a daemon with another secret) must not
+/// shadow it: the explicit token decides, as it does for the `Authorization` header.
+#[tokio::test]
+async fn a_query_token_wins_over_a_stale_session_cookie() {
+    let app = TestApp::with_auth().await;
+    let token = app.token.clone().unwrap();
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/api/v1/status?token={token}"))
+        .header(header::COOKIE, "lanforge_session=stale.session.cookie")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
 #[tokio::test]
 async fn test_auth_persistence_unavailable_contract() {
     let bus = Arc::new(EventBus::new());
