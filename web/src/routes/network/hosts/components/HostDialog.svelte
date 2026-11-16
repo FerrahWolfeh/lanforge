@@ -18,12 +18,15 @@
 		open = $bindable(false),
 		isEditing = false,
 		host = null,
+		prefill = null,
 		devices = [],
 		onSaved = async () => {},
 	}: {
 		open?: boolean;
 		isEditing?: boolean;
 		host?: HostConfigEntry | null;
+		/** A new host started from a device (its MAC, name and current address). */
+		prefill?: HostConfigEntry | null;
 		devices?: DeviceEntry[];
 		onSaved?: () => Promise<void>;
 	} = $props();
@@ -55,12 +58,12 @@
 				formIgnoreDnsLog = host.ignore_dns_log ?? false;
 				formIgnoredLogDomains = (host.ignored_log_domains || []).join(", ");
 			} else {
-				formMac = "";
-				formHostname = "";
-				formV4 = "";
-				formV6Suffix = "";
-				formIgnoreDnsLog = false;
-				formIgnoredLogDomains = "";
+				formMac = prefill?.mac ?? "";
+				formHostname = prefill?.hostname ?? "";
+				formV4 = prefill?.v4_fixed ?? "";
+				formV6Suffix = prefill?.v6_suffix ?? "";
+				formIgnoreDnsLog = prefill?.ignore_dns_log ?? false;
+				formIgnoredLogDomains = (prefill?.ignored_log_domains ?? []).join(", ");
 			}
 		}
 	});

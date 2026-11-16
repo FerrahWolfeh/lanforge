@@ -14,6 +14,7 @@ import type {
 	AuthStatusResponse,
 	AuthToken,
 	BlockingMode,
+	DeviceDnsResponse,
 	DeviceEntry,
 	DevicesMeta,
 	DevicesResponse,
@@ -420,6 +421,9 @@ export const whois = async (target: string): Promise<WhoisResponse> => {
 	throw new ApiError(404, `Device not found: ${target}`);
 };
 
+/** The device's DNS activity over the last day. */
+export const deviceDns = (mac: string) =>
+	get<DeviceDnsResponse>(`/devices/${encodeURIComponent(mac)}/dns`);
 export const purge = (target: string) => del<void>(`/devices/${encodeURIComponent(target)}`);
 export const wol = (target: string) =>
 	post<void>(`/devices/${encodeURIComponent(target)}/wol`);

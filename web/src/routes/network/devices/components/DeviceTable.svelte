@@ -8,15 +8,12 @@
 	import DataTableCard from "$lib/components/DataTableCard.svelte";
 
 	import WifiIcon from "@lucide/svelte/icons/wifi";
-	import SearchIcon from "@lucide/svelte/icons/search";
 	import ZapIcon from "@lucide/svelte/icons/zap";
-	import BookmarkIcon from "@lucide/svelte/icons/bookmark";
 	import CopyIcon from "@lucide/svelte/icons/copy";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
-	import ShieldIcon from "@lucide/svelte/icons/shield";
-	import LinkIcon from "@lucide/svelte/icons/link";
+	import { goto } from "$app/navigation";
 
 	let {
 		devices = [],
@@ -27,11 +24,7 @@
 		onRefresh = () => {},
 		// An action left out is hidden: the page passes only what the session may do.
 		onScan,
-		onInspect = () => {},
 		onWol,
-		onPromote,
-		onAdblock,
-		onLinked,
 		onPurge,
 	}: {
 		devices?: DeviceEntry[];
@@ -41,13 +34,11 @@
 		scanning?: boolean;
 		onRefresh?: () => void;
 		onScan?: () => void;
-		onInspect?: (dev: DeviceEntry) => void;
 		onWol?: (mac: string) => void;
-		onPromote?: (dev: DeviceEntry) => void;
-		onAdblock?: (dev: DeviceEntry) => void;
-		onLinked?: (dev: DeviceEntry) => void;
 		onPurge?: (mac: string) => void;
 	} = $props();
+
+	const pageOf = (dev: DeviceEntry) => `/network/devices/${encodeURIComponent(dev.mac)}`;
 
 	let searchQuery = $state("");
 	let statusFilter = $state<"all" | "online" | "offline">("all");
@@ -105,35 +96,15 @@
 			<MoreHorizontalIcon class="size-4" />
 		</DropdownMenu.Trigger>
 		<DropdownMenu.Content align="end" class="w-48 text-xs">
-			<DropdownMenu.Item onclick={() => onInspect(dev)} class="gap-2">
-				<SearchIcon class="size-3.5 text-muted-foreground" />
-				Inspect Details (Whois)
-			</DropdownMenu.Item>
 			{#if onWol}
 			<DropdownMenu.Item onclick={() => onWol(dev.mac)} class="gap-2">
 				<ZapIcon class="size-3.5 text-muted-foreground" />
 				Send Wake-on-LAN
 			</DropdownMenu.Item>
 			{/if}
-			{#if onPromote}
-			<DropdownMenu.Item onclick={() => onPromote(dev)} class="gap-2">
-				<BookmarkIcon class="size-3.5 text-muted-foreground" />
-				Promote to Static Host
-			</DropdownMenu.Item>
-			{/if}
-			{#if onAdblock}
-			<DropdownMenu.Item onclick={() => onAdblock(dev)} class="gap-2">
-				<ShieldIcon class="size-3.5" />
-				Adblock groups...
-			</DropdownMenu.Item>
-			{/if}
-			{#if onLinked}
-			<DropdownMenu.Item onclick={() => onLinked(dev)} class="gap-2">
-				<LinkIcon class="size-3.5" />
-				Linked addresses...
-			</DropdownMenu.Item>
-			{/if}
+			{#if onWol}
 			<DropdownMenu.Separator />
+			{/if}
 			<DropdownMenu.Item onclick={() => copyText(dev.mac, "MAC")} class="gap-2">
 				<CopyIcon class="size-3.5 text-muted-foreground" />
 				Copy MAC Address
@@ -148,7 +119,7 @@
 			<DropdownMenu.Separator />
 			<DropdownMenu.Item onclick={() => onPurge(dev.mac)} class="gap-2 text-danger">
 				<Trash2Icon class="size-3.5" />
-				Purge Endpoint
+				Forget device
 			</DropdownMenu.Item>
 			{/if}
 		</DropdownMenu.Content>
@@ -253,9 +224,9 @@
 					].join(" ")}
 					title={dev.online ? "Online" : "Offline"}
 				></span>
-				<button
-					class="flex flex-1 min-w-0 flex-col gap-0.5 text-left cursor-pointer"
-					onclick={() => onInspect(dev)}
+				<a
+					class="flex flex-1 min-w-0 flex-col gap-0.5 text-left"
+					href={pageOf(dev)}
 				>
 					<span class="flex items-baseline justify-between gap-2">
 						<span class="truncate text-sm font-semibold tracking-tight text-foreground">
@@ -279,7 +250,7 @@
 							</Badge>
 						{/if}
 					</span>
-				</button>
+				</a>
 				{@render actionsMenu(dev)}
 			</div>
 		{/each}
@@ -295,7 +266,14 @@
 	{/snippet}
 
 	{#each paginatedDevices as dev (dev.mac)}
-		<Table.Row class="hover:bg-muted/50 transition-colors font-mono text-xs">
+		<Table.Row
+			class="hover:bg-muted/50 transition-colors font-mono text-xs cursor-pointer"
+			onclick={(e: MouseEvent) => {
+				// Buttons and menus in the row keep their own action.
+				if ((e.target as HTMLElement).closest("button, a, [role='menu']")) return;
+				goto(pageOf(dev));
+			}}
+		>
 			<!-- Status -->
 			<Table.Cell class="font-sans">
 				<div class="flex items-center gap-2">
@@ -316,9 +294,9 @@
 			<!-- Hostname & MAC -->
 			<Table.Cell class="font-sans">
 				<div class="flex flex-col">
-					<span class="text-foreground text-xs sm:text-sm font-semibold tracking-tight">
+					<a href={pageOf(dev)} class="text-foreground text-xs sm:text-sm font-semibold tracking-tight hover:underline">
 						{dev.hostname || "Unassigned Host"}
-					</span>
+					</a>
 					<div class="flex items-center gap-1.5 text-muted-foreground font-mono text-xs">
 						<span>{dev.mac}</span>
 						<button

@@ -11,9 +11,11 @@
 	let {
 		open = $bindable(false),
 		device = null,
+		onSaved = () => {},
 	}: {
 		open?: boolean;
 		device?: DeviceEntry | null;
+		onSaved?: () => void;
 	} = $props();
 
 	let names = $state<string[]>([]);
@@ -61,6 +63,7 @@
 			await dnsAdblockDeviceSet(device.mac, member, bypass);
 			toast.success(`Adblock groups of ${device.hostname || device.mac} saved`);
 			open = false;
+			onSaved();
 		} catch (err: any) {
 			toast.error(err?.message ?? "Failed to save the adblock groups");
 		} finally {

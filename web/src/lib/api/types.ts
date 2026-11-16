@@ -638,6 +638,26 @@ export interface DeviceEntry {
 	linked_addresses?: string[];
 }
 
+/** One hour of a device's DNS activity. */
+export interface DeviceDnsBucket {
+	timestamp: number;
+	total: number;
+	blocked: number;
+}
+
+/** A device's DNS activity over the last day, all its addresses (linked ones included) together. */
+export interface DeviceDnsResponse {
+	since: number;
+	bucket_secs: number;
+	total: number;
+	blocked: number;
+	rate: DeviceDnsBucket[];
+	top_domains: TopDomainEntry[];
+	top_blocked_domains: TopDomainEntry[];
+	/** The device's queries are not logged, so there is nothing to count. */
+	logging_off: boolean;
+}
+
 export interface DevicesMeta {
 	total: number;
 	online: number;
