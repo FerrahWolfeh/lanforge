@@ -241,9 +241,14 @@ pub fn format_duration_secs(secs: u64) -> String {
     }
 }
 
-/// Format a timestamp (Unix seconds) as a relative time description (e.g. "2m ago", "just now").
+/// Format a timestamp (Unix seconds) as a relative time description (e.g. "2m ago", "just now";
+/// `0` is "never").
 #[must_use]
 pub fn format_time_ago(timestamp_secs: i64) -> String {
+    // The daemon's "never seen" (no observation since it knew the device).
+    if timestamp_secs == 0 {
+        return "never".to_string();
+    }
     let now = Utc::now().timestamp();
     let diff = now - timestamp_secs;
 

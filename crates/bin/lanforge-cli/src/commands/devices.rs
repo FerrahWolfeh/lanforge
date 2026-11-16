@@ -1,3 +1,4 @@
+use chrono::Utc;
 use color_eyre::Result;
 use colored::Colorize;
 use std::cmp::Reverse;
@@ -331,7 +332,8 @@ fn render_device_details(whois: &WhoisResponse, printer: &Printer) {
                     if v4_lease.expires == 0 {
                         format!("{} (static reservation)", ip.to_string().bold().yellow())
                     } else {
-                        let rem = v4_lease.expires.saturating_sub(dev.last_seen);
+                        let now = u64::try_from(Utc::now().timestamp()).unwrap_or(0);
+                        let rem = v4_lease.expires.saturating_sub(now);
                         format!(
                             "{} (lease valid: {} remaining)",
                             ip.to_string().bold().yellow(),
