@@ -20,14 +20,10 @@
 	import DeviceLinkedModal from "./components/DeviceLinkedModal.svelte";
 	import MonitorIcon from "@lucide/svelte/icons/monitor";
 	import BookmarkIcon from "@lucide/svelte/icons/bookmark";
-	import WifiIcon from "@lucide/svelte/icons/wifi";
 	import GlobeIcon from "@lucide/svelte/icons/globe";
 	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
 	import PageHeader from "$lib/components/PageHeader.svelte";
-	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
-	import StatCard from "$lib/components/StatCard.svelte";
-	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
 
 	const lanTabs: NavTabItem[] = [
 		{ label: "Discovered Devices", href: "/network/devices", icon: MonitorIcon },
@@ -179,12 +175,6 @@
 		meta?.online ?? devices.filter((d) => d.online).length
 	);
 	const totalCount = $derived(meta?.total ?? devices.length);
-	const dualStackCount = $derived(
-		devices.filter((d) => (d.v4 || d.primary_v4) && (d.v6 || d.primary_v6)).length
-	);
-	const staticCount = $derived(
-		devices.filter((d) => d.origin === "Static").length
-	);
 </script>
 
 <svelte:head>
@@ -202,51 +192,12 @@
 	<!-- LAN Inventory Tabs -->
 	<NavTabs tabs={lanTabs} ariaLabel="LAN inventory navigation" />
 
-	<!-- Vitals Cards Grid -->
-	<StatCardGrid cols={2}>
-		<StatCard
-			label="Connected Endpoints"
-			value={`${onlineCount} / ${totalCount}`}
-			subtext={`${onlineCount} active hosts responding on LAN`}
-			icon={WifiIcon}
-			color="emerald"
-			{loading}
-			badge={{
-				text: "L2/L3 Active",
-				variant: "online",
-				showDot: true,
-			}}
-		>
-			{#snippet footer()}
-				<StatCardFooterItem label="Online Hosts" value={onlineCount} color="text-emerald-400" />
-				<StatCardFooterItem label="Offline Hosts" value={Math.max(0, totalCount - onlineCount)} />
-			{/snippet}
-		</StatCard>
-
-		<StatCard
-			label="Static Reservations"
-			value={staticCount}
-			subtext="Pinned fixed IP leases and DHCP mappings"
-			icon={BookmarkIcon}
-			color="indigo"
-			{loading}
-			badge={{
-				text: "Pinned",
-				variant: "indigo",
-			}}
-		>
-			{#snippet footer()}
-				<StatCardFooterItem label="Fixed Leases" value={staticCount} color="text-indigo-400" />
-				<StatCardFooterItem label="Dynamic Scope" value={Math.max(0, totalCount - staticCount)} />
-			{/snippet}
-		</StatCard>
-	</StatCardGrid>
 
 	<!-- Device Table with integrated DataTableCard -->
 	<DeviceTable
 		{devices}
-		totalCount={meta?.total ?? devices.length}
-		onlineCount={meta?.online ?? devices.filter((d) => d.online).length}
+		{totalCount}
+		{onlineCount}
 		{loading}
 		{scanning}
 		onRefresh={loadDevices}

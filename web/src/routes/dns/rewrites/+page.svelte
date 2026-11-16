@@ -30,7 +30,6 @@
 	import { type RewriteRule, splitDeviceAnswer } from "$lib/api/types";
 
 	// Child components
-	import DnsRewriteStatsCards from "./components/DnsRewriteStatsCards.svelte";
 	import DnsRewriteTable from "./components/DnsRewriteTable.svelte";
 	import DnsRewriteDialog from "./components/DnsRewriteDialog.svelte";
 	import DnsRewriteImportDialog from "./components/DnsRewriteImportDialog.svelte";
@@ -198,8 +197,6 @@
 	<!-- DNS Sub-Navigation Tabs -->
 	<NavTabs tabs={dnsTabs} ariaLabel="DNS system navigation" />
 
-	<!-- Top Metric Summary Cards -->
-	<DnsRewriteStatsCards {loading} {rules} />
 
 	<!-- DNS Rewrites Data Table -->
 	<DnsRewriteTable

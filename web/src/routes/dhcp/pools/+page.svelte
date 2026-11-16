@@ -26,8 +26,6 @@
 		Dhcpv4PoolConfig,
 		Dhcpv6PoolConfig,
 	} from "$lib/api/types";
-
-	import PoolStatsCards from "./components/PoolStatsCards.svelte";
 	import PoolV4Table from "./components/PoolV4Table.svelte";
 	import PoolV6Table from "./components/PoolV6Table.svelte";
 	import PoolV4Dialog from "./components/PoolV4Dialog.svelte";
@@ -83,22 +81,7 @@
 	});
 
 	// Derived metrics
-	const allLivePools = $derived([...poolStats.v4_pools, ...poolStats.v6_pools]);
 	const totalConfiguredCount = $derived(v4Pools.length + v6Pools.length);
-	const totalManagedAddresses = $derived(
-		allLivePools.reduce((acc, p) => acc + (p.total || 0), 0),
-	);
-	const totalUsedAddresses = $derived(
-		allLivePools.reduce((acc, p) => acc + (p.used || 0), 0),
-	);
-	const totalAvailableAddresses = $derived(
-		allLivePools.reduce((acc, p) => acc + (p.available || 0), 0),
-	);
-	const aggregateUtilization = $derived(
-		totalManagedAddresses > 0
-			? Math.round((totalUsedAddresses / totalManagedAddresses) * 1000) / 10
-			: 0,
-	);
 
 	async function loadAllData(showSpinner = true) {
 		if (showSpinner) loading = true;
@@ -426,17 +409,6 @@
 		</div>
 	</div>
 
-	<!-- KPI Stat Cards (4 Cards) -->
-	<PoolStatsCards
-		{loading}
-		{totalConfiguredCount}
-		v4PoolsCount={v4Pools.length}
-		v6PoolsCount={v6Pools.length}
-		{totalManagedAddresses}
-		{totalUsedAddresses}
-		{totalAvailableAddresses}
-		{aggregateUtilization}
-	/>
 
 	<fieldset disabled={!canEdit} class="contents">
 	<!-- SECTION 1: IPv4 Address Scopes -->

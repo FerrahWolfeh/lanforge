@@ -30,7 +30,6 @@
 	} from "$lib/api/types";
 
 	// Child components
-	import DnsCacheStatsCards from "./components/DnsCacheStatsCards.svelte";
 	import DnsCacheTypeDistribution from "./components/DnsCacheTypeDistribution.svelte";
 	import DnsCacheTable from "./components/DnsCacheTable.svelte";
 
@@ -176,8 +175,6 @@
 	<!-- DNS Sub-Navigation Tabs -->
 	<NavTabs tabs={dnsTabs} ariaLabel="DNS system navigation" />
 
-	<!-- Top Metric Summary Cards -->
-	<DnsCacheStatsCards {loading} {stats} />
 
 	<!-- Record Type Breakdown Pills -->
 	<DnsCacheTypeDistribution

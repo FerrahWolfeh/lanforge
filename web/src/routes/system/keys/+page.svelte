@@ -9,8 +9,6 @@
 	import type { AuthToken } from "$lib/api/types";
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
-
-	import TokenStatsCards from "./components/TokenStatsCards.svelte";
 	import TokenTable from "./components/TokenTable.svelte";
 	import TokenValidatorCard from "./components/TokenValidatorCard.svelte";
 	import TokenCreateDialog from "./components/TokenCreateDialog.svelte";
@@ -90,8 +88,6 @@
 	<!-- Access Control Sub-Navigation Tabs -->
 	<NavTabs tabs={accessTabs} ariaLabel="Access and authentication navigation" />
 
-	<!-- KPI Summary Cards -->
-	<TokenStatsCards {tokens} {isLoading} />
 
 	<!-- Main List Section -->
 	<TokenTable

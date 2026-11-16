@@ -9,8 +9,6 @@
 	import type { UserInfo } from "$lib/api/types";
 	import { auth } from "$lib/stores/auth.svelte";
 	import { toast } from "svelte-sonner";
-
-	import UserStatsCards from "./components/UserStatsCards.svelte";
 	import UserTable from "./components/UserTable.svelte";
 	import UserCreateDialog from "./components/UserCreateDialog.svelte";
 	import UserPasswordDialog from "./components/UserPasswordDialog.svelte";
@@ -94,8 +92,6 @@
 	<!-- Access Control Sub-Navigation Tabs -->
 	<NavTabs tabs={accessTabs} ariaLabel="Access and authentication navigation" />
 
-	<!-- KPI Summary Cards -->
-	<UserStatsCards {users} {isLoading} />
 
 	<!-- User Table -->
 	<UserTable

@@ -2,9 +2,8 @@
 	import { onMount, onDestroy } from "svelte";
 	import { Button } from "$lib/components/ui/button";
 	import { toast } from "svelte-sonner";
-	import { eventsUrl, eventsHistory, status } from "$lib/api/client";
-	import { parseTimedEvent, type SseEvent, type StatusResponse } from "$lib/api/types";
-	import EventStatsCards from "./components/EventStatsCards.svelte";
+	import { eventsUrl, eventsHistory } from "$lib/api/client";
+	import { parseTimedEvent, type SseEvent } from "$lib/api/types";
 	import EventTable from "./components/EventTable.svelte";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import PauseIcon from "@lucide/svelte/icons/pause";
@@ -28,24 +27,14 @@
 	let reconnecting = $state(false);
 	let bufferLimit = $state(500);
 	let events = $state<SseEvent[]>([]);
-	let systemStatus = $state<StatusResponse | null>(null);
 
 	let eventSource: EventSource | null = null;
 	let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 	let reconnectAttempts = 0;
 
-	async function loadSystemStatus() {
-		try {
-			systemStatus = await status();
-		} catch {
-			// Silent fallback for status vitals
-		}
-	}
-
 	async function loadHistoricalEvents() {
 		loading = true;
 		try {
-			await loadSystemStatus();
 			const res = await eventsHistory({ limit: bufferLimit });
 			if (res && Array.isArray(res.entries)) {
 				// Reverse so newest is at the top
@@ -215,15 +204,6 @@
 	<!-- System Diagnostics Sub-Navigation Tabs -->
 	<NavTabs tabs={systemTabs} ariaLabel="System diagnostics navigation" />
 
-	<!-- Stats & Metric Cards -->
-	<EventStatsCards
-		{loading}
-		{isLive}
-		{reconnecting}
-		{events}
-		{bufferLimit}
-		status={systemStatus}
-	/>
 
 	<!-- Events Data Table Card -->
 	<EventTable

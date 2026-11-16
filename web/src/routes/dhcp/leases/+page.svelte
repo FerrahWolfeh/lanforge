@@ -13,8 +13,6 @@
 	import { createDebounce } from "$lib/utils";
 
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
-
-	import LeaseStatsCards from "./components/LeaseStatsCards.svelte";
 	import LeaseTable from "./components/LeaseTable.svelte";
 	import LeasePromoteModal from "./components/LeasePromoteModal.svelte";
 	import LeaseReleaseModal from "./components/LeaseReleaseModal.svelte";
@@ -127,15 +125,6 @@
 	});
 
 	// Derived statistics
-	const totalCount = $derived(allLeases.length);
-	const v4Count = $derived(allLeases.filter((l) => l.kind === "v4").length);
-	const v6Count = $derived(
-		allLeases.filter((l) => l.kind === "v6" || l.kind === "v6_prefix").length,
-	);
-	const expiringSoonCount = $derived(
-		allLeases.filter((l) => l.remaining_secs > 0 && l.remaining_secs < 3600).length,
-	);
-
 	// Filtered leases
 </script>
 
@@ -163,14 +152,6 @@
 		</div>
 	</div>
 
-	<!-- Stats KPI Cards -->
-	<LeaseStatsCards
-		{loading}
-		{totalCount}
-		{v4Count}
-		{v6Count}
-		{expiringSoonCount}
-	/>
 
 	<!-- Main Leases Table -->
 	<LeaseTable

@@ -9,19 +9,17 @@
 	import { toast } from "svelte-sonner";
 	import { onMount, onDestroy } from "svelte";
 	import { page } from "$app/state";
-	import { dnsQueryLog, dnsLogSseUrl, dnsStats } from "$lib/api/client";
-	import type { DnsQueryLogEntry, DnsStatsResponse } from "$lib/api/types";
+	import { dnsQueryLog, dnsLogSseUrl } from "$lib/api/client";
+	import type { DnsQueryLogEntry } from "$lib/api/types";
 	import PageHeader from "$lib/components/PageHeader.svelte";
 
 	// Child components
-	import DnsLogStatsCards from "./components/DnsLogStatsCards.svelte";
 	import DnsLogTable from "./components/DnsLogTable.svelte";
 	import DnsLogLiveTail from "./components/DnsLogLiveTail.svelte";
 	import DnsLogDetailDialog from "./components/DnsLogDetailDialog.svelte";
 	import DnsRewriteDialog from "../rewrites/components/DnsRewriteDialog.svelte";
 
 	let activeTab = $state<"history" | "live">("history");
-	let stats = $state<DnsStatsResponse | null>(null);
 
 	// --- Tab 1: Query History State ---
 	let historyLoading = $state(true);
@@ -47,19 +45,9 @@
 	let rewriteDialogOpen = $state(false);
 	let rewritePrefill = $state<{ domain: string; answer: string } | null>(null);
 
-	async function loadDaemonStats() {
-		try {
-			const s = await dnsStats();
-			if (s) stats = s;
-		} catch {
-			// silent fallback
-		}
-	}
-
 	async function loadHistoricalLogs() {
 		historyLoading = true;
 		try {
-			await loadDaemonStats();
 			const res = await dnsQueryLog({
 				domain: searchQuery.trim() || undefined,
 				qtype: selectedType || undefined,
@@ -252,19 +240,6 @@
 		{/snippet}
 	</PageHeader>
 
-	<!-- Top Metric Summary Cards -->
-	<DnsLogStatsCards
-		loading={historyLoading}
-		isLive={isLiveConnected && !isLivePaused}
-		entries={activeTab === "live" ? liveEntries : historyEntries}
-		total={historyTotal}
-		{stats}
-		{selectedResult}
-		onSelectResult={(res) => {
-			activeTab = "history";
-			handleResultSelect(res);
-		}}
-	/>
 
 	<!-- Tabbed Rules View (Consistent with Adblock rules & SQM tabs style) -->
 	<Tabs.Root bind:value={activeTab} class="space-y-4">
