@@ -128,6 +128,16 @@ impl LanforgeContext {
         self.with_state_mut(|state| state.restore_name_bindings(bindings));
     }
 
+    /// The bound name `mac` announced last and was refused, with the MAC that holds it.
+    #[must_use]
+    pub fn refused_name(&self, mac: MacAddr) -> Option<(String, MacAddr)> {
+        self.with_state(|state| {
+            let name = state.hostname_refusals.get(&mac)?;
+            let owner = *state.name_bindings.get(&name.to_ascii_lowercase())?;
+            (owner != mac).then(|| (name.clone(), owner))
+        })
+    }
+
     /// The names bound to devices (lowercase name → MAC), as redb keeps them.
     #[must_use]
     pub fn name_bindings(&self) -> BTreeMap<String, MacAddr> {

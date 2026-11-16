@@ -9,7 +9,7 @@ use lanforge_types::{
         TransientOrigin,
     },
     identifiers::{Duid, MacAddr},
-    network::dhcp::empty_string_as_none,
+    network::{dhcp::empty_string_as_none, dns::adblock::RewriteRule, firewall::PortForwardRule},
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -190,6 +190,42 @@ pub struct DeviceDnsResponse {
     pub logging_off: bool,
 }
 
+/// What the daemon itself resolves to one device: where forwards land, which forwards and
+/// rewrites reach it, and the names bound to it.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DeviceRulesResponse {
+    /// Where port forwards to the device go now (its IPv4 reservation or lease).
+    pub forward_v4: Option<Ipv4Addr>,
+    /// Where IPv6 pinholes go now: only predictable GUAs on the LAN's current prefix.
+    pub forward_v6: Vec<Ipv6Addr>,
+    /// The port forwards that reach the device.
+    pub port_forwards: Vec<DevicePortForward>,
+    /// The DNS rewrites whose answer targets the device.
+    pub rewrites: Vec<RewriteRule>,
+    /// Names bound to the device (lowercase).
+    pub bound_names: Vec<String>,
+    /// The bound name the device announced and was refused, if any.
+    pub refused_name: Option<RefusedName>,
+}
+
+/// A port forward that reaches a device.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DevicePortForward {
+    /// Position in the configured `port_forwards` list.
+    pub index: usize,
+    pub rule: PortForwardRule,
+    /// The rule targets the device by reference (`dev:`), not by a fixed address.
+    pub by_device: bool,
+}
+
+/// A hostname refused because another device holds it.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RefusedName {
+    pub name: String,
+    /// The device the name is bound to.
+    pub owner: MacAddr,
+}
+
 /// Queries of one `DeviceDnsResponse` bucket.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct DeviceDnsBucket {
@@ -265,6 +301,18 @@ impl HttpWrappedResponse for HostsResponse {
 
 impl HttpWrappedResponse for DeviceDnsResponse {
     type Wrapper = HttpDataResponse<DeviceDnsResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for DeviceRulesResponse {
+    type Wrapper = HttpDataResponse<DeviceRulesResponse>;
 
     fn wrap(self) -> Self::Wrapper {
         HttpDataResponse { data: self }

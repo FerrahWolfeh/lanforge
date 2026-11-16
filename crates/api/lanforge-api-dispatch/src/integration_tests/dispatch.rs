@@ -3,6 +3,7 @@ use std::fs;
 use std::iter;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -16,7 +17,8 @@ use tokio::time::sleep;
 
 use crate::ClientContext;
 use lanforge_api::api::{
-    AllowlistEntry, DnsUpstreamConfig, HostConfigEntry, Response, SystemConfigExport,
+    AllowlistEntry, DeviceRulesResponse, DnsUpstreamConfig, HostConfigEntry, Response,
+    SystemConfigExport,
 };
 #[cfg(feature = "adblock")]
 use lanforge_api::config_file::AdblockSettings;
@@ -33,7 +35,7 @@ use lanforge_db::log_engine::LogDb;
 use lanforge_db::worker::DbWorker;
 use lanforge_db_core::Stores;
 use lanforge_types::device::{Device, DeviceClass, IPv4State, Ipv6AddrOrSuffix, Origin};
-use lanforge_types::identifiers::MacAddr;
+use lanforge_types::identifiers::{DeviceIdentifier, MacAddr};
 use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::QueryResult;
@@ -43,7 +45,7 @@ use lanforge_types::network::dns::adblock::{
 };
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::firewall::{
-    FirewallCommitRequest, FirewallConfig, L4Protocol, PortForwardRule,
+    FirewallCommitRequest, FirewallConfig, ForwardTarget, L4Protocol, PortForwardRule,
 };
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::RaServerConfig;
@@ -2263,5 +2265,169 @@ async fn device_dns_counts_all_addresses_of_the_device() {
 
     let unknown = MacAddr::parse("02:00:00:00:00:99").unwrap();
     let res = client.handle_device_dns(unknown).await;
+    assert!(matches!(res, Response::NotFound { .. }), "{res:?}");
+}
+
+fn forward_to(target: ForwardTarget, port: u16) -> PortForwardRule {
+    PortForwardRule {
+        comment: None,
+        src_zone: "external".into(),
+        internal_ip: target,
+        external_port: port,
+        internal_port: port,
+        protocol: L4Protocol::Tcp,
+        enable_hairpin: false,
+        family: None,
+    }
+}
+
+async fn device_rules(client: &ClientContext, mac: MacAddr) -> DeviceRulesResponse {
+    let Response::DeviceRules(rules) = client.handle_device_rules(mac).await else {
+        panic!("device rules");
+    };
+    *rules
+}
+
+/// The device view lists the forwards the firewall sends to the device, by `dev:` reference or
+/// by its leased address, with their index in the configured list, and never another device's.
+#[tokio::test]
+async fn device_rules_lists_the_forwards_that_reach_the_device() {
+    let (client, _dir, _path) = firewall_ctx().await;
+    let nas = MacAddr::parse("02:00:00:00:00:71").unwrap();
+    let pc = MacAddr::parse("02:00:00:00:00:72").unwrap();
+    leased_device(&client, nas, "192.168.1.71", "nas");
+    leased_device(&client, pc, "192.168.1.72", "pc");
+    let fw = FirewallConfig {
+        port_forwards: vec![
+            forward_to(ForwardTarget::Device(DeviceIdentifier::Mac(nas)), 8001),
+            forward_to(ForwardTarget::Ip("192.168.1.72".parse().unwrap()), 8002),
+            forward_to(ForwardTarget::Ip("192.168.1.71".parse().unwrap()), 8003),
+            forward_to(ForwardTarget::Device(DeviceIdentifier::Mac(pc)), 8004),
+        ],
+        ..Default::default()
+    };
+    let res = client.handle_update_firewall_config(fw).await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+
+    let rules = device_rules(&client, nas).await;
+    let seen: Vec<(usize, u16, bool)> = rules
+        .port_forwards
+        .iter()
+        .map(|f| (f.index, f.rule.external_port, f.by_device))
+        .collect();
+    assert_eq!(seen, [(0, 8001, true), (2, 8003, false)]);
+    assert_eq!(rules.forward_v4, Some("192.168.1.71".parse().unwrap()));
+
+    let rules = device_rules(&client, pc).await;
+    let seen: Vec<(usize, u16, bool)> = rules
+        .port_forwards
+        .iter()
+        .map(|f| (f.index, f.rule.external_port, f.by_device))
+        .collect();
+    assert_eq!(seen, [(1, 8002, false), (3, 8004, true)]);
+}
+
+/// Two devices announcing the same hostname: a `dev:<name>` forward and rewrite reach only the
+/// device the daemon resolves the name to.
+#[tokio::test]
+async fn device_rules_follows_the_device_the_daemon_resolves_a_name_to() {
+    let (client, _dir, _path) = firewall_ctx().await;
+    let a = MacAddr::parse("02:00:00:00:00:73").unwrap();
+    let b = MacAddr::parse("02:00:00:00:00:74").unwrap();
+    leased_device(&client, a, "192.168.1.73", "twin");
+    leased_device(&client, b, "192.168.1.74", "twin");
+    let target = DeviceIdentifier::Name("twin".into());
+    let fw = FirewallConfig {
+        port_forwards: vec![forward_to(ForwardTarget::Device(target.clone()), 9000)],
+        ..Default::default()
+    };
+    let res = client.handle_update_firewall_config(fw).await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    let rule = RewriteRule {
+        id: None,
+        domain: "twin.home".into(),
+        rtype: DnsRecordType::Device,
+        answer: RewriteAnswer::from_str("dev:twin").unwrap(),
+    };
+    let res = client.handle_dns_rewrite_add(rule).await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+
+    let winner = client.ctx.resolve_device(&target).expect("name resolves");
+    let loser = if winner == a { b } else { a };
+    let won = device_rules(&client, winner).await;
+    let lost = device_rules(&client, loser).await;
+    assert_eq!(won.port_forwards.len(), 1);
+    assert!(won.port_forwards[0].by_device);
+    assert_eq!(won.rewrites.len(), 1);
+    assert_eq!(won.rewrites[0].domain, "twin.home");
+    assert!(won.rewrites[0].id.is_some());
+    assert!(lost.port_forwards.is_empty(), "{:?}", lost.port_forwards);
+    assert!(lost.rewrites.is_empty());
+}
+
+/// Forwards only land on the lease and predictable GUAs: a device whose only IPv6 addresses
+/// are SLAAC / link-local has no IPv6 forward address. A rewrite answering the device's own
+/// address reaches it, one answering another address does not.
+#[tokio::test]
+async fn device_rules_forward_addresses_and_address_rewrites() {
+    let client = served_client().await;
+    let mac = MacAddr::parse("02:00:00:00:00:75").unwrap();
+    leased_device(&client, mac, "192.168.1.75", "cam");
+    let _ = client.ctx.apply(DeviceUpdate::SlaacObserved {
+        mac,
+        addr: "2001:db8:1::75".parse().unwrap(),
+        is_active: true,
+    });
+    let _ = client.ctx.apply(DeviceUpdate::NdpSeen {
+        mac,
+        ip: "fe80::75".parse().unwrap(),
+        is_active: true,
+    });
+    for (domain, ip) in [("cam.home", "192.168.1.75"), ("other.home", "192.168.1.99")] {
+        let rule = RewriteRule {
+            id: None,
+            domain: domain.into(),
+            rtype: DnsRecordType::A,
+            answer: RewriteAnswer::A(ip.parse().unwrap()),
+        };
+        let res = client.handle_dns_rewrite_add(rule).await;
+        assert!(matches!(res, Response::Success(_)), "{res:?}");
+    }
+
+    // A device answer falls back to the camera's address only when its reference names no
+    // device: `nvr.home` answers with the NVR, `gone.home` with the fallback.
+    let nvr = MacAddr::parse("02:00:00:00:00:77").unwrap();
+    leased_device(&client, nvr, "192.168.1.77", "nvr");
+    for (domain, identifier) in [
+        ("nvr.home", DeviceIdentifier::Mac(nvr)),
+        ("gone.home", DeviceIdentifier::Name("nobody-here".into())),
+    ] {
+        let rule = RewriteRule {
+            id: None,
+            domain: domain.into(),
+            rtype: DnsRecordType::A,
+            answer: RewriteAnswer::Device {
+                identifier,
+                fallback: Some(Box::new(RewriteAnswer::A("192.168.1.75".parse().unwrap()))),
+            },
+        };
+        let res = client.handle_dns_rewrite_add(rule).await;
+        assert!(matches!(res, Response::Success(_)), "{res:?}");
+    }
+
+    let rules = device_rules(&client, mac).await;
+    assert_eq!(rules.forward_v4, Some("192.168.1.75".parse().unwrap()));
+    assert!(rules.forward_v6.is_empty(), "{:?}", rules.forward_v6);
+    let mut domains: Vec<&str> = rules.rewrites.iter().map(|r| r.domain.as_str()).collect();
+    domains.sort_unstable();
+    assert_eq!(domains, ["cam.home", "gone.home"]);
+    assert!(rules.refused_name.is_none());
+}
+
+#[tokio::test]
+async fn device_rules_of_an_unknown_device_is_not_found() {
+    let client = served_client().await;
+    let mac = MacAddr::parse("02:00:00:00:00:76").unwrap();
+    let res = client.handle_device_rules(mac).await;
     assert!(matches!(res, Response::NotFound { .. }), "{res:?}");
 }

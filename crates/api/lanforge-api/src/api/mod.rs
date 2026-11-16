@@ -154,4 +154,6 @@ pub enum Response {
     LogLevel(Box<LogLevelStatus>),
     /// One device's DNS activity over the last day.
     DeviceDns(Box<DeviceDnsResponse>),
+    /// What the daemon resolves to one device (forwards, rewrites, bound names).
+    DeviceRules(Box<DeviceRulesResponse>),
 }
