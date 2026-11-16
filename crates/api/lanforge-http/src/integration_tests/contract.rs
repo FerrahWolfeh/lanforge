@@ -443,17 +443,45 @@ async fn test_auth_middleware_contract() {
     );
 }
 
-/// The WebUI's `EventSource` streams can only send the token in `?token=`. A stale session
-/// cookie left in the browser (expired, or from a daemon with another secret) must not
-/// shadow it: the explicit token decides, as it does for the `Authorization` header.
+/// Contract change: the session token is no longer accepted in the query string (it leaks into
+/// proxy/access logs and browser history). The `Authorization` header still beats a stale
+/// session cookie left in the browser.
 #[tokio::test]
-async fn a_query_token_wins_over_a_stale_session_cookie() {
+async fn an_authorization_header_wins_over_a_stale_session_cookie() {
     let app = TestApp::with_auth().await;
     let token = app.token.clone().unwrap();
     let req = Request::builder()
         .method("GET")
-        .uri(format!("/api/v1/status?token={token}"))
+        .uri("/api/v1/status")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
         .header(header::COOKIE, "lanforge_session=stale.session.cookie")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_query_string_token_is_rejected() {
+    let app = TestApp::with_auth().await;
+    let token = app.token.clone().unwrap();
+    for param in ["token", "access_token"] {
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/v1/status?{param}={token}"))
+            .body(Body::empty())
+            .unwrap();
+        let res = app.router.clone().oneshot(req).await.unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::UNAUTHORIZED,
+            "?{param}= must not authenticate"
+        );
+    }
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/status")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
         .body(Body::empty())
         .unwrap();
     let res = app.router.clone().oneshot(req).await.unwrap();
