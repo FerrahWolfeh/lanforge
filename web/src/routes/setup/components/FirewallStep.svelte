@@ -42,7 +42,7 @@
 		<!-- Full Mode Card -->
 		<button
 			type="button"
-			class="flex flex-col text-left rounded-xl border p-4 transition-all {firewallMode === 'full' ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'border-border bg-card hover:bg-muted/40'}"
+			class="flex flex-col text-left rounded-lg border p-4 transition-all {firewallMode === 'full' ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'border-border bg-card hover:bg-muted/40'}"
 			onclick={() => (firewallMode = 'full')}
 		>
 			<div class="flex items-center justify-between w-full mb-1.5">
@@ -60,7 +60,7 @@
 		<!-- Minimal Mode Card -->
 		<button
 			type="button"
-			class="flex flex-col text-left rounded-xl border p-4 transition-all {firewallMode === 'minimal' ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'border-border bg-card hover:bg-muted/40'}"
+			class="flex flex-col text-left rounded-lg border p-4 transition-all {firewallMode === 'minimal' ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'border-border bg-card hover:bg-muted/40'}"
 			onclick={() => (firewallMode = 'minimal')}
 		>
 			<div class="flex items-center justify-between w-full mb-1.5">
@@ -78,7 +78,7 @@
 		<!-- Disabled Mode Card -->
 		<button
 			type="button"
-			class="flex flex-col text-left rounded-xl border p-4 transition-all {firewallMode === 'disabled' ? 'border-destructive bg-destructive/5 ring-1 ring-destructive' : 'border-border bg-card hover:bg-muted/40'}"
+			class="flex flex-col text-left rounded-lg border p-4 transition-all {firewallMode === 'disabled' ? 'border-destructive bg-destructive/5 ring-1 ring-destructive' : 'border-border bg-card hover:bg-muted/40'}"
 			onclick={() => (firewallMode = 'disabled')}
 		>
 			<div class="flex items-center justify-between w-full mb-1.5">

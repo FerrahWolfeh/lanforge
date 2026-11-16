@@ -14,7 +14,7 @@
 	import ShieldOffIcon from "@lucide/svelte/icons/shield-off";
 	import LayersIcon from "@lucide/svelte/icons/layers";
 	import { toast } from "svelte-sonner";
-	import { adblockClientMacs, adblockClientNames } from "$lib/utils";
+	import { adblockClientMacs, adblockClientNames, errorMessage } from "$lib/utils";
 	import {
 		dnsAdblockGroups,
 		dnsAdblockGroupDelete,
@@ -54,8 +54,8 @@
 			groupLists = (sources?.sources ?? [])
 				.filter((s) => !global.has(s.url) && s.name)
 				.map((s) => s.name as string);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to load adblock groups");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to load adblock groups"));
 		} finally {
 			loading = false;
 		}
@@ -77,8 +77,8 @@
 			await dnsAdblockGroupDelete(deleting.name);
 			toast.success(`Group "${deleting.name}" removed`);
 			await load();
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to remove the group");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to remove the group"));
 		} finally {
 			deleting = null;
 			deleteOpen = false;
@@ -113,7 +113,7 @@
 			<Button variant="outline" size="sm" class="h-8 gap-1.5 text-xs" onclick={() => (bypassOpen = true)}>
 				<ShieldOffIcon class="size-3.5" />
 				Bypass
-				<Badge variant="secondary" class="px-1.5 py-0 text-[10px] font-mono">{data.bypass.length}</Badge>
+				<Badge variant="secondary" class="px-1.5 py-0 text-xs font-mono">{data.bypass.length}</Badge>
 			</Button>
 			<Button size="sm" class="h-8 gap-1.5 text-xs" onclick={openCreate}>
 				<PlusIcon class="size-3.5" />
@@ -124,12 +124,12 @@
 	</div>
 
 	{#if data.bypass.length > 0}
-		<Card.Root class="border-amber-500/30 bg-amber-500/5">
+		<Card.Root class="border-warning/30 bg-warning/5">
 			<Card.Content class="p-3 flex flex-wrap items-center gap-2 text-xs">
-				<ShieldOffIcon class="size-3.5 text-amber-500" />
+				<ShieldOffIcon class="size-3.5 text-warning" />
 				<span class="font-medium">Never filtered:</span>
 				{#each data.bypass as c (c.selector)}
-					<Badge variant="outline" class="h-auto max-w-full font-mono text-[11px] whitespace-normal break-all" title={clientTitle(c)}>{clientLabel(c)}</Badge>
+					<Badge variant="outline" class="h-auto max-w-full font-mono text-xs whitespace-normal break-all" title={clientTitle(c)}>{clientLabel(c)}</Badge>
 				{/each}
 			</Card.Content>
 		</Card.Root>
@@ -138,7 +138,7 @@
 	{#if loading}
 		<div class="grid gap-4 md:grid-cols-2">
 			{#each Array(2) as _}
-				<Skeleton class="h-40 w-full rounded-xl" />
+				<Skeleton class="h-40 w-full rounded-lg" />
 			{/each}
 		</div>
 	{:else if data.groups.length === 0}
@@ -161,10 +161,10 @@
 						<div class="flex items-center justify-between gap-2">
 							<Card.Title class="text-sm font-semibold font-mono">{group.name}</Card.Title>
 							<div class="flex items-center gap-1.5">
-								<Badge variant="outline" class="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 text-[10px] font-mono">
+								<Badge variant="outline" class="bg-success/10 text-success border-success/20 text-xs font-mono">
 									{group.allow_rules} allow
 								</Badge>
-								<Badge variant="outline" class="bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20 text-[10px] font-mono">
+								<Badge variant="outline" class="bg-danger/10 text-danger border-danger/20 text-xs font-mono">
 									{group.block_rules} block
 								</Badge>
 							</div>
@@ -172,13 +172,13 @@
 					</Card.Header>
 					<Card.Content class="flex-1 py-3 space-y-3 text-xs">
 						<div>
-							<div class="text-[11px] font-medium text-muted-foreground mb-1">Clients</div>
+							<div class="text-xs font-medium text-muted-foreground mb-1">Clients</div>
 							{#if group.clients.length === 0}
 								<span class="text-muted-foreground">None: applies to nobody.</span>
 							{:else}
 								<div class="flex flex-wrap gap-1">
 									{#each group.clients as c (c.selector)}
-										<Badge variant="secondary" class="h-auto max-w-full font-mono text-[11px] whitespace-normal break-all" title={clientTitle(c)}>
+										<Badge variant="secondary" class="h-auto max-w-full font-mono text-xs whitespace-normal break-all" title={clientTitle(c)}>
 											{clientLabel(c)}
 										</Badge>
 									{/each}
@@ -187,12 +187,12 @@
 						</div>
 						{#if group.lists.length > 0}
 							<div>
-								<div class="text-[11px] font-medium text-muted-foreground mb-1 flex items-center gap-1">
+								<div class="text-xs font-medium text-muted-foreground mb-1 flex items-center gap-1">
 									<LayersIcon class="size-3" /> Extra lists
 								</div>
 								<div class="flex flex-wrap gap-1">
 									{#each group.lists as list (list)}
-										<Badge variant="outline" class="font-mono text-[11px]">{list}</Badge>
+										<Badge variant="outline" class="font-mono text-xs">{list}</Badge>
 									{/each}
 								</div>
 							</div>
@@ -234,7 +234,7 @@
 <AdblockBypassDialog bind:open={bypassOpen} bypass={data.bypass} onSaved={load} />
 
 <AlertDialog.Root bind:open={deleteOpen}>
-	<AlertDialog.Content class="rounded-xl">
+	<AlertDialog.Content class="rounded-lg">
 		<AlertDialog.Header>
 			<AlertDialog.Title class="text-base font-bold">Delete group?</AlertDialog.Title>
 			<AlertDialog.Description class="text-xs">

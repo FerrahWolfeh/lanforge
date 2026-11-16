@@ -2,7 +2,6 @@
 	import { auth } from "$lib/stores/auth.svelte";
 	import FloatingSaveBar from "$lib/components/FloatingSaveBar.svelte";
 	import {
-		trafficStatus,
 		trafficTelemetryFeed,
 		trafficConfig,
 		trafficUpdateConfig,
@@ -11,7 +10,6 @@
 	} from "$lib/api/client";
 	import type {
 		TrafficConfig,
-		TrafficStatusResponse,
 		TrafficTelemetryResponse,
 		NetworkInterfaceInfo,
 		SetupStatusResponse,
@@ -22,6 +20,7 @@
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
 	import { createPolling } from "$lib/utils/polling";
+	import { useTrafficStatus } from "../trafficStatusContext.svelte";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 
 	import TrafficSqmTab from "../components/TrafficSqmTab.svelte";
@@ -30,7 +29,8 @@
 
 	const canEdit = $derived(auth.can("config_write"));
 
-	let status = $state<TrafficStatusResponse | null>(null);
+	const shared = useTrafficStatus();
+	const status = $derived(shared.value);
 	let telemetry = $state<TrafficTelemetryResponse | null>(null);
 	let serverConfig = $state<TrafficConfig | null>(null);
 	let availableInterfaces = $state<NetworkInterfaceInfo[]>([]);
@@ -90,12 +90,12 @@
 		if (sqmEnabled !== serverConfig.sqm.enabled) return true;
 		if (Number(sqmDownloadMbps) !== serverConfig.sqm.download_mbps) return true;
 		if (Number(sqmUploadMbps) !== serverConfig.sqm.upload_mbps) return true;
-		if (sqmInterface !== serverConfig.sqm.interface) return true;
-		if (sqmOverhead !== serverConfig.sqm.overhead) return true;
-		if (sqmDiffserv !== serverConfig.sqm.diffserv) return true;
-		if (sqmPerHostIsolation !== serverConfig.sqm.per_host_isolation) return true;
+		if (sqmInterface !== (serverConfig.sqm.interface || "auto")) return true;
+		if (sqmOverhead !== (serverConfig.sqm.overhead || "auto")) return true;
+		if (sqmDiffserv !== (serverConfig.sqm.diffserv || "diffserv4")) return true;
+		if (sqmPerHostIsolation !== (serverConfig.sqm.per_host_isolation ?? true)) return true;
 		if (sqmRttMs !== (serverConfig.sqm.rtt_ms ?? null)) return true;
-		if (sqmIngressDevice !== serverConfig.sqm.ingress_device) return true;
+		if (sqmIngressDevice !== (serverConfig.sqm.ingress_device || "ifb4lanforge")) return true;
 		return false;
 	});
 
@@ -105,12 +105,12 @@
 		if (sqmEnabled !== serverConfig.sqm.enabled) count++;
 		if (Number(sqmDownloadMbps) !== serverConfig.sqm.download_mbps) count++;
 		if (Number(sqmUploadMbps) !== serverConfig.sqm.upload_mbps) count++;
-		if (sqmInterface !== serverConfig.sqm.interface) count++;
-		if (sqmOverhead !== serverConfig.sqm.overhead) count++;
-		if (sqmDiffserv !== serverConfig.sqm.diffserv) count++;
-		if (sqmPerHostIsolation !== serverConfig.sqm.per_host_isolation) count++;
+		if (sqmInterface !== (serverConfig.sqm.interface || "auto")) count++;
+		if (sqmOverhead !== (serverConfig.sqm.overhead || "auto")) count++;
+		if (sqmDiffserv !== (serverConfig.sqm.diffserv || "diffserv4")) count++;
+		if (sqmPerHostIsolation !== (serverConfig.sqm.per_host_isolation ?? true)) count++;
 		if (sqmRttMs !== (serverConfig.sqm.rtt_ms ?? null)) count++;
-		if (sqmIngressDevice !== serverConfig.sqm.ingress_device) count++;
+		if (sqmIngressDevice !== (serverConfig.sqm.ingress_device || "ifb4lanforge")) count++;
 		return Math.max(count, 1);
 	});
 
@@ -118,15 +118,13 @@
 		if (!silent) loading = true;
 		try {
 			const fetchSetup = !silent || availableInterfaces.length === 0;
-			const [s, c, setupRes, pppoeRes, telemRes] = await Promise.all([
-				trafficStatus().catch(() => null),
+			const [c, setupRes, pppoeRes, telemRes] = await Promise.all([
 				trafficConfig().catch(() => null),
 				fetchSetup ? getSetupStatus().catch(() => null) : Promise.resolve(null),
 				// The PPPoE config holds the password (config_write); it only names the WAN here.
 				canEdit ? pppoeConfig().catch(() => null) : Promise.resolve(null),
 				trafficTelemetry().catch(() => null),
 			]);
-			status = s;
 			if (setupRes) setupStatus = setupRes;
 			pppoeCfg = pppoeRes;
 			telemetry = telemRes;
@@ -155,6 +153,8 @@
 		toast.info("Changes discarded");
 	}
 
+	let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+
 	async function handleSave() {
 		if (!isDirty || !serverConfig) return;
 		saving = true;
@@ -180,12 +180,11 @@
 			syncFormFromConfig(payload);
 			toast.success("SQM CAKE configuration applied successfully");
 
-			setTimeout(async () => {
-				const [s, t] = await Promise.all([
-					trafficStatus().catch(() => null),
+			refreshTimer = setTimeout(async () => {
+				const [, t] = await Promise.all([
+					shared.refresh(),
 					trafficTelemetry().catch(() => null),
 				]);
-				if (s) status = s;
 				if (t) telemetry = t;
 			}, 600);
 		} catch (err) {
@@ -197,14 +196,16 @@
 
 	onMount(() => {
 		loadAll(false);
-		const stopPolling = createPolling(() => {
-			Promise.allSettled([trafficStatus(), trafficTelemetry()]).then(([sRes, tRes]) => {
-				if (sRes.status === "fulfilled") status = sRes.value;
-				if (tRes.status === "fulfilled") telemetry = tRes.value;
-			});
-		}, 3000);
+		const stopPolling = createPolling(
+			() =>
+				trafficTelemetry()
+					.then((t) => (telemetry = t))
+					.catch(() => {}),
+			3000
+		);
 		return () => {
 			stopPolling();
+			clearTimeout(refreshTimer);
 		};
 	});
 </script>

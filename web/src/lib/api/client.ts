@@ -13,13 +13,18 @@ import type {
 	AdblockRulesImport,
 	AuthStatusResponse,
 	AuthToken,
+	GeneratedToken,
+	SessionUser,
 	BlockingMode,
+	DeviceDnsResponse,
+	DnsDomainResponse,
+	DeviceRulesResponse,
 	DeviceEntry,
 	DevicesMeta,
 	DevicesResponse,
 	DhcpLease,
 	DhcpOptionsConfig,
-	DhcpPoolEntry,
+	DhcpOptionsResponse,
 	DhcpPoolsConfigResponse,
 	DhcpPoolsResponse,
 	DhcpReconcileResponse,
@@ -36,7 +41,6 @@ import type {
 	DnsQueryLogEntry,
 	DnsStatsResponse,
 	DnsUpstreamEntry,
-	DnsUpstreamsResponse,
 	HostConfigEntry,
 	LeaseTarget,
 	LoginRequest,
@@ -49,7 +53,6 @@ import type {
 	SetupStatusResponse,
 	StatusResponse,
 	ServiceBanner,
-	TransientHostEntry,
 	UserInfo,
 	WhoisResponse,
 	PppoeConfig,
@@ -73,7 +76,6 @@ import type {
 } from './types';
 import { parseTimedEvent } from './types';
 
-
 // ---------------------------------------------------------------------------
 // Core transport
 // ---------------------------------------------------------------------------
@@ -88,17 +90,27 @@ export class ApiError extends Error {
 	}
 }
 
+/** localStorage key of the session token; the client owns it, the auth store mirrors it. */
+export const TOKEN_KEY = 'lf_session';
+
 let memoryToken: string | null = null;
 let memoryTokenLoaded = false;
+const tokenListeners = new Set<(token: string | null) => void>();
 
 export function getToken(): string | null {
 	if (!memoryTokenLoaded) {
 		memoryTokenLoaded = true;
 		if (typeof localStorage !== 'undefined') {
-			memoryToken = localStorage.getItem('lf_session');
+			memoryToken = localStorage.getItem(TOKEN_KEY);
 		}
 	}
 	return memoryToken;
+}
+
+/** Calls `listener` whenever the token changes (set, cleared by a 401, ...); returns the unsubscribe. */
+export function onTokenChange(listener: (token: string | null) => void): () => void {
+	tokenListeners.add(listener);
+	return () => tokenListeners.delete(listener);
 }
 
 export function setClientToken(token: string | null) {
@@ -106,11 +118,12 @@ export function setClientToken(token: string | null) {
 	memoryTokenLoaded = true;
 	if (typeof localStorage !== 'undefined') {
 		if (token) {
-			localStorage.setItem('lf_session', token);
+			localStorage.setItem(TOKEN_KEY, token);
 		} else {
-			localStorage.removeItem('lf_session');
+			localStorage.removeItem(TOKEN_KEY);
 		}
 	}
+	for (const listener of tokenListeners) listener(token);
 }
 
 function handleUnauthorized(path: string) {
@@ -138,31 +151,14 @@ function buildPath(
 	return url.pathname + url.search;
 }
 
-function extractList<T>(res: any, key?: string): T[] {
-	if (!res) return [];
-	if (Array.isArray(res)) return res;
-	if (key && Array.isArray(res[key])) return res[key];
-	if (Array.isArray(res.data)) return res.data;
-	if (key && Array.isArray(res.data?.[key])) return res.data[key];
-	return [];
+/** The `{ data, meta }` body of a paginated endpoint (fetched with `getRaw`). */
+interface Paginated<T> {
+	data: T[];
+	meta?: { total?: number };
 }
 
-function extractPaginated<T>(res: any, key: string): { entries: T[]; total: number } {
-	if (!res) return { entries: [], total: 0 };
-	const list: T[] = Array.isArray(res)
-		? res
-		: Array.isArray(res.data)
-			? res.data
-			: Array.isArray(res[key])
-				? res[key]
-				: [];
-	const total =
-		typeof res.meta?.total === 'number'
-			? res.meta.total
-			: typeof res.total === 'number'
-				? res.total
-				: list.length;
-	return { entries: list, total };
+function paginated<T>(res: Paginated<T>): { entries: T[]; total: number } {
+	return { entries: res.data, total: res.meta?.total ?? res.data.length };
 }
 
 // ---------------------------------------------------------------------------
@@ -217,6 +213,15 @@ async function reauthenticate(): Promise<boolean> {
 	}
 }
 
+/** Adds the session bearer token and, when active, the elevation header. */
+function authHeaders(base: Record<string, string> = {}): Record<string, string> {
+	const token = getToken();
+	if (token) base['Authorization'] = `Bearer ${token}`;
+	const elevated = currentElevation();
+	if (elevated) base['X-Lanforge-Elevation'] = elevated;
+	return base;
+}
+
 async function requestCore<T>(
 	method: string,
 	path: string,
@@ -225,14 +230,10 @@ async function requestCore<T>(
 	raw: boolean = false,
 	noReauth: boolean = false
 ): Promise<T> {
-	const token = getToken();
-	const headers: Record<string, string> = {
+	const headers = authHeaders({
 		'Content-Type': 'application/json',
 		...extraHeaders
-	};
-	if (token) headers['Authorization'] = `Bearer ${token}`;
-	const elevated = currentElevation();
-	if (elevated) headers['X-Lanforge-Elevation'] = elevated;
+	});
 
 	const res = await fetch(`/api/v1${path}`, {
 		method,
@@ -274,7 +275,7 @@ async function requestCore<T>(
 	}
 
 	// Unwrap { "data": ... } envelope
-	return (json && 'data' in json ? json.data : json) as T;
+	return (json && typeof json === 'object' && 'data' in json ? json.data : json) as T;
 }
 
 const request = <T>(
@@ -291,18 +292,15 @@ const requestRaw = <T>(
 	extraHeaders?: Record<string, string>
 ) => requestCore<T>(method, path, body, extraHeaders, true);
 
+// `/system/config` needs the config_write permission but no elevation (authz.rs `requirement`),
+// so this skips the re-authentication retry of `requestCore`.
 async function requestText(
 	path: string,
 	params?: Record<string, string | number | boolean | undefined>
 ): Promise<string> {
-	const token = getToken();
-	const headers: Record<string, string> = {};
-	if (token) headers['Authorization'] = `Bearer ${token}`;
-
-	const fullPath = buildPath(path, params);
-	const res = await fetch(`/api/v1${fullPath}`, {
+	const res = await fetch(`/api/v1${buildPath(path, params)}`, {
 		method: 'GET',
-		headers
+		headers: authHeaders()
 	});
 
 	if (!res.ok) {
@@ -336,11 +334,7 @@ const del = <T>(path: string, body?: unknown, extraHeaders?: Record<string, stri
 export const authStatus = () => get<AuthStatusResponse>('/auth/status');
 export const login = (req: LoginRequest) => post<LoginResponse>('/auth/login', req);
 export const logout = () => post<void>('/auth/logout');
-export const me = async (): Promise<UserInfo> => {
-	const res = await get<any>('/auth/me');
-	if (res?.data) return res.data as UserInfo;
-	return res as UserInfo;
-};
+export const me = () => get<SessionUser>('/auth/me');
 /** Changing the password ends every session of the user; keep this one on the new token. */
 export const changePassword = async (current_password: string, new_password: string) => {
 	const res = await post<{ message: string; token?: string }>('/auth/change-password', {
@@ -350,20 +344,15 @@ export const changePassword = async (current_password: string, new_password: str
 	if (res?.token) setClientToken(res.token);
 };
 export const listTokens = async (): Promise<AuthToken[]> =>
-	extractList<AuthToken>(await get<any>('/auth/tokens'), 'tokens');
+	(await get<{ tokens: AuthToken[] }>('/auth/tokens')).tokens;
 
-export const generateToken = async (req: GenerateTokenRequest): Promise<AuthToken> => {
-	const res = await post<any>('/auth/tokens', req);
-	return (res?.data ?? res) as AuthToken;
-};
+export const generateToken = (req: GenerateTokenRequest) => post<GeneratedToken>('/auth/tokens', req);
 
 export const deleteToken = (idOrName: string | number) =>
 	del<void>(`/auth/tokens/${encodeURIComponent(String(idOrName))}`);
 
-export const renewToken = async (idOrName: string | number): Promise<AuthToken> => {
-	const res = await post<any>(`/auth/tokens/${encodeURIComponent(String(idOrName))}/renew`, {});
-	return (res?.data ?? res) as AuthToken;
-};
+export const renewToken = (idOrName: string | number) =>
+	post<GeneratedToken>(`/auth/tokens/${encodeURIComponent(String(idOrName))}/renew`, {});
 
 export const validateToken = (token: string) =>
 	post<{ valid: boolean }>('/auth/validate', { token });
@@ -396,42 +385,34 @@ export const listDevices = async (params?: {
 	offset?: number;
 	grouped?: boolean;
 }): Promise<DevicesResponse> => {
-	const raw = await getRaw<any>('/devices', params);
-	if (!raw) {
-		return { devices: [], meta: { total: 0, online: 0, last_scan_secs_ago: 0 } };
-	}
-	const devList = extractList<DeviceEntry>(raw, 'devices');
-	const onlineCount = devList.filter((d) => d.online).length;
-	const meta: DevicesMeta = {
-		total: typeof raw.meta?.total === 'number' ? raw.meta.total : devList.length,
-		online: typeof raw.meta?.online === 'number' ? raw.meta.online : onlineCount,
-		last_scan_secs_ago:
-			typeof raw.meta?.last_scan_secs_ago === 'number' ? raw.meta.last_scan_secs_ago : 0,
-	};
-	return { devices: devList, meta };
+	const raw = await getRaw<{ data: DeviceEntry[]; meta: DevicesMeta }>('/devices', params);
+	return { devices: raw.data, meta: raw.meta };
 };
 
 export const whois = async (target: string): Promise<WhoisResponse> => {
-	const res = await get<any>(`/devices/${encodeURIComponent(target)}`);
-	if (res && typeof res === 'object') {
-		const entry = (res.entry ?? res.data?.entry ?? res) as DeviceEntry;
-		return { entry };
-	}
-	throw new ApiError(404, `Device not found: ${target}`);
+	const res = await get<WhoisResponse>(`/devices/${encodeURIComponent(target)}`);
+	if (!res?.entry) throw new ApiError(404, `Device not found: ${target}`);
+	return res;
 };
 
+/** The device's DNS activity over the last day. */
+export const deviceDns = (mac: string) =>
+	get<DeviceDnsResponse>(`/devices/${encodeURIComponent(mac)}/dns`);
+/** One domain's activity over the last day: hourly rate and who asked. */
+export const dnsDomain = (domain: string) =>
+	get<DnsDomainResponse>(`/dns/domains/${encodeURIComponent(domain)}`);
+/** The forwards, rewrites and name bindings the daemon resolves to the device. */
+export const deviceRules = (mac: string) =>
+	get<DeviceRulesResponse>(`/devices/${encodeURIComponent(mac)}/rules`);
 export const purge = (target: string) => del<void>(`/devices/${encodeURIComponent(target)}`);
-export const wol = (target: string) =>
-	post<void>(`/devices/${encodeURIComponent(target)}/wol`);
-export const transientHostList = async (): Promise<TransientHostEntry[]> =>
-	extractList<TransientHostEntry>(await get<any>('/devices/transient'), 'hosts');
+export const wol = (target: string) => post<void>(`/devices/${encodeURIComponent(target)}/wol`);
 
 // ---------------------------------------------------------------------------
 // Hosts
 // ---------------------------------------------------------------------------
 
 export const hostList = async (): Promise<HostConfigEntry[]> =>
-	extractList<HostConfigEntry>(await get<any>('/hosts'), 'hosts');
+	(await get<{ hosts: HostConfigEntry[] }>('/hosts')).hosts;
 
 export const hostAdd = (entry: HostConfigEntry) => post<void>('/hosts', entry);
 export const hostSet = (mac: string, field: string, value: string) =>
@@ -439,7 +420,7 @@ export const hostSet = (mac: string, field: string, value: string) =>
 export const hostRemove = (mac: string) => del<void>(`/hosts/${mac}`);
 
 export const hostExport = async (): Promise<HostConfigEntry[]> =>
-	extractList<HostConfigEntry>(await get<any>('/hosts/export'), 'hosts');
+	(await get<{ hosts: HostConfigEntry[] }>('/hosts/export')).hosts;
 
 export const hostImport = (entries: HostConfigEntry[]) => post<void>('/hosts/import', entries);
 
@@ -463,14 +444,19 @@ export const dnsQueryLog = async (params?: {
 	limit?: number;
 	offset?: number;
 }): Promise<{ entries: DnsQueryLogEntry[]; total: number }> =>
-	extractPaginated<DnsQueryLogEntry>(await getRaw<any>('/dns/logs', params), 'entries');
+	paginated(await getRaw<Paginated<DnsQueryLogEntry>>('/dns/logs', params));
 
-export function formatDnsAddr(addr: string): string {
+function formatDnsAddr(addr: string): string {
 	const trimmed = addr.trim();
 	if (!trimmed) return trimmed;
 	// Already formatted with port?
 	if (trimmed.startsWith('[') && trimmed.includes(']:')) return trimmed;
-	if (trimmed.includes(':') && !trimmed.includes('::') && trimmed.split(':').length === 2 && trimmed.includes('.')) {
+	if (
+		trimmed.includes(':') &&
+		!trimmed.includes('::') &&
+		trimmed.split(':').length === 2 &&
+		trimmed.includes('.')
+	) {
 		return trimmed;
 	}
 	// IPv6 address without port
@@ -486,7 +472,7 @@ export function formatDnsAddr(addr: string): string {
 }
 
 export const dnsUpstreams = async (): Promise<DnsUpstreamEntry[]> =>
-	extractList<DnsUpstreamEntry>(await get<any>('/dns/upstreams'), 'upstreams');
+	(await get<{ upstreams: DnsUpstreamEntry[] }>('/dns/upstreams')).upstreams;
 export const dnsUpstreamAdd = (entry: { addr: string; protocol: string; domain?: string }) => {
 	const formattedAddr = formatDnsAddr(entry.addr);
 	const proto = (entry.protocol || 'udp').toLowerCase();
@@ -513,17 +499,20 @@ export const dnsUpstreamRemove = (entry: { addr: string; protocol: string; domai
 export const dnsUpstreamSetDefault = (addrs: string[]) =>
 	put<void>('/dns/upstreams', { upstreams: addrs.map(formatDnsAddr) });
 export const dnsUpstreamModeGet = () => get<{ mode: string }>('/dns/upstreams/mode');
-export const dnsUpstreamModeSet = (mode: string) => put<{ mode: string }>('/dns/upstreams/mode', { mode });
+export const dnsUpstreamModeSet = (mode: string) =>
+	put<{ mode: string }>('/dns/upstreams/mode', { mode });
 export const dnsUpstreamTest = (entry: { addr: string; protocol?: string; domain?: string }) => {
 	const formattedAddr = formatDnsAddr(entry.addr);
 	const proto = (entry.protocol || 'udp').toLowerCase();
 	const params = new URLSearchParams({ addr: formattedAddr, protocol: proto });
 	if (entry.domain) params.set('domain', entry.domain);
-	return get<{ ok: boolean; latency_ms: number; error?: string }>(`/dns/upstreams/test?${params.toString()}`);
+	return get<{ ok: boolean; latency_ms: number; error?: string }>(
+		`/dns/upstreams/test?${params.toString()}`
+	);
 };
 
 export const dnsReverseResolverList = async (): Promise<ReverseResolverEntry[]> =>
-	extractList<ReverseResolverEntry>(await get<any>('/dns/reverse-resolvers'), 'resolvers');
+	(await get<{ resolvers: ReverseResolverEntry[] }>('/dns/reverse-resolvers')).resolvers;
 export const dnsReverseResolverAdd = (subnet: string, resolver_uri: string) => {
 	const s = subnet.trim();
 	const r = resolver_uri.trim();
@@ -546,7 +535,7 @@ export const dnsCacheDump = async (params?: {
 	q?: string;
 	kind?: string;
 }): Promise<{ entries: DnsCacheEntry[]; total: number }> =>
-	extractPaginated<DnsCacheEntry>(await getRaw<any>('/dns/cache', params), 'entries');
+	paginated(await getRaw<Paginated<DnsCacheEntry>>('/dns/cache', params));
 export const dnsCacheFlush = () => del<void>('/dns/cache');
 export const dnsCacheStatsExt = () => get<DnsCacheStatsResponse>('/dns/cache/stats');
 
@@ -561,7 +550,7 @@ export const dnsAdblockReload = () => post<void>('/dns/adblock/reload');
 export const dnsBlock = (domain: string) => dnsAdblockRuleAdd(domain, 'block');
 export const dnsAllow = (domain: string) => dnsAdblockRuleAdd(domain, 'allow');
 export const dnsAdblockUrls = async (): Promise<DnsAdblockUrlEntry[]> =>
-	extractList<DnsAdblockUrlEntry>(await get<any>('/dns/adblock/urls'), 'urls');
+	(await get<{ urls: DnsAdblockUrlEntry[] }>('/dns/adblock/urls')).urls;
 export const dnsAdblockSources = () => get<DnsAdblockSourcesResponse>('/dns/adblock/sources');
 export const dnsAdblockCheck = (domain: string, client?: string) =>
 	get<AdblockCheckResponse>(
@@ -569,8 +558,7 @@ export const dnsAdblockCheck = (domain: string, client?: string) =>
 			(client ? `&client=${encodeURIComponent(client)}` : '')
 	);
 /** `?group=<name>` for a group's rules or lists; nothing for the global layer. */
-const groupQuery = (group?: string | null) =>
-	group ? `?group=${encodeURIComponent(group)}` : '';
+const groupQuery = (group?: string | null) => (group ? `?group=${encodeURIComponent(group)}` : '');
 
 /** Adds a list to the global layer, or to `group`. */
 export const dnsAdblockUrlAdd = (entry: DnsAdblockUrlEntry, group?: string | null) =>
@@ -585,7 +573,7 @@ export const dnsAdblockConfigSet = (config: {
 }) => post<void>('/dns/adblock/config', config);
 // The rules calls act on the global rules file, or on `group`'s.
 export const dnsAdblockRules = async (group?: string | null): Promise<AdblockRuleEntry[]> =>
-	extractList<AdblockRuleEntry>(await get<any>(`/dns/adblock/rules${groupQuery(group)}`), 'rules');
+	(await get<{ rules: AdblockRuleEntry[] }>(`/dns/adblock/rules${groupQuery(group)}`)).rules;
 export const dnsAdblockRuleAdd = (
 	domain: string,
 	action: 'block' | 'allow',
@@ -625,14 +613,14 @@ export const dnsAdblockDeviceSet = (mac: string, groups: string[], bypass: boole
 // ---------------------------------------------------------------------------
 
 export const dnsRewriteList = async (): Promise<RewriteRule[]> =>
-	extractList<RewriteRule>(await get<any>('/dns/rewrites'), 'rewrites');
+	(await get<{ rewrites: RewriteRule[] }>('/dns/rewrites')).rewrites;
 export const dnsRewriteAdd = (rule: { domain: string; rtype: DnsRecordType; answer: string }) =>
 	post<void>('/dns/rewrites', rule);
 export const dnsRewriteRemove = (rule: RewriteRule) =>
 	del<void>('/dns/rewrites/rule', { domain: rule.domain, rtype: rule.rtype, answer: rule.answer });
 export const dnsRewriteClear = () => del<void>('/dns/rewrites');
 export const dnsRewriteExport = async (): Promise<RewriteRule[]> =>
-	extractList<RewriteRule>(await get<any>('/dns/rewrites/export'), 'rewrites');
+	(await get<{ rewrites: RewriteRule[] }>('/dns/rewrites/export')).rewrites;
 export const dnsRewriteImport = (rules: RewriteRule[]) => post<void>('/dns/rewrites/import', rules);
 
 // ---------------------------------------------------------------------------
@@ -640,39 +628,22 @@ export const dnsRewriteImport = (rules: RewriteRule[]) => post<void>('/dns/rewri
 // ---------------------------------------------------------------------------
 
 export const leases = async (): Promise<DhcpLease[]> =>
-	extractList<DhcpLease>(await get<any>('/dhcp/leases'), 'leases');
+	(await get<{ leases: DhcpLease[] }>('/dhcp/leases')).leases;
 
-export const dhcpPools = async (): Promise<DhcpPoolsResponse> => {
-	const res = await get<any>('/dhcp/pools');
-	if (!res) return { v4_pools: [], v6_pools: [] };
-	const data = res.data ?? res;
-	return {
-		v4_pools: Array.isArray(data.v4_pools) ? data.v4_pools : [],
-		v6_pools: Array.isArray(data.v6_pools) ? data.v6_pools : []
-	};
-};
+export const dhcpPools = () => get<DhcpPoolsResponse>('/dhcp/pools');
 
-export const dhcpOptionsGet = async (): Promise<DhcpOptionsConfig> => {
-	const res = await get<any>('/dhcp/options');
-	const data = res?.data ?? res;
-	return data?.options ?? data;
-};
+export const dhcpOptionsGet = async (): Promise<DhcpOptionsConfig> =>
+	(await get<DhcpOptionsResponse>('/dhcp/options')).options;
 
 export const dhcpOptionsUpdate = (options: DhcpOptionsConfig) =>
 	put<void>('/dhcp/options', options);
 
-export const dhcpPoolsConfigGet = async (): Promise<DhcpPoolsConfigResponse> => {
-	const res = await get<any>('/dhcp/pools/config');
-	const data = res?.data ?? res;
-	return {
-		v4_pools: Array.isArray(data?.v4_pools) ? data.v4_pools : [],
-		v6_pools: Array.isArray(data?.v6_pools) ? data.v6_pools : [],
-		active_ula_prefix: data?.active_ula_prefix ?? null,
-		active_gua_prefix: data?.active_gua_prefix ?? null,
-	};
-};
+export const dhcpPoolsConfigGet = () => get<DhcpPoolsConfigResponse>('/dhcp/pools/config');
 
-export const dhcpPoolsConfigUpdate = (v4_pools: Dhcpv4PoolConfig[], v6_pools: Dhcpv6PoolConfig[]) => {
+export const dhcpPoolsConfigUpdate = (
+	v4_pools: Dhcpv4PoolConfig[],
+	v6_pools: Dhcpv6PoolConfig[]
+) => {
 	const sanitizedV4 = v4_pools.map((p) => ({
 		...p,
 		name: p.name?.trim() || null,
@@ -681,26 +652,29 @@ export const dhcpPoolsConfigUpdate = (v4_pools: Dhcpv4PoolConfig[], v6_pools: Dh
 		domain_name: p.domain_name?.trim() || null,
 		boot_file: p.boot_file?.trim() || null,
 		tftp_server: p.tftp_server?.trim() || null,
-		lease_time: p.lease_time ? Number(p.lease_time) : null,
+		lease_time: p.lease_time ? Number(p.lease_time) : null
 	}));
 	const sanitizedV6 = v6_pools.map((p) => ({
 		...p,
 		name: p.name?.trim() || null,
-		address: p.address?.trim() || null,
+		address: p.address?.trim() || null
 	}));
 	return put<void>('/dhcp/pools/config', { v4_pools: sanitizedV4, v6_pools: sanitizedV6 });
 };
 
 export const leaseRenew = (mac: string, target?: LeaseTarget) =>
-	post<void>(`/dhcp/leases/${encodeURIComponent(mac)}/renew`, target !== undefined ? { target } : {});
+	post<void>(
+		`/dhcp/leases/${encodeURIComponent(mac)}/renew`,
+		target !== undefined ? { target } : {}
+	);
 
 export const leaseRelease = (mac: string, target?: LeaseTarget) =>
-	post<void>(`/dhcp/leases/${encodeURIComponent(mac)}/release`, target !== undefined ? { target } : {});
+	post<void>(
+		`/dhcp/leases/${encodeURIComponent(mac)}/release`,
+		target !== undefined ? { target } : {}
+	);
 
-export const dhcpReconcile = async (): Promise<DhcpReconcileResponse> => {
-	const res = await post<any>('/dhcp/reconcile', {});
-	return res?.data ?? res;
-};
+export const dhcpReconcile = () => post<DhcpReconcileResponse>('/dhcp/reconcile', {});
 
 // ---------------------------------------------------------------------------
 // Database & Configuration
@@ -720,14 +694,14 @@ export const importSystemConfig = (config: SystemConfigExport) =>
 // ---------------------------------------------------------------------------
 
 export const userList = async (): Promise<UserInfo[]> =>
-	extractList<UserInfo>(await get<any>('/users'), 'users');
+	(await get<{ users: UserInfo[] }>('/users')).users;
 
-export const userCreate = async (username: string, password: string, role?: string): Promise<UserInfo> => {
-	const res = await post<any>('/users', { username, password, role });
-	if (res?.data?.user) return res.data.user;
-	if (res?.user) return res.user;
-	return res as UserInfo;
-};
+export const userCreate = async (
+	username: string,
+	password: string,
+	role?: string
+): Promise<UserInfo> =>
+	(await post<{ user: UserInfo }>('/users', { username, password, role })).user;
 export const userDelete = (username: string) => del<void>(`/users/${encodeURIComponent(username)}`);
 export const userPasswd = (username: string, new_password: string) =>
 	put<void>(`/users/${encodeURIComponent(username)}/password`, { new_password });
@@ -761,10 +735,8 @@ export const firewallPropose = (config: FirewallConfig) =>
 	post<FirewallValidationReport>('/firewall/propose', config);
 export const firewallCommit = (req: FirewallCommitRequest) =>
 	post<FirewallCommitResponse>('/firewall/commit', req);
-export const firewallConfirm = (tx_id: string) =>
-	post<void>('/firewall/confirm', { tx_id });
-export const firewallAbort = (tx_id: string) =>
-	post<void>('/firewall/abort', { tx_id });
+export const firewallConfirm = (tx_id: string) => post<void>('/firewall/confirm', { tx_id });
+export const firewallAbort = (tx_id: string) => post<void>('/firewall/abort', { tx_id });
 
 export const trafficStatus = () => get<TrafficStatusResponse>('/traffic/status');
 /**
@@ -774,7 +746,8 @@ export const trafficStatus = () => get<TrafficStatusResponse>('/traffic/status')
  */
 export function trafficTelemetryFeed() {
 	let since: number | undefined;
-	return async () => {
+	let inflight: Promise<TrafficTelemetryResponse> | null = null;
+	const fetchOnce = async () => {
 		const t = await get<TrafficTelemetryResponse>('/traffic/telemetry', { since });
 		const last = t.history?.at(-1)?.timestamp;
 		if (since !== undefined && t.timestamp < since) {
@@ -785,16 +758,15 @@ export function trafficTelemetryFeed() {
 		}
 		return t;
 	};
+	// Overlapping callers share one request so the cursor never moves twice for the same samples.
+	return () => (inflight ??= fetchOnce().finally(() => (inflight = null)));
 }
 export const trafficConfig = () => get<TrafficConfig>('/traffic/config');
-export const trafficUpdateConfig = (config: TrafficConfig) =>
-	post<void>('/traffic/config', config);
-
+export const trafficUpdateConfig = (config: TrafficConfig) => post<void>('/traffic/config', config);
 
 // ---------------------------------------------------------------------------
 // Setup & Onboarding
 // ---------------------------------------------------------------------------
-
 
 export const getSetupStatus = () => get<SetupStatusResponse>('/system/setup-status');
 export const submitSetup = (payload: SetupPayload) => post<SetupResponse>('/system/setup', payload);
@@ -817,7 +789,8 @@ export const controlService = (
 export const logLevel = () => get<LogLevelStatus>('/system/log-level');
 
 /** Saves the filter (`duration_secs: null`), sets it for a while, or resets it (`filter: null`). */
-export const setLogLevel = (req: SetLogLevelRequest) => put<LogLevelStatus>('/system/log-level', req);
+export const setLogLevel = (req: SetLogLevelRequest) =>
+	put<LogLevelStatus>('/system/log-level', req);
 
 /** What stopping `id` does to the running services that require it (dry-run, D-20). */
 export const serviceStopImpact = (id: string) =>
@@ -831,12 +804,8 @@ export const eventsHistory = async (params?: {
 	limit?: number;
 	offset?: number;
 }): Promise<{ entries: SseEvent[]; total: number }> => {
-	const raw = await getRaw<any>('/events/history', params);
-	const paginated = extractPaginated<unknown>(raw, 'events');
-	return {
-		entries: paginated.entries.map((item) => parseTimedEvent(item)),
-		total: paginated.total
-	};
+	const page = paginated(await getRaw<Paginated<unknown>>('/events/history', params));
+	return { entries: page.entries.map((item) => parseTimedEvent(item)), total: page.total };
 };
 
 // ---------------------------------------------------------------------------
@@ -845,14 +814,12 @@ export const eventsHistory = async (params?: {
 
 /**
  * Build the URL for the global event SSE stream.
- * The caller is responsible for creating the EventSource and managing it.
+ * Open it with `openEventStream`; the session token is never put in the URL.
  */
 export function eventsUrl(params?: { filter?: string; initial?: number }): string {
 	const url = new URL('/api/v1/events', window.location.origin);
 	if (params?.filter) url.searchParams.set('filter', params.filter);
 	if (params?.initial) url.searchParams.set('initial', String(params.initial));
-	const token = getToken();
-	if (token) url.searchParams.set('token', token);
 	return url.toString();
 }
 
@@ -873,7 +840,122 @@ export function dnsLogSseUrl(params?: {
 	if (params?.qtype) url.searchParams.set('qtype', params.qtype);
 	if (params?.result) url.searchParams.set('result', params.result);
 	if (params?.limit) url.searchParams.set('limit', String(params.limit));
-	const token = getToken();
-	if (token) url.searchParams.set('token', token);
 	return url.toString();
+}
+
+export interface EventStream {
+	close(): void;
+}
+
+export interface EventStreamHandlers {
+	onopen?(): void;
+	onmessage(ev: { data: string; lastEventId: string }): void;
+	onerror?(): void;
+}
+
+/**
+ * Fetch-based EventSource replacement that authenticates with the bearer header.
+ * Reconnects after the stream ends or fails (honours `retry:`, backs off on HTTP errors);
+ * a 401 logs out and stops. `close()` is safe at any time.
+ */
+export function openEventStream(url: string, handlers: EventStreamHandlers): EventStream {
+	const abort = new AbortController();
+	let retryMs = 3000;
+	let lastEventId = '';
+	let failures = 0;
+
+	const dispatch = (data: string[], id: string) => {
+		if (data.length === 0) return;
+		handlers.onmessage({ data: data.join('\n'), lastEventId: id });
+	};
+
+	async function connect(): Promise<void> {
+		const headers = authHeaders({ Accept: 'text/event-stream' });
+		if (lastEventId) headers['Last-Event-ID'] = lastEventId;
+		const res = await fetch(url, {
+			headers,
+			cache: 'no-store',
+			signal: abort.signal
+		});
+		if (res.status === 401) {
+			handleUnauthorized(url);
+			abort.abort();
+			return;
+		}
+		if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+		failures = 0;
+		handlers.onopen?.();
+
+		const reader = res.body.getReader();
+		const decoder = new TextDecoder();
+		let buf = '';
+		let data: string[] = [];
+		let id = lastEventId;
+		let skipLf = false;
+		try {
+			for (;;) {
+				const { done, value } = await reader.read();
+				if (done) return;
+				buf += decoder.decode(value, { stream: true });
+				let start = 0;
+				for (let i = 0; i < buf.length; i++) {
+					const c = buf.charCodeAt(i);
+					if (c !== 10 && c !== 13) continue;
+					if (c === 10 && skipLf && i === start) {
+						skipLf = false;
+						start = i + 1;
+						continue;
+					}
+					skipLf = c === 13;
+					const line = buf.slice(start, i);
+					start = i + 1;
+					if (line === '') {
+						dispatch(data, id);
+						data = [];
+						continue;
+					}
+					if (line.charCodeAt(0) === 58) continue;
+					const colon = line.indexOf(':');
+					const field = colon < 0 ? line : line.slice(0, colon);
+					let val = colon < 0 ? '' : line.slice(colon + 1);
+					if (val.charCodeAt(0) === 32) val = val.slice(1);
+					if (field === 'data') data.push(val);
+					else if (field === 'id' && !val.includes('\0')) {
+						id = val;
+						lastEventId = val;
+					} else if (field === 'retry' && /^\d+$/.test(val)) retryMs = Number(val);
+				}
+				buf = buf.slice(start);
+			}
+		} finally {
+			reader.cancel().catch(() => {});
+		}
+	}
+
+	(async () => {
+		while (!abort.signal.aborted) {
+			try {
+				await connect();
+			} catch {
+				failures++;
+			}
+			if (abort.signal.aborted) return;
+			handlers.onerror?.();
+			const delay = failures > 0 ? Math.min(retryMs * 1.5 ** (failures - 1), 15000) : retryMs;
+			await new Promise<void>((resolve) => {
+				const wake = () => {
+					clearTimeout(timer);
+					resolve();
+				};
+				// One listener per wait, removed when the timer fires, so reconnects do not pile them up.
+				const timer = setTimeout(() => {
+					abort.signal.removeEventListener('abort', wake);
+					resolve();
+				}, delay);
+				abort.signal.addEventListener('abort', wake, { once: true });
+			});
+		}
+	})();
+
+	return { close: () => abort.abort() };
 }

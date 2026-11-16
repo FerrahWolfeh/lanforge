@@ -1,49 +1,36 @@
 <script lang="ts">
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Card from "$lib/components/ui/card";
-	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import { Input } from "$lib/components/ui/input";
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import { serviceBanners, status, controlService, reload } from "$lib/api/client";
 	import { normalizeServices, type ServiceBanner } from "$lib/api/types";
-	import { getServiceMeta } from "$lib/services";
+	import { degradedReason, getServiceMeta } from "$lib/services";
 	import { toast } from "svelte-sonner";
-	import { goto } from "$app/navigation";
 	import { onMount } from "svelte";
 	import { createPolling } from "$lib/utils/polling";
-	import { formatBytes } from "$lib/utils";
+	import { formatBytes, createSequence, createTimers } from "$lib/utils";
 
-	import ServerIcon from "@lucide/svelte/icons/server";
-	import CircleCheckIcon from "@lucide/svelte/icons/circle-check";
-	import PowerOffIcon from "@lucide/svelte/icons/power-off";
-	import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import RotateCwIcon from "@lucide/svelte/icons/rotate-cw";
 	import PlayIcon from "@lucide/svelte/icons/play";
 	import SquareIcon from "@lucide/svelte/icons/square";
 	import SlidersIcon from "@lucide/svelte/icons/sliders";
 	import SearchIcon from "@lucide/svelte/icons/search";
-	import ExternalLinkIcon from "@lucide/svelte/icons/external-link";
-	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import LayersIcon from "@lucide/svelte/icons/layers";
-	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import NavTabs from "$lib/components/NavTabs.svelte";
+	import { systemTabs } from "../tabs";
 	import PageHeader from "$lib/components/PageHeader.svelte";
-	import StatCard from "$lib/components/StatCard.svelte";
-	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
-	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
+	import StatusBadge from "$lib/components/StatusBadge.svelte";
 
-	const systemTabs: NavTabItem[] = [
-		{ label: "System Status", href: "/system", icon: ServerIcon },
-		{ label: "Services & Daemons", href: "/system/services", icon: LayersIcon },
-		{ label: "Event Stream", href: "/system/events", icon: ActivityIcon },
-	];
 	import Loader2Icon from "@lucide/svelte/icons/loader-2";
 	import CpuIcon from "@lucide/svelte/icons/cpu";
-	import ShieldIcon from "@lucide/svelte/icons/shield";
 
+	import * as AlertDialog from "$lib/components/ui/alert-dialog";
 	import StopImpactDialog from "$lib/components/StopImpactDialog.svelte";
 	let stopDialog = $state<StopImpactDialog>();
+	let restartConfirmId = $state<string | null>(null);
 
 	// Reload and service control are admin-only on the server.
 	const isAdmin = $derived(auth.can("admin"));
@@ -56,24 +43,31 @@
 	let statusFilter = $state<"all" | "online" | "inactive" | "error">("all");
 	let actionLoading = $state<Record<string, string | null>>({});
 
+	const fetchSeq = createSequence();
+	const { later, clear: clearTimers } = createTimers();
+
 	async function fetchBanners(showSpinner = true) {
+		// A poll that started before an action's refresh must not land after it.
+		const seq = fetchSeq.next();
 		if (showSpinner) isRefreshing = true;
 		try {
 			// Prefer dedicated /service_banners endpoint with fallback to normalizeServices(status)
 			try {
 				const list = await serviceBanners();
 				if (Array.isArray(list) && list.length > 0) {
-					banners = list.map((b) => ({
-						...b,
-						id: b.id || b.name.toLowerCase().replace(/\s+/g, "_")
-					}));
+					if (fetchSeq.isCurrent(seq)) {
+						banners = list.map((b) => ({
+							...b,
+							id: b.id || b.name.toLowerCase().replace(/\s+/g, "_")
+						}));
+					}
 					return;
 				}
 			} catch {
 				// Fallback to /status
 			}
 			const st = await status();
-			banners = normalizeServices(st);
+			if (fetchSeq.isCurrent(seq)) banners = normalizeServices(st);
 		} catch {
 			if (showSpinner) toast.error("Could not fetch service banners");
 		} finally {
@@ -95,7 +89,16 @@
 		}
 	}
 
-	async function executeAction(id: string, action: "Start" | "Stop" | "Restart") {
+	async function executeAction(
+		id: string,
+		action: "Start" | "Stop" | "Restart",
+		confirmed = false
+	) {
+		// Restarting PPPoE drops the WAN session: ask first.
+		if (action === "Restart" && id === "pppoe" && !confirmed) {
+			restartConfirmId = id;
+			return;
+		}
 		if (action === "Stop") {
 			try {
 				if (!(await stopDialog?.confirmStop(id))) return;
@@ -109,7 +112,7 @@
 			await controlService(id, action);
 			toast.success(`Service '${id}' received ${action.toLowerCase()} signal`);
 			// Re-fetch service state after brief settling time
-			setTimeout(async () => {
+			later(async () => {
 				await fetchBanners(false);
 				actionLoading[id] = null;
 			}, 750);
@@ -121,11 +124,10 @@
 
 	onMount(() => {
 		fetchBanners(true);
-		const stopPolling = createPolling(() => {
-			fetchBanners(false);
-		}, 6000);
+		const stopPolling = createPolling(() => fetchBanners(false), 6000);
 		return () => {
 			stopPolling();
+			clearTimers();
 		};
 	});
 
@@ -146,20 +148,6 @@
 	function isError(state: string): boolean {
 		const s = (state || "").toLowerCase();
 		return s === "error" || s === "failed" || s === "degraded";
-	}
-
-	function stateBadgeVariant(state: string): "default" | "secondary" | "outline" | "destructive" {
-		if (isOnline(state)) return "default";
-		if (isStarting(state)) return "secondary";
-		if (isInactive(state)) return "outline";
-		return "destructive";
-	}
-
-	function stateDotClass(state: string): string {
-		if (isOnline(state)) return "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]";
-		if (isStarting(state)) return "bg-amber-500 animate-pulse";
-		if (isInactive(state)) return "bg-zinc-500";
-		return "bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.8)]";
 	}
 
 	function formatUptime(secs: number): string {
@@ -207,8 +195,8 @@
 <div class="flex flex-col gap-6">
 	<!-- Page Header -->
 	<PageHeader
-		title="Services & Subsystems"
-		description="View runtime status, telemetry, and control daemon services. Click Configure to change boot defaults."
+		title="Services"
+		description="Start, stop and restart the router's services."
 		icon={LayersIcon}
 	>
 		{#snippet actions()}
@@ -239,95 +227,6 @@
 
 	<!-- System Diagnostics Sub-Navigation Tabs -->
 	<NavTabs tabs={systemTabs} ariaLabel="System diagnostics navigation" />
-
-	<!-- Top Metric Summary Cards -->
-	<StatCardGrid cols={4}>
-		<!-- Total Services -->
-		<StatCard
-			label="Total Services"
-			value={loading ? "—" : totalCount}
-			icon={ServerIcon}
-			color="primary"
-			subtext="Managed background daemons"
-			{loading}
-		>
-			{#snippet footer()}
-				<StatCardFooterItem label="Orchestrator" value="Supervisor" />
-				<StatCardFooterItem label="Topology" value="Modular Daemons" />
-			{/snippet}
-		</StatCard>
-
-		<!-- Online Services -->
-		<StatCard
-			label="Online / Active"
-			value={loading ? "—" : onlineCount}
-			icon={CircleCheckIcon}
-			color="emerald"
-			badge={{
-				text: "Active",
-				variant: "online",
-				showDot: true
-			}}
-			subtext={`${onlineCount} running daemons`}
-			{loading}
-		>
-			{#snippet footer()}
-				<StatCardFooterItem
-					label="Health Ratio"
-					value={`${Math.round((onlineCount / (totalCount || 1)) * 100)}%`}
-					color="text-emerald-500"
-				/>
-				<StatCardFooterItem label="State" value="Active / Healthy" color="text-emerald-500" />
-			{/snippet}
-		</StatCard>
-
-		<!-- Inactive Services -->
-		<StatCard
-			label="Inactive / Standby"
-			value={loading ? "—" : inactiveCount}
-			icon={PowerOffIcon}
-			color="zinc"
-			subtext="Disabled or dormant modules"
-			{loading}
-		>
-			{#snippet footer()}
-				<StatCardFooterItem label="Resources" value="Zero Overhead" />
-				<StatCardFooterItem label="Schedule" value="On-Demand" />
-			{/snippet}
-		</StatCard>
-
-		<!-- Degraded / Error Services -->
-		<StatCard
-			label="Degraded / Error"
-			value={loading ? "—" : errorCount}
-			icon={TriangleAlertIcon}
-			color={errorCount > 0 ? "rose" : "zinc"}
-			badge={errorCount > 0 ? {
-				text: "Fault Detected",
-				variant: "error",
-				showDot: true
-			} : {
-				text: "0 Faults",
-				variant: "online",
-				showDot: true
-			}}
-			subtext={errorCount > 0 ? "Fault backoff detected" : "All daemons operating smoothly"}
-			{loading}
-		>
-			{#snippet footer()}
-				<StatCardFooterItem
-					label="Faults"
-					value={errorCount}
-					color={errorCount > 0 ? "text-destructive" : "text-muted-foreground"}
-				/>
-				<StatCardFooterItem
-					label="Backoff State"
-					value={errorCount > 0 ? "Retrying" : "None"}
-					color={errorCount > 0 ? "text-destructive" : "text-emerald-500"}
-				/>
-			{/snippet}
-		</StatCard>
-	</StatCardGrid>
 
 	<!-- Filter & Search Toolbar -->
 	<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -378,26 +277,19 @@
 		</div>
 	</div>
 
-	<!-- Services Grid -->
+	<!-- Services List -->
 	{#if loading}
-		<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-			{#each [1, 2, 3, 4, 5, 6] as _}
-				<Card.Root class="p-5 flex flex-col gap-4">
-					<div class="flex items-center justify-between">
-						<div class="flex items-center gap-3">
-							<Skeleton class="size-10 rounded-lg" />
-							<div class="flex flex-col gap-1.5">
-								<Skeleton class="h-4 w-32" />
-								<Skeleton class="h-3 w-20" />
-							</div>
-						</div>
-						<Skeleton class="h-6 w-16 rounded-full" />
+		<Card.Root class="gap-0 py-0">
+			<div class="flex flex-col divide-y divide-border">
+				{#each [1, 2, 3, 4, 5, 6] as _}
+					<div class="flex items-center gap-3 px-4 py-3">
+						<Skeleton class="size-4" />
+						<Skeleton class="h-4 w-40" />
+						<Skeleton class="ml-auto h-5 w-24" />
 					</div>
-					<Skeleton class="h-10 w-full" />
-					<Skeleton class="h-8 w-full rounded-md" />
-				</Card.Root>
-			{/each}
-		</div>
+				{/each}
+			</div>
+		</Card.Root>
 	{:else if filteredBanners.length === 0}
 		<Card.Root class="border-dashed py-12 text-center">
 			<Card.Content class="flex flex-col items-center justify-center gap-2">
@@ -423,7 +315,9 @@
 			</Card.Content>
 		</Card.Root>
 	{:else}
-		<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+		<!-- One row per service: phones keep it to two lines instead of a 280px card each. -->
+		<Card.Root class="gap-0 py-0">
+			<div class="flex flex-col divide-y divide-border">
 			{#each filteredBanners as banner (banner.id || banner.name)}
 				{@const svcId = banner.id || banner.name.toLowerCase().replace(/\s+/g, "_")}
 				{@const meta = getServiceMeta(banner.id, banner.name)}
@@ -434,158 +328,86 @@
 				{@const active = isOnline(banner.state) || banner.state.toLowerCase() === "degraded"}
 				{@const starting = isStarting(banner.state)}
 				{@const inactive = isInactive(banner.state)}
+				{@const reason = degradedReason(banner.detail)}
+				{@const t = banner.transport}
 
-				<Card.Root class="flex flex-col justify-between transition-all hover:border-zinc-600/70 hover:shadow-sm group">
-					<!-- Clickable Body: Direct Navigation to Configuration -->
-					<div
-						role="button"
-						tabindex="0"
-						onclick={() => goto(meta.configHref)}
-						onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") goto(meta.configHref); }}
-						class="flex-1 p-5 flex flex-col gap-3.5 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-primary/50 rounded-t-xl"
-					>
-						<!-- Card Top Row: Icon, Titles & Status Badge -->
-						<div class="flex items-start justify-between gap-2">
-							<div class="flex items-center gap-3">
-								<div class="bg-muted flex size-10 items-center justify-center rounded-lg border border-border/70 shrink-0 group-hover:border-primary/40 transition-colors">
-									<SvcIcon class="size-5 text-foreground group-hover:text-primary transition-colors" />
-								</div>
-								<div class="flex flex-col min-w-0">
-									<div class="flex items-center gap-1.5 flex-wrap">
-										<span class="text-foreground text-sm font-semibold truncate group-hover:text-primary transition-colors">
-											{meta.name}
-										</span>
-									</div>
-									<div class="flex items-center gap-1.5 pt-0.5">
-										<span class="bg-muted text-muted-foreground rounded px-1.5 py-0.2 font-mono text-[10px]">
-											{svcId}
-										</span>
-										<span class="text-muted-foreground text-[10px] truncate">
-											• {meta.tag}
-										</span>
-									</div>
-								</div>
-							</div>
-
-							<!-- Status Badge with Dot -->
-							<Badge variant={stateBadgeVariant(banner.state)} class="capitalize text-[11px] gap-1.5 shrink-0">
-								{#if starting}
-									<Loader2Icon class="size-3 animate-spin text-amber-500" />
-								{:else}
-									<span class={["size-2 rounded-full shrink-0", stateDotClass(banner.state)].join(" ")}></span>
-								{/if}
-								{banner.state}
-							</Badge>
-						</div>
-
-						<!-- Service Description -->
-						<p class="text-muted-foreground text-xs line-clamp-2 leading-relaxed">
-							{meta.description}
-						</p>
-
-						<!-- Transport & Uptime Info -->
-						<div class="flex items-center justify-between text-[11px] font-mono border-t border-border/50 pt-2.5">
-							<Badge variant="outline" class="font-mono text-[10px] px-1.5 py-0">
-								{meta.proto}
-							</Badge>
-							<span class="text-muted-foreground">
-								{formatUptime(banner.uptime_secs)}
-							</span>
-						</div>
-
-						{#if banner.summary}
-							<p class="font-mono text-[11px] text-foreground pt-0.5">{banner.summary}</p>
+				<div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3 transition-colors hover:bg-accent/30">
+					<SvcIcon class="size-4 shrink-0 text-muted-foreground" />
+					<a href={meta.configHref} class="flex min-w-0 flex-1 basis-56 flex-col" title={meta.description}>
+						<span class="flex items-center gap-2">
+							<span class="truncate text-sm font-medium text-foreground hover:text-selected-foreground">{meta.name}</span>
+							<span class="hidden font-mono text-xs text-muted-foreground sm:inline">{svcId}</span>
+						</span>
+						{#if reason}
+							<span class="truncate text-xs text-warning">{reason}</span>
+						{:else if banner.summary}
+							<span class="truncate font-mono text-xs text-muted-foreground">{banner.summary}</span>
+						{:else}
+							<span class="hidden truncate text-xs text-muted-foreground md:block">{meta.description}</span>
 						{/if}
+					</a>
 
-						<!-- Transport Telemetry -->
-						{#if banner.transport && (banner.transport.rx_packets > 0 || banner.transport.tx_packets > 0 || banner.transport.errors > 0 || banner.transport.rate_limited > 0 || banner.transport.dropped > 0)}
-							<div class="flex flex-wrap items-center gap-2 pt-1 border-t border-border/40 text-[10px] font-mono">
-								<span class="text-muted-foreground">Traffic:</span>
-								<span class="text-foreground font-medium">↓ {formatBytes(banner.transport.rx_bytes)}</span>
-								<span class="text-foreground font-medium">↑ {formatBytes(banner.transport.tx_bytes)}</span>
-								{#if banner.transport.rate_limited > 0}
-									<span class="text-amber-500 font-medium">{banner.transport.rate_limited} limited</span>
-								{/if}
-								{#if banner.transport.dropped > 0}
-									<span class="text-destructive font-medium">{banner.transport.dropped} dropped</span>
-								{/if}
-								{#if banner.transport.errors > 0}
-									<span class="text-destructive font-medium">{banner.transport.errors} errors</span>
-								{/if}
-							</div>
-						{/if}
-					</div>
+					{#if t && (t.errors > 0 || t.dropped > 0 || t.rate_limited > 0)}
+						<span class="flex items-center gap-2 font-mono text-xs" title={`↓ ${formatBytes(t.rx_bytes)} ↑ ${formatBytes(t.tx_bytes)}`}>
+							{#if t.rate_limited > 0}<span class="text-warning">{t.rate_limited} limited</span>{/if}
+							{#if t.dropped > 0}<span class="text-danger">{t.dropped} dropped</span>{/if}
+							{#if t.errors > 0}<span class="text-danger">{t.errors} errors</span>{/if}
+						</span>
+					{/if}
 
-					<!-- Card Footer: Navigation Link & Lifecycle Action Controls -->
-					<Card.Footer class="px-5 py-3 border-t border-border/50 flex flex-wrap items-center justify-between gap-2 bg-muted/10">
-						<!-- Configure Button -->
-						<Button
-							variant="outline"
-							size="sm"
-							href={meta.configHref}
-							title="Configure {meta.name} (persistent boot enable/disable and parameters)"
-							class="text-xs gap-1.5 h-8 font-medium hover:text-primary"
-						>
-							<SlidersIcon class="size-3.5" />
-							<span>Configure</span>
-							<ExternalLinkIcon class="size-3 text-muted-foreground" />
-						</Button>
+					<span class="hidden w-20 text-right font-mono text-xs tabular-nums text-muted-foreground sm:inline">
+						{active || starting ? formatUptime(banner.uptime_secs) : ""}
+					</span>
 
-						<!-- Service Lifecycle Actions -->
-						<div class="flex items-center gap-1.5">
-							{#if meta.canControl && isAdmin}
-								{#if inactive}
-									<!-- Start Action -->
-									<Button
-										variant="default"
-										size="sm"
-										disabled={isBusy}
-										title="Start {meta.name} in runtime"
-										onclick={(e) => {
-											e.stopPropagation();
-											executeAction(svcId, "Start");
-										}}
-										class="text-xs gap-1.5 h-8 bg-emerald-600 hover:bg-emerald-700 text-white"
-									>
-										{#if isBusy && currentAction === "Start"}
-											<Loader2Icon class="size-3.5 animate-spin" />
-										{:else}
-											<PlayIcon class="size-3.5 fill-current" />
-										{/if}
-										Start
-									</Button>
-								{:else if active}
-									<!-- Restart Action -->
-									<Button
-										variant="secondary"
-										size="sm"
-										disabled={isBusy}
-										title="Restart {meta.name} process"
-										onclick={(e) => {
-											e.stopPropagation();
-											executeAction(svcId, "Restart");
-										}}
-										class="text-xs gap-1.5 h-8"
-									>
-										{#if isBusy && currentAction === "Restart"}
-											<Loader2Icon class="size-3.5 animate-spin" />
-										{:else}
-											<RotateCwIcon class="size-3.5" />
-										{/if}
-										Restart
-									</Button>
+					<StatusBadge
+						text={banner.state}
+						variant={isOnline(banner.state) ? "online" : starting || banner.state.toLowerCase() === "degraded" ? "warning" : isError(banner.state) ? "error" : "dormant"}
+						showDot
+						class="w-24 justify-center capitalize shrink-0"
+					/>
 
-									<!-- Stop Action -->
+					<div class="ml-auto flex items-center justify-end gap-1.5">
+						{#if meta.canControl && isAdmin}
+							{#if inactive}
+								<Button
+									variant="outline"
+									size="sm"
+									disabled={isBusy}
+									title="Start {meta.name} now (to keep it on, enable it in Configure)"
+									onclick={() => executeAction(svcId, "Start")}
+									class="h-7 gap-1.5 text-xs text-success hover:text-success"
+								>
+									{#if isBusy && currentAction === "Start"}
+										<Loader2Icon class="size-3.5 animate-spin" />
+									{:else}
+										<PlayIcon class="size-3.5 fill-current" />
+									{/if}
+									Start
+								</Button>
+							{:else}
+								<Button
+									variant="outline"
+									size="sm"
+									disabled={isBusy}
+									title="Restart {meta.name}"
+									onclick={() => executeAction(svcId, "Restart")}
+									class="h-7 gap-1.5 text-xs"
+								>
+									{#if isBusy && currentAction === "Restart"}
+										<Loader2Icon class="size-3.5 animate-spin" />
+									{:else}
+										<RotateCwIcon class="size-3.5" />
+									{/if}
+									Restart
+								</Button>
+								{#if active}
 									<Button
 										variant="outline"
 										size="sm"
 										disabled={isBusy}
-										title="Stop {meta.name} in runtime (to permanently disable, use Configure)"
-										onclick={(e) => {
-											e.stopPropagation();
-											executeAction(svcId, "Stop");
-										}}
-										class="text-xs gap-1.5 h-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
+										title="Stop {meta.name} now (to keep it off, disable it in Configure)"
+										onclick={() => executeAction(svcId, "Stop")}
+										class="h-7 gap-1.5 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
 									>
 										{#if isBusy && currentAction === "Stop"}
 											<Loader2Icon class="size-3.5 animate-spin" />
@@ -594,39 +416,56 @@
 										{/if}
 										Stop
 									</Button>
-								{:else}
-									<!-- Error/Starting State: Restart Option -->
-									<Button
-										variant="secondary"
-										size="sm"
-										disabled={isBusy}
-										onclick={(e) => {
-											e.stopPropagation();
-											executeAction(svcId, "Restart");
-										}}
-										class="text-xs gap-1.5 h-8"
-									>
-										{#if isBusy && currentAction === "Restart"}
-											<Loader2Icon class="size-3.5 animate-spin" />
-										{:else}
-											<RotateCwIcon class="size-3.5" />
-										{/if}
-										Restart
-									</Button>
 								{/if}
-							{:else}
-								<!-- Core Subsystem Badge -->
-								<Badge variant="secondary" class="text-[10px] font-mono gap-1 text-muted-foreground">
-									<ShieldIcon class="size-3 text-muted-foreground" />
-									Core Task
-								</Badge>
 							{/if}
-						</div>
-					</Card.Footer>
-				</Card.Root>
+						{/if}
+						<Button
+							variant="ghost"
+							size="sm"
+							href={meta.configHref}
+							title="Configure {meta.name}"
+							class="h-7 gap-1.5 text-xs text-muted-foreground"
+						>
+							<SlidersIcon class="size-3.5" />
+							<span class="sr-only sm:not-sr-only">Configure</span>
+						</Button>
+					</div>
+				</div>
 			{/each}
-		</div>
+			</div>
+		</Card.Root>
 	{/if}
 </div>
 
 <StopImpactDialog bind:this={stopDialog} />
+
+<AlertDialog.Root
+	open={restartConfirmId !== null}
+	onOpenChange={(o) => {
+		if (!o) restartConfirmId = null;
+	}}
+>
+	<AlertDialog.Content class="rounded-lg">
+		<AlertDialog.Header>
+			<AlertDialog.Title class="text-base font-bold text-foreground">
+				Restart PPPoE?
+			</AlertDialog.Title>
+			<AlertDialog.Description class="text-xs">
+				The WAN session will disconnect and reconnect. Internet access drops for the whole network until it is back up.
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel class="cursor-pointer text-xs">Cancel</AlertDialog.Cancel>
+			<AlertDialog.Action
+				class="cursor-pointer text-xs bg-destructive text-destructive-foreground hover:bg-destructive/90"
+				onclick={() => {
+					const id = restartConfirmId;
+					restartConfirmId = null;
+					if (id) executeAction(id, "Restart", true);
+				}}
+			>
+				Restart
+			</AlertDialog.Action>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>

@@ -1,7 +1,7 @@
 <script lang="ts">
+	import { toMillis } from "$lib/utils";
 	import * as Card from "$lib/components/ui/card";
 	import { Skeleton } from "$lib/components/ui/skeleton";
-	import { Badge } from "$lib/components/ui/badge";
 	import * as Chart from "$lib/components/ui/chart/index.js";
 	import { AreaChart, BarChart } from "layerchart";
 	import ChartAreaIcon from "@lucide/svelte/icons/chart-area";
@@ -24,11 +24,11 @@
 	const chartConfig = {
 		allowed: {
 			label: "Queries Allowed",
-			color: "#38bdf8",
+			color: "var(--chart-1)",
 		},
 		blocked: {
 			label: "Ads & Trackers Blocked",
-			color: "#f43f5e",
+			color: "var(--danger)",
 		},
 	} satisfies Chart.ChartConfig;
 
@@ -43,14 +43,14 @@
 
 		const ratesMap = new Map<number, (typeof rates)[0]>();
 		for (const r of rates) {
-			const ms = r.timestamp < 10_000_000_000 ? r.timestamp * 1000 : r.timestamp;
+			const ms = toMillis(r.timestamp);
 			const bucketKey = Math.floor(ms / BUCKET_MS) * BUCKET_MS;
 			ratesMap.set(bucketKey, r);
 		}
 
 		const blockedMap = new Map<number, number>();
 		for (const b of blockedRates) {
-			const ms = b.timestamp < 10_000_000_000 ? b.timestamp * 1000 : b.timestamp;
+			const ms = toMillis(b.timestamp);
 			const bucketKey = Math.floor(ms / BUCKET_MS) * BUCKET_MS;
 			blockedMap.set(bucketKey, b.count);
 		}
@@ -122,11 +122,11 @@
 	<Card.Header class="pb-3 border-b border-border/50">
 		<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 			<div class="flex items-center gap-2">
-				<ShieldAlertIcon class="size-4 text-rose-400" />
+				<ShieldAlertIcon class="size-4 text-danger" />
 				<div>
 					<Card.Title class="text-base">Adblocking Activity (24h Timeline)</Card.Title>
 					<p class="text-muted-foreground text-xs mt-0.5">
-						Allowed DNS traffic versus blocked advertisements and telemetry
+						Allowed and blocked queries per hour
 					</p>
 				</div>
 			</div>
@@ -139,7 +139,7 @@
 						class={[
 							"inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium transition-colors",
 							chartMode === "area"
-								? "bg-background text-foreground shadow-xs"
+								? "bg-background text-foreground"
 								: "text-muted-foreground hover:text-foreground",
 						].join(" ")}
 						onclick={() => (chartMode = "area")}
@@ -153,7 +153,7 @@
 						class={[
 							"inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium transition-colors",
 							chartMode === "bar"
-								? "bg-background text-foreground shadow-xs"
+								? "bg-background text-foreground"
 								: "text-muted-foreground hover:text-foreground",
 						].join(" ")}
 						onclick={() => (chartMode = "bar")}
@@ -173,14 +173,14 @@
 				class={[
 					"flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition-all cursor-pointer select-none",
 					showAllowed
-						? "border-sky-500/40 bg-sky-500/15 text-sky-400 font-medium"
+						? "border-border bg-muted text-muted-foreground font-medium"
 						: "border-border/40 bg-muted/20 text-muted-foreground line-through opacity-60 hover:opacity-100",
 				].join(" ")}
 				onclick={() => (showAllowed = !showAllowed)}
 			>
-				<span class="size-2 rounded-full bg-sky-400"></span>
+				<span class="size-2 rounded-full" style="background: var(--chart-1)"></span>
 				<span>Queries Allowed</span>
-				<span class="font-mono text-[11px] opacity-80">({summary.allowed.toLocaleString()})</span>
+				<span class="font-mono text-xs opacity-80">({summary.allowed.toLocaleString()})</span>
 			</button>
 
 			<button
@@ -188,14 +188,14 @@
 				class={[
 					"flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition-all cursor-pointer select-none",
 					showBlocked
-						? "border-rose-500/40 bg-rose-500/15 text-rose-400 font-medium"
+						? "border-danger/40 bg-danger/15 text-danger font-medium"
 						: "border-border/40 bg-muted/20 text-muted-foreground line-through opacity-60 hover:opacity-100",
 				].join(" ")}
 				onclick={() => (showBlocked = !showBlocked)}
 			>
-				<span class="size-2 rounded-full bg-rose-500"></span>
+				<span class="size-2 rounded-full bg-danger"></span>
 				<span>Ads & Trackers Blocked</span>
-				<span class="font-mono text-[11px] opacity-80">({summary.blocked.toLocaleString()} — {summary.pct}%)</span>
+				<span class="font-mono text-xs opacity-80">({summary.blocked.toLocaleString()} — {summary.pct}%)</span>
 			</button>
 		</div>
 	</Card.Header>
@@ -271,24 +271,24 @@
 	<Card.Footer class="border-t border-border/50 bg-muted/15 px-6 py-3">
 		<div class="grid grid-cols-2 gap-4 sm:grid-cols-4 w-full text-xs font-mono">
 			<div class="flex flex-col gap-0.5">
-				<span class="text-muted-foreground text-[10px] uppercase font-sans font-semibold tracking-wider">Total Evaluated</span>
+				<span class="text-muted-foreground text-xs font-medium">Total Evaluated</span>
 				<span class="text-foreground font-bold tabular-nums text-sm">{summary.total.toLocaleString()}</span>
 			</div>
 			<div class="flex flex-col gap-0.5">
-				<span class="text-muted-foreground text-[10px] uppercase font-sans font-semibold tracking-wider">Permitted</span>
-				<span class="text-sky-400 font-bold tabular-nums text-sm">
+				<span class="text-muted-foreground text-xs font-medium">Permitted</span>
+				<span class="text-foreground font-bold tabular-nums text-sm">
 					{summary.allowed.toLocaleString()}
 				</span>
 			</div>
 			<div class="flex flex-col gap-0.5">
-				<span class="text-muted-foreground text-[10px] uppercase font-sans font-semibold tracking-wider">Blocked</span>
-				<span class="text-rose-400 font-bold tabular-nums text-sm">
+				<span class="text-muted-foreground text-xs font-medium">Blocked</span>
+				<span class="text-danger font-bold tabular-nums text-sm">
 					{summary.blocked.toLocaleString()}
 				</span>
 			</div>
 			<div class="flex flex-col gap-0.5">
-				<span class="text-muted-foreground text-[10px] uppercase font-sans font-semibold tracking-wider">Protection Rate</span>
-				<span class="text-emerald-400 font-bold tabular-nums text-sm">
+				<span class="text-muted-foreground text-xs font-medium">Protection Rate</span>
+				<span class="text-success font-bold tabular-nums text-sm">
 					{summary.pct}%
 				</span>
 			</div>

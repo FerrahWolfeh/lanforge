@@ -56,36 +56,36 @@
 				</div>
 				<ul class="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-muted-foreground">
 					<li class="flex items-center gap-1.5">
-						<CheckIcon class="size-3.5 text-emerald-500" />
+						<CheckIcon class="size-3.5 text-success" />
 						Static Hosts & Leases
 					</li>
 					<li class="flex items-center gap-1.5">
-						<CheckIcon class="size-3.5 text-emerald-500" />
+						<CheckIcon class="size-3.5 text-success" />
 						DHCPv4 & DHCPv6 Pools
 					</li>
 					<li class="flex items-center gap-1.5">
-						<CheckIcon class="size-3.5 text-emerald-500" />
+						<CheckIcon class="size-3.5 text-success" />
 						DHCP Options & TFTP
 					</li>
 					<li class="flex items-center gap-1.5">
-						<CheckIcon class="size-3.5 text-emerald-500" />
+						<CheckIcon class="size-3.5 text-success" />
 						DNS Rewrites & Upstreams
 					</li>
 					<li class="flex items-center gap-1.5">
-						<CheckIcon class="size-3.5 text-emerald-500" />
+						<CheckIcon class="size-3.5 text-success" />
 						Adblock Rules & Sources
 					</li>
 					<li class="flex items-center gap-1.5">
-						<CheckIcon class="size-3.5 text-emerald-500" />
+						<CheckIcon class="size-3.5 text-success" />
 						Reverse DNS Resolvers
 					</li>
 					<li class="flex items-center gap-1.5">
-						<CheckIcon class="size-3.5 text-emerald-500" />
+						<CheckIcon class="size-3.5 text-success" />
 						IPv6 RA Prefixes & Options
 					</li>
 					<li class="flex items-center gap-1.5">
-						<CheckIcon class="size-3.5 text-emerald-500" />
-						PPPoE WAN Concentrator
+						<CheckIcon class="size-3.5 text-success" />
+						PPPoE WAN
 					</li>
 				</ul>
 			</div>
@@ -134,7 +134,7 @@
 					accept=".json,application/json"
 					bind:this={importFileInput}
 					onchange={onFileSelected}
-					class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-xs shadow-sm file:border-0 file:bg-transparent file:text-xs file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer"
+					class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-xs file:border-0 file:bg-transparent file:text-xs file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer"
 				/>
 				{#if selectedFile}
 					<p class="text-xs text-muted-foreground">
@@ -149,7 +149,7 @@
 					<Label class="text-xs font-medium cursor-pointer" for="overwrite-switch">
 						Overwrite Existing Records
 					</Label>
-					<p class="text-[11px] text-muted-foreground">
+					<p class="text-xs text-muted-foreground">
 						Purges current records before importing instead of merging entities.
 					</p>
 				</div>

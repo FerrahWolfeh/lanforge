@@ -78,7 +78,7 @@
 
 	<!-- Zone cards grid -->
 	{#if zones.length === 0}
-		<Empty.Root class="rounded-xl border border-dashed py-12">
+		<Empty.Root class="rounded-lg border border-dashed py-12">
 			<Empty.Media>
 				<ShieldIcon class="size-10 text-muted-foreground" />
 			</Empty.Media>
@@ -113,6 +113,7 @@
 	<!-- New Zone Dialog with templates -->
 	<ZoneNewDialog
 		bind:open={newDialogOpen}
+		{zones}
 		onAdd={handleZoneAdd}
 		onClose={() => (newDialogOpen = false)}
 	/>

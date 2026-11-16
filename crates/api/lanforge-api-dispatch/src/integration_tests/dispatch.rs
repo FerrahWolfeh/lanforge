@@ -3,6 +3,7 @@ use std::fs;
 use std::iter;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -16,7 +17,8 @@ use tokio::time::sleep;
 
 use crate::ClientContext;
 use lanforge_api::api::{
-    AllowlistEntry, DnsUpstreamConfig, HostConfigEntry, Response, SystemConfigExport,
+    AllowlistEntry, DeviceRulesResponse, DnsUpstreamConfig, HostConfigEntry, Response,
+    SystemConfigExport,
 };
 #[cfg(feature = "adblock")]
 use lanforge_api::config_file::AdblockSettings;
@@ -33,7 +35,7 @@ use lanforge_db::log_engine::LogDb;
 use lanforge_db::worker::DbWorker;
 use lanforge_db_core::Stores;
 use lanforge_types::device::{Device, DeviceClass, IPv4State, Ipv6AddrOrSuffix, Origin};
-use lanforge_types::identifiers::MacAddr;
+use lanforge_types::identifiers::{DeviceIdentifier, MacAddr};
 use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::{
@@ -41,8 +43,9 @@ use lanforge_types::network::dns::adblock::{
     BlockingMode, RewriteAnswer, RewriteRule, TimeOfDay,
 };
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
+use lanforge_types::network::dns::{QueryLogEntry, QueryResult, TransportProtocol};
 use lanforge_types::network::firewall::{
-    FirewallCommitRequest, FirewallConfig, L4Protocol, PortForwardRule,
+    FirewallCommitRequest, FirewallConfig, ForwardTarget, L4Protocol, PortForwardRule,
 };
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::RaServerConfig;
@@ -524,9 +527,13 @@ async fn test_dispatch_system_config_import_overwrite() {
 #[tokio::test]
 async fn lease_release_removes_all_leases_from_pool() {
     let client_ctx = init_test_context().await;
-    let mut rx = client_ctx.ctx.bus().subscribe();
-
     let mac = MacAddr::parse("00:11:22:33:44:55").unwrap();
+    let _ = client_ctx.ctx.apply(DeviceUpdate::V4LeaseGranted {
+        mac,
+        ip: "192.168.1.100".parse().unwrap(),
+        expires: SystemTime::now() + Duration::from_secs(3600),
+    });
+    let mut rx = client_ctx.ctx.bus().subscribe();
     let res = client_ctx.handle_lease_release(mac, None).await;
 
     assert!(matches!(res, Response::Success(_)));
@@ -1861,8 +1868,6 @@ async fn upstreams_without_dns_are_unmeasured() {
 /// (60 s / 100 lines), so the log read writes that batch first.
 #[tokio::test]
 async fn a_fresh_query_is_in_the_log_at_once() {
-    use lanforge_types::network::dns::{QueryLogEntry, QueryResult, TransportProtocol};
-
     let client = init_test_context().await;
     let storage = loop {
         if let Some(s) = client.ctx.storage_handle() {
@@ -2156,4 +2161,421 @@ async fn linked_addresses_count_as_their_device() {
         stats.top_clients[0].hostname.as_deref(),
         Some("S26-Ultra-de-Pedro")
     );
+    assert_eq!(
+        stats.top_clients[0].mac.as_deref(),
+        Some("02:00:00:00:00:61")
+    );
+    assert_eq!(
+        stats.top_clients[1].mac, None,
+        "an unknown address has no MAC"
+    );
+}
+
+/// Publishes one query line as the DNS service does: `repeats` queries from `src` (carrying
+/// `mac` when the DNS knew it) for `domain`, with `result`.
+fn query_line(
+    client: &ClientContext,
+    src: &str,
+    mac: Option<MacAddr>,
+    domain: &str,
+    result: QueryResult,
+    repeats: u32,
+) {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    query_line_at(client, src, mac, domain, result, repeats, now);
+}
+
+/// [`query_line`] with the line's timestamp.
+fn query_line_at(
+    client: &ClientContext,
+    src: &str,
+    mac: Option<MacAddr>,
+    domain: &str,
+    result: QueryResult,
+    repeats: u32,
+    timestamp: u64,
+) {
+    let _ = client
+        .ctx
+        .bus()
+        .publish(LanforgeEvent::Dns(DnsEvent::QueryResolved(Arc::new(
+            QueryLogEntry {
+                timestamp,
+                src_ip: src.parse().unwrap(),
+                domain: Arc::from(domain),
+                upstream_us: 0,
+                qtype: DnsRecordType::A,
+                result,
+                cached: false,
+                src_mac: mac,
+                answer: None,
+                protocol: TransportProtocol::Udp,
+                filter: None,
+                coalesce_id: None,
+                repeats,
+                upstream: None,
+            },
+        ))));
+}
+
+/// A line stamped after the view's window (the clock was set back since it was logged) is
+/// outside the window: the totals always equal the sum of the hourly buckets.
+#[tokio::test]
+async fn dns_views_leave_out_lines_from_the_future() {
+    use QueryResult::Forwarded;
+    let client = served_client().await;
+    let phone = MacAddr::parse("02:00:00:00:00:62").unwrap();
+    leased_device(&client, phone, "192.168.1.62", "phone");
+    let later = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 3 * 3600;
+    query_line(
+        &client,
+        "192.168.1.62",
+        Some(phone),
+        "example.com",
+        Forwarded,
+        2,
+    );
+    query_line_at(
+        &client,
+        "192.168.1.62",
+        Some(phone),
+        "example.com",
+        Forwarded,
+        7,
+        later,
+    );
+    sleep(Duration::from_millis(50)).await;
+
+    let Response::DeviceDns(dns) = client.handle_device_dns(phone).await else {
+        panic!("device dns");
+    };
+    assert_eq!(dns.total, 2);
+    assert_eq!(dns.rate.iter().map(|b| b.total).sum::<u64>(), 2);
+    let Response::DnsDomain(dns) = client.handle_dns_domain("example.com".into()).await else {
+        panic!("dns domain");
+    };
+    assert_eq!(dns.total, 2);
+    assert_eq!(dns.rate.iter().map(|b| b.total).sum::<u64>(), 2);
+    assert_eq!(dns.clients[0].total, 2);
+}
+
+/// The device DNS view counts every line of the device: by its MAC, by its LAN address and by
+/// its linked addresses; a line carrying another device's MAC is not the device's even from an
+/// address it holds. Repeats count as queries, blocked lines apart.
+#[tokio::test]
+async fn device_dns_counts_all_addresses_of_the_device() {
+    use QueryResult::{Blocked, Forwarded};
+    let client = served_client().await;
+    let phone = MacAddr::parse("02:00:00:00:00:61").unwrap();
+    let other = MacAddr::parse("02:00:00:00:00:80").unwrap();
+    leased_device(&client, phone, "192.168.1.61", "phone");
+    leased_device(&client, other, "192.168.1.80", "pc");
+    let res = client
+        .handle_device_linked_addresses_set(phone, vec!["100.64.0.6".parse().unwrap()])
+        .await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+
+    query_line(&client, "192.168.1.61", None, "a.example", Forwarded, 3);
+    query_line(&client, "100.64.0.6", None, "a.example", Forwarded, 2);
+    query_line(
+        &client,
+        "192.168.1.61",
+        Some(phone),
+        "b.example",
+        Forwarded,
+        1,
+    );
+    query_line(&client, "192.168.1.61", None, "ads.example", Blocked, 4);
+    // Another device: by address, and by MAC from the phone's address.
+    query_line(&client, "192.168.1.80", None, "a.example", Forwarded, 7);
+    query_line(
+        &client,
+        "192.168.1.61",
+        Some(other),
+        "c.example",
+        Forwarded,
+        5,
+    );
+    sleep(Duration::from_millis(50)).await;
+
+    let Response::DeviceDns(dns) = client.handle_device_dns(phone).await else {
+        panic!("device dns");
+    };
+    assert_eq!((dns.total, dns.blocked), (10, 4));
+    let top: Vec<(&str, u64)> = dns
+        .top_domains
+        .iter()
+        .map(|d| (d.domain.as_str(), d.count))
+        .collect();
+    assert_eq!(top, [("a.example", 5), ("b.example", 1)]);
+    assert_eq!(dns.top_blocked_domains.len(), 1);
+    assert_eq!(dns.top_blocked_domains[0].domain, "ads.example");
+    assert!(!dns.logging_off);
+    // Hourly buckets over the whole day; the queries land in the last one.
+    assert_eq!(dns.bucket_secs, 3600);
+    assert!((24..=25).contains(&dns.rate.len()), "{}", dns.rate.len());
+    assert!(
+        dns.rate
+            .windows(2)
+            .all(|w| w[1].timestamp == w[0].timestamp + 3600)
+    );
+    let last = dns.rate.last().unwrap();
+    assert_eq!((last.total, last.blocked), (10, 4));
+    assert_eq!(dns.rate.iter().map(|b| b.total).sum::<u64>(), 10);
+
+    let unknown = MacAddr::parse("02:00:00:00:00:99").unwrap();
+    let res = client.handle_device_dns(unknown).await;
+    assert!(matches!(res, Response::NotFound { .. }), "{res:?}");
+}
+
+/// The domain view folds a device's lines (MAC, LAN address, linked address) into one row,
+/// counts repeats, keeps blocked apart, ignores other domains and matches `Example.COM.` to the
+/// log's `example.com`.
+#[tokio::test]
+async fn dns_domain_has_one_row_per_device() {
+    use QueryResult::{Blocked, Forwarded};
+    let client = served_client().await;
+    let phone = MacAddr::parse("02:00:00:00:00:61").unwrap();
+    let other = MacAddr::parse("02:00:00:00:00:80").unwrap();
+    leased_device(&client, phone, "192.168.1.61", "phone");
+    leased_device(&client, other, "192.168.1.80", "pc");
+    let res = client
+        .handle_device_linked_addresses_set(phone, vec!["fd00::61".parse().unwrap()])
+        .await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+
+    query_line(
+        &client,
+        "192.168.1.61",
+        Some(phone),
+        "example.com",
+        Forwarded,
+        5,
+    );
+    query_line(&client, "fd00::61", None, "example.com", Forwarded, 2);
+    query_line(
+        &client,
+        "192.168.1.80",
+        Some(other),
+        "example.com",
+        Blocked,
+        1,
+    );
+    query_line(
+        &client,
+        "192.168.1.80",
+        Some(other),
+        "other.example",
+        Forwarded,
+        9,
+    );
+    sleep(Duration::from_millis(50)).await;
+
+    let Response::DnsDomain(dns) = client.handle_dns_domain("Example.COM.".into()).await else {
+        panic!("dns domain");
+    };
+    assert_eq!(dns.domain, "example.com");
+    assert_eq!((dns.total, dns.blocked), (8, 1));
+    assert!(dns.last_seen.is_some());
+    assert_eq!(dns.bucket_secs, 3600);
+    assert_eq!(dns.rate.iter().map(|b| b.total).sum::<u64>(), 8);
+    assert_eq!(dns.rate.iter().map(|b| b.blocked).sum::<u64>(), 1);
+    assert_eq!(dns.clients.len(), 2);
+    let phone_row = &dns.clients[0];
+    assert_eq!(phone_row.mac.as_deref(), Some("02:00:00:00:00:61"));
+    assert_eq!(phone_row.name.as_deref(), Some("phone"));
+    assert_eq!((phone_row.total, phone_row.blocked), (7, 0));
+    assert_eq!(phone_row.addresses, ["192.168.1.61", "fd00::61"]);
+    let pc_row = &dns.clients[1];
+    assert_eq!(pc_row.mac.as_deref(), Some("02:00:00:00:00:80"));
+    assert_eq!((pc_row.total, pc_row.blocked), (1, 1));
+    assert_eq!(pc_row.addresses, ["192.168.1.80"]);
+    assert!(pc_row.last_seen > 0);
+}
+
+#[tokio::test]
+async fn dns_domain_unseen_is_empty_and_a_bad_name_is_refused() {
+    let client = served_client().await;
+    let Response::DnsDomain(dns) = client.handle_dns_domain("never.example".into()).await else {
+        panic!("dns domain");
+    };
+    assert_eq!((dns.total, dns.blocked, dns.last_seen), (0, 0, None));
+    assert!(dns.clients.is_empty());
+    assert!(!dns.rate.is_empty());
+
+    for bad in ["", ".", "a b"] {
+        let res = client.handle_dns_domain(bad.into()).await;
+        assert!(matches!(res, Response::Rejected { .. }), "{bad:?}: {res:?}");
+    }
+}
+
+fn forward_to(target: ForwardTarget, port: u16) -> PortForwardRule {
+    PortForwardRule {
+        comment: None,
+        src_zone: "external".into(),
+        internal_ip: target,
+        external_port: port,
+        internal_port: port,
+        protocol: L4Protocol::Tcp,
+        enable_hairpin: false,
+        family: None,
+    }
+}
+
+async fn device_rules(client: &ClientContext, mac: MacAddr) -> DeviceRulesResponse {
+    let Response::DeviceRules(rules) = client.handle_device_rules(mac).await else {
+        panic!("device rules");
+    };
+    *rules
+}
+
+/// The device view lists the forwards the firewall sends to the device, by `dev:` reference or
+/// by its leased address, with their index in the configured list, and never another device's.
+#[tokio::test]
+async fn device_rules_lists_the_forwards_that_reach_the_device() {
+    let (client, _dir, _path) = firewall_ctx().await;
+    let nas = MacAddr::parse("02:00:00:00:00:71").unwrap();
+    let pc = MacAddr::parse("02:00:00:00:00:72").unwrap();
+    leased_device(&client, nas, "192.168.1.71", "nas");
+    leased_device(&client, pc, "192.168.1.72", "pc");
+    let fw = FirewallConfig {
+        port_forwards: vec![
+            forward_to(ForwardTarget::Device(DeviceIdentifier::Mac(nas)), 8001),
+            forward_to(ForwardTarget::Ip("192.168.1.72".parse().unwrap()), 8002),
+            forward_to(ForwardTarget::Ip("192.168.1.71".parse().unwrap()), 8003),
+            forward_to(ForwardTarget::Device(DeviceIdentifier::Mac(pc)), 8004),
+        ],
+        ..Default::default()
+    };
+    let res = client.handle_update_firewall_config(fw).await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+
+    let rules = device_rules(&client, nas).await;
+    let seen: Vec<(usize, u16, bool)> = rules
+        .port_forwards
+        .iter()
+        .map(|f| (f.index, f.rule.external_port, f.by_device))
+        .collect();
+    assert_eq!(seen, [(0, 8001, true), (2, 8003, false)]);
+    assert_eq!(rules.forward_v4, Some("192.168.1.71".parse().unwrap()));
+
+    let rules = device_rules(&client, pc).await;
+    let seen: Vec<(usize, u16, bool)> = rules
+        .port_forwards
+        .iter()
+        .map(|f| (f.index, f.rule.external_port, f.by_device))
+        .collect();
+    assert_eq!(seen, [(1, 8002, false), (3, 8004, true)]);
+}
+
+/// Two devices announcing the same hostname: a `dev:<name>` forward and rewrite reach only the
+/// device the daemon resolves the name to.
+#[tokio::test]
+async fn device_rules_follows_the_device_the_daemon_resolves_a_name_to() {
+    let (client, _dir, _path) = firewall_ctx().await;
+    let a = MacAddr::parse("02:00:00:00:00:73").unwrap();
+    let b = MacAddr::parse("02:00:00:00:00:74").unwrap();
+    leased_device(&client, a, "192.168.1.73", "twin");
+    leased_device(&client, b, "192.168.1.74", "twin");
+    let target = DeviceIdentifier::Name("twin".into());
+    let fw = FirewallConfig {
+        port_forwards: vec![forward_to(ForwardTarget::Device(target.clone()), 9000)],
+        ..Default::default()
+    };
+    let res = client.handle_update_firewall_config(fw).await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    let rule = RewriteRule {
+        id: None,
+        domain: "twin.home".into(),
+        rtype: DnsRecordType::Device,
+        answer: RewriteAnswer::from_str("dev:twin").unwrap(),
+    };
+    let res = client.handle_dns_rewrite_add(rule).await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+
+    let winner = client.ctx.resolve_device(&target).expect("name resolves");
+    let loser = if winner == a { b } else { a };
+    let won = device_rules(&client, winner).await;
+    let lost = device_rules(&client, loser).await;
+    assert_eq!(won.port_forwards.len(), 1);
+    assert!(won.port_forwards[0].by_device);
+    assert_eq!(won.rewrites.len(), 1);
+    assert_eq!(won.rewrites[0].domain, "twin.home");
+    assert!(won.rewrites[0].id.is_some());
+    assert!(lost.port_forwards.is_empty(), "{:?}", lost.port_forwards);
+    assert!(lost.rewrites.is_empty());
+}
+
+/// Forwards only land on the lease and predictable GUAs: a device whose only IPv6 addresses
+/// are SLAAC / link-local has no IPv6 forward address. A rewrite answering the device's own
+/// address reaches it, one answering another address does not.
+#[tokio::test]
+async fn device_rules_forward_addresses_and_address_rewrites() {
+    let client = served_client().await;
+    let mac = MacAddr::parse("02:00:00:00:00:75").unwrap();
+    leased_device(&client, mac, "192.168.1.75", "cam");
+    let _ = client.ctx.apply(DeviceUpdate::SlaacObserved {
+        mac,
+        addr: "2001:db8:1::75".parse().unwrap(),
+        is_active: true,
+    });
+    let _ = client.ctx.apply(DeviceUpdate::NdpSeen {
+        mac,
+        ip: "fe80::75".parse().unwrap(),
+        is_active: true,
+    });
+    for (domain, ip) in [("cam.home", "192.168.1.75"), ("other.home", "192.168.1.99")] {
+        let rule = RewriteRule {
+            id: None,
+            domain: domain.into(),
+            rtype: DnsRecordType::A,
+            answer: RewriteAnswer::A(ip.parse().unwrap()),
+        };
+        let res = client.handle_dns_rewrite_add(rule).await;
+        assert!(matches!(res, Response::Success(_)), "{res:?}");
+    }
+
+    // A device answer falls back to the camera's address only when its reference names no
+    // device: `nvr.home` answers with the NVR, `gone.home` with the fallback.
+    let nvr = MacAddr::parse("02:00:00:00:00:77").unwrap();
+    leased_device(&client, nvr, "192.168.1.77", "nvr");
+    for (domain, identifier) in [
+        ("nvr.home", DeviceIdentifier::Mac(nvr)),
+        ("gone.home", DeviceIdentifier::Name("nobody-here".into())),
+    ] {
+        let rule = RewriteRule {
+            id: None,
+            domain: domain.into(),
+            rtype: DnsRecordType::A,
+            answer: RewriteAnswer::Device {
+                identifier,
+                fallback: Some(Box::new(RewriteAnswer::A("192.168.1.75".parse().unwrap()))),
+            },
+        };
+        let res = client.handle_dns_rewrite_add(rule).await;
+        assert!(matches!(res, Response::Success(_)), "{res:?}");
+    }
+
+    let rules = device_rules(&client, mac).await;
+    assert_eq!(rules.forward_v4, Some("192.168.1.75".parse().unwrap()));
+    assert!(rules.forward_v6.is_empty(), "{:?}", rules.forward_v6);
+    let mut domains: Vec<&str> = rules.rewrites.iter().map(|r| r.domain.as_str()).collect();
+    domains.sort_unstable();
+    assert_eq!(domains, ["cam.home", "gone.home"]);
+    assert!(rules.refused_name.is_none());
+}
+
+#[tokio::test]
+async fn device_rules_of_an_unknown_device_is_not_found() {
+    let client = served_client().await;
+    let mac = MacAddr::parse("02:00:00:00:00:76").unwrap();
+    let res = client.handle_device_rules(mac).await;
+    assert!(matches!(res, Response::NotFound { .. }), "{res:?}");
 }

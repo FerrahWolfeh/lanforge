@@ -68,7 +68,7 @@
 
 <Card.Header>
 	<div class="flex items-center gap-3">
-		<div class="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-400">
+		<div class="flex h-10 w-10 items-center justify-center rounded-lg bg-success/10 text-success">
 			<SparklesIcon class="h-5 w-5" />
 		</div>
 		<div>
@@ -78,7 +78,7 @@
 	</div>
 </Card.Header>
 <Card.Content class="space-y-4">
-	<div class="rounded-xl border bg-muted/30 p-4 space-y-2.5">
+	<div class="rounded-lg border bg-muted/30 p-4 space-y-2.5">
 		<div class="flex justify-between text-sm">
 			<span class="text-muted-foreground">Administrator:</span>
 			<span class="font-medium text-foreground">{adminUsername}</span>
@@ -165,7 +165,7 @@
 		{/if}
 		<div class="flex justify-between text-sm">
 			<span class="text-muted-foreground">Storage Engine:</span>
-			<span class="font-medium text-emerald-400">redb (embedded pure-Rust)</span>
+			<span class="font-medium text-success">redb (embedded pure-Rust)</span>
 		</div>
 	</div>
 </Card.Content>
@@ -174,7 +174,7 @@
 		<ArrowLeftIcon class="h-4 w-4" />
 		Back
 	</Button>
-	<Button onclick={onlaunch} class="gap-2 bg-emerald-600 hover:bg-emerald-500 text-white" disabled={submitting}>
+	<Button onclick={onlaunch} class="gap-2 bg-success hover:bg-success/90 text-white" disabled={submitting}>
 		{#if submitting}
 			Activating Lanforge...
 		{:else}

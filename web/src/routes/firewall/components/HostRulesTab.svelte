@@ -11,6 +11,7 @@
 	import ArrowLeftRightIcon from "@lucide/svelte/icons/arrow-left-right";
 	import HelpPopover from "$lib/components/HelpPopover.svelte";
 	import type { FirewallZone, HostPortRule, L4Protocol } from "$lib/api/types";
+	import { portNumberSchema } from "$lib/utils/validation";
 
 	interface Props {
 		zones: FirewallZone[];
@@ -24,10 +25,16 @@
 	let newPort = $state<number | "">(22);
 	let newProto = $state<L4Protocol>("Tcp");
 	let newComment = $state("");
+	let portError = $state<string | null>(null);
 
 	function handleAddPort(zoneName: string) {
-		if (typeof newPort !== "number" || newPort < 1 || newPort > 65535) return;
-		const portNumber = newPort;
+		const parsed = portNumberSchema.safeParse(newPort);
+		if (!parsed.success) {
+			portError = parsed.error.issues[0]?.message ?? "Invalid port";
+			return;
+		}
+		portError = null;
+		const portNumber = parsed.data;
 		const updatedZones = zones.map((z) => {
 			if (z.name !== zoneName) return z;
 			const newRule: HostPortRule = {
@@ -80,14 +87,14 @@
 	</div>
 
 	<!-- Informational banner -->
-	<div class="flex items-center justify-between gap-3 text-xs text-muted-foreground bg-muted/40 rounded-xl p-3 border border-border">
+	<div class="flex items-center justify-between gap-3 text-xs text-muted-foreground bg-muted/40 rounded-lg p-3 border border-border">
 		<div class="flex items-center gap-2">
 			<InfoIcon class="size-4 shrink-0 text-primary" />
 			<span>
 				Open ports for direct inbound access to router host services (SSH, WebUI, DNS). Rules managed dynamically by daemons are badged accordingly.
 			</span>
 		</div>
-		<div class="hidden sm:flex items-center gap-1 shrink-0 text-[11px] text-muted-foreground">
+		<div class="hidden sm:flex items-center gap-1 shrink-0 text-xs text-muted-foreground">
 			<ArrowLeftRightIcon class="size-3.5" />
 			<span>Opening ports for LAN devices? Use <strong>Port Forwarding</strong></span>
 		</div>
@@ -105,7 +112,7 @@
 							</Card.Title>
 							<Badge
 								variant={zone.input_policy === "Accept" ? "default" : "outline"}
-								class="text-[10px] uppercase font-mono"
+								class="text-xs font-mono"
 							>
 								Input: {zone.input_policy}
 							</Badge>
@@ -117,6 +124,7 @@
 								class="h-7 text-xs gap-1"
 								onclick={() => {
 									addingZone = zone.name;
+									portError = null;
 									newPort = 22;
 									newComment = "";
 								}}
@@ -143,7 +151,7 @@
 								<div class="flex items-center justify-between text-xs py-1 px-2 rounded-md bg-muted/50 border border-border/50">
 									<div class="flex items-center gap-2">
 										<span class="font-mono font-semibold text-foreground">{rule.port}</span>
-										<Badge variant="outline" class="text-[10px] font-mono uppercase">
+										<Badge variant="outline" class="text-xs font-mono uppercase">
 											{rule.protocol}
 										</Badge>
 										{#if rule.comment}
@@ -170,32 +178,36 @@
 							<span class="text-xs font-semibold text-foreground">Open New Port</span>
 							<div class="grid grid-cols-2 gap-2">
 								<div>
-									<label class="text-[10px] text-muted-foreground block mb-0.5" for={`port-${zone.name}`}>Port Number</label>
+									<label class="text-xs text-muted-foreground block mb-0.5" for={`port-${zone.name}`}>Port Number</label>
 									<Input
 										id={`port-${zone.name}`}
 										type="number"
 										min="1"
 										max="65535"
 										bind:value={newPort}
+										aria-invalid={Boolean(portError)}
 										class="h-7 text-xs font-mono"
 									/>
+									{#if portError}
+										<p class="text-xs text-destructive mt-0.5">{portError}</p>
+									{/if}
 								</div>
 								<div>
-									<span class="text-[10px] text-muted-foreground block mb-0.5">Protocol</span>
+									<span class="text-xs text-muted-foreground block mb-0.5">Protocol</span>
 									<ToggleGroup.Root
 										type="single"
 										bind:value={newProto}
 										variant="outline"
 										class="w-full h-7"
 									>
-										<ToggleGroup.Item value="Tcp" class="flex-1 text-[10px] h-7 px-1">TCP</ToggleGroup.Item>
-										<ToggleGroup.Item value="Udp" class="flex-1 text-[10px] h-7 px-1">UDP</ToggleGroup.Item>
-										<ToggleGroup.Item value="Both" class="flex-1 text-[10px] h-7 px-1">Both</ToggleGroup.Item>
+										<ToggleGroup.Item value="Tcp" class="flex-1 text-xs h-7 px-1">TCP</ToggleGroup.Item>
+										<ToggleGroup.Item value="Udp" class="flex-1 text-xs h-7 px-1">UDP</ToggleGroup.Item>
+										<ToggleGroup.Item value="Both" class="flex-1 text-xs h-7 px-1">Both</ToggleGroup.Item>
 									</ToggleGroup.Root>
 								</div>
 							</div>
 							<div>
-								<label class="text-[10px] text-muted-foreground block mb-0.5" for={`comment-${zone.name}`}>Comment</label>
+								<label class="text-xs text-muted-foreground block mb-0.5" for={`comment-${zone.name}`}>Comment</label>
 								<Input
 									id={`comment-${zone.name}`}
 									type="text"
@@ -227,13 +239,13 @@
 					<!-- Dynamic service badges -->
 					{#if zone.name === "internal" || zone.name === "trusted"}
 						<div class="pt-2 border-t border-border flex flex-wrap items-center gap-1.5">
-							<span class="text-[10px] text-muted-foreground w-full">Daemon dynamic ports:</span>
-							<Badge variant="secondary" class="text-[10px] gap-1 font-mono">
-								<ShieldCheckIcon class="size-2.5 text-emerald-500" />
+							<span class="text-xs text-muted-foreground w-full">Daemon dynamic ports:</span>
+							<Badge variant="secondary" class="text-xs gap-1 font-mono">
+								<ShieldCheckIcon class="size-2.5 text-success" />
 								DNS · 53 (udp/tcp)
 							</Badge>
-							<Badge variant="secondary" class="text-[10px] gap-1 font-mono">
-								<ShieldCheckIcon class="size-2.5 text-emerald-500" />
+							<Badge variant="secondary" class="text-xs gap-1 font-mono">
+								<ShieldCheckIcon class="size-2.5 text-success" />
 								WebUI · 8080/443 (tcp)
 							</Badge>
 						</div>

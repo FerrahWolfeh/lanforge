@@ -1,4 +1,6 @@
 <script lang="ts">
+import { errorMessage } from "$lib/utils";
+	import { untrack } from "svelte";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import { Button } from "$lib/components/ui/button";
 	import { Switch } from "$lib/components/ui/switch";
@@ -11,9 +13,11 @@
 	let {
 		open = $bindable(false),
 		device = null,
+		onSaved = () => {},
 	}: {
 		open?: boolean;
 		device?: DeviceEntry | null;
+		onSaved?: () => void;
 	} = $props();
 
 	let names = $state<string[]>([]);
@@ -39,15 +43,19 @@
 				.filter((g) => g.clients.some((c) => c.devices.length === 0 && !c.selector.startsWith("dev:")))
 				.map((g) => g.name);
 			bypass = deviceIn(res.bypass, mac);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to load adblock groups");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to load adblock groups"));
 		} finally {
 			loading = false;
 		}
 	}
 
 	$effect(() => {
-		if (open && device) load(device);
+		// `device` is replaced on every page reload: read it untracked so an open dialog keeps its edits.
+		if (open) {
+			const dev = untrack(() => device);
+			if (dev) load(dev);
+		}
 	});
 
 	function toggle(name: string, on: boolean) {
@@ -61,8 +69,9 @@
 			await dnsAdblockDeviceSet(device.mac, member, bypass);
 			toast.success(`Adblock groups of ${device.hostname || device.mac} saved`);
 			open = false;
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to save the adblock groups");
+			onSaved();
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to save the adblock groups"));
 		} finally {
 			submitting = false;
 		}
@@ -96,7 +105,7 @@
 						<span class="font-mono">{name}</span>
 						<span class="flex items-center gap-2">
 							{#if viaSubnet.includes(name)}
-								<span class="text-[10px] text-muted-foreground">may also match by subnet</span>
+								<span class="text-xs text-muted-foreground">may also match by subnet</span>
 							{/if}
 							<Switch
 								checked={member.includes(name)}
@@ -107,11 +116,11 @@
 					</label>
 				{/each}
 				<label
-					class="flex items-center justify-between gap-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2"
+					class="flex items-center justify-between gap-3 rounded-md border border-warning/30 bg-warning/5 px-3 py-2"
 				>
 					<span>
 						<span class="font-medium">Bypass</span>
-						<span class="block text-[11px] text-muted-foreground">Never filtered.</span>
+						<span class="block text-xs text-muted-foreground">Never filtered.</span>
 					</span>
 					<Switch bind:checked={bypass} />
 				</label>

@@ -1,5 +1,6 @@
 pub mod adblock;
 pub mod cache;
+pub mod domain;
 pub mod filter;
 pub mod groups;
 pub mod query;

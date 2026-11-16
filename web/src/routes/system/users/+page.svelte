@@ -4,23 +4,16 @@
 	import UsersIcon from "@lucide/svelte/icons/users";
 	import UserPlusIcon from "@lucide/svelte/icons/user-plus";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
-	import KeyRoundIcon from "@lucide/svelte/icons/key-round";
 	import { userList } from "$lib/api/client";
 	import type { UserInfo } from "$lib/api/types";
 	import { auth } from "$lib/stores/auth.svelte";
 	import { toast } from "svelte-sonner";
-
-	import UserStatsCards from "./components/UserStatsCards.svelte";
 	import UserTable from "./components/UserTable.svelte";
 	import UserCreateDialog from "./components/UserCreateDialog.svelte";
 	import UserPasswordDialog from "./components/UserPasswordDialog.svelte";
-	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import NavTabs from "$lib/components/NavTabs.svelte";
+	import { accessTabs } from "../tabs";
 	import PageHeader from "$lib/components/PageHeader.svelte";
-
-	const accessTabs: NavTabItem[] = [
-		{ label: "Users & Access", href: "/system/users", icon: UsersIcon },
-		{ label: "API & Auth Keys", href: "/system/keys", icon: KeyRoundIcon },
-	];
 
 	let users = $state<UserInfo[]>([]);
 	let isLoading = $state(true);
@@ -55,21 +48,21 @@
 </script>
 
 <svelte:head>
-	<title>Users & Access — Lanforge</title>
+	<title>Users — Lanforge</title>
 </svelte:head>
 
 <div class="flex flex-col gap-6 w-full pb-12">
 	<!-- Top Header -->
 	<PageHeader
-		title="Users & Access"
-		description="Manage local user accounts for web authentication and permission controls in Lanforge."
+		title="Users"
+		description="Accounts that can sign in to this WebUI."
 		icon={UsersIcon}
 	>
 		{#snippet actions()}
 			<Button
 				variant="outline"
 				size="sm"
-				class="rounded-xl cursor-pointer text-xs"
+				class="rounded-md cursor-pointer text-xs"
 				onclick={() => loadUsers(true)}
 				disabled={isRefreshing}
 			>
@@ -82,7 +75,7 @@
 
 			<Button
 				size="sm"
-				class="rounded-xl cursor-pointer text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm"
+				class="rounded-md cursor-pointer text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90"
 				onclick={() => (isCreateOpen = true)}
 			>
 				<UserPlusIcon data-icon="inline-start" />
@@ -94,8 +87,6 @@
 	<!-- Access Control Sub-Navigation Tabs -->
 	<NavTabs tabs={accessTabs} ariaLabel="Access and authentication navigation" />
 
-	<!-- KPI Summary Cards -->
-	<UserStatsCards {users} {isLoading} />
 
 	<!-- User Table -->
 	<UserTable

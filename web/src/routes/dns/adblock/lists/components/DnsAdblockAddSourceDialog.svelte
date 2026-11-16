@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { createTimers, errorMessage } from "$lib/utils";
+	import { onDestroy } from "svelte";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import * as Select from "$lib/components/ui/select";
 	import { Input } from "$lib/components/ui/input";
@@ -7,7 +9,7 @@
 	import LinkIcon from "@lucide/svelte/icons/link";
 	import { toast } from "svelte-sonner";
 	import { dnsAdblockUrlAdd } from "$lib/api/client";
-	import type { AdblockSourceFormat, DnsAdblockUrlEntry } from "$lib/api/types";
+	import type { AdblockSourceFormat } from "$lib/api/types";
 
 	let {
 		open = $bindable(false),
@@ -28,6 +30,10 @@
 	let kind = $state<"blocklist" | "allowlist">("blocklist");
 	let format = $state<AdblockSourceFormat>("auto");
 	let submitting = $state(false);
+
+	// Pending follow-up refreshes, cleared on unmount.
+	const { later, clear: clearTimers } = createTimers();
+	onDestroy(clearTimers);
 
 	async function handleSubmit(e: Event) {
 		e.preventDefault();
@@ -62,10 +68,10 @@
 			// The daemon loads a new source on its own (the others are only revalidated); a
 			// forced reload would download every list again.
 			onAdded();
-			setTimeout(onAdded, 1500);
-			setTimeout(onAdded, 3500);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to add source URL");
+			later(onAdded, 1500);
+			later(onAdded, 3500);
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to add source URL"));
 		} finally {
 			submitting = false;
 		}
@@ -96,7 +102,7 @@
 					bind:value={name}
 					class="text-xs"
 				/>
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					Friendly identifier used in TOML configuration and dashboard views.
 				</p>
 			</div>
@@ -111,7 +117,7 @@
 					required
 					class="font-mono text-xs"
 				/>
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					Must be publicly accessible via HTTP/HTTPS.
 				</p>
 			</div>
@@ -207,7 +213,7 @@
 						</Select.Item>
 					</Select.Content>
 				</Select.Root>
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					Auto-detection inspects headers and content during download.
 				</p>
 			</div>

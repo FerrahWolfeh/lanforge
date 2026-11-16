@@ -16,30 +16,30 @@
 	} = $props();
 
 	const typeColors: Record<string, string> = {
-		A: "#38bdf8", // Sky 400
-		AAAA: "#c084fc", // Purple 400
-		HTTPS: "#818cf8", // Indigo 400
-		PTR: "#34d399", // Emerald 400
-		CNAME: "#fbbf24", // Amber 400
-		TXT: "#94a3b8", // Slate 400
-		SRV: "#2dd4bf", // Teal 400
-		MX: "#f43f5e", // Rose 400
-		SOA: "#a78bfa", // Violet 400
-		NS: "#22d3ee", // Cyan 400
+		A: "var(--chart-1)",
+		AAAA: "var(--chart-3)",
+		HTTPS: "var(--chart-3)",
+		PTR: "var(--chart-2)",
+		CNAME: "var(--chart-4)",
+		TXT: "var(--muted-foreground)",
+		SRV: "var(--chart-2)",
+		MX: "var(--chart-5)",
+		SOA: "var(--chart-3)",
+		NS: "var(--chart-1)",
 	};
 
 	const chartConfig = {
-		A: { label: "A (IPv4)", color: "#38bdf8" },
-		AAAA: { label: "AAAA (IPv6)", color: "#c084fc" },
-		HTTPS: { label: "HTTPS", color: "#818cf8" },
-		PTR: { label: "PTR (Reverse)", color: "#34d399" },
-		CNAME: { label: "CNAME", color: "#fbbf24" },
-		TXT: { label: "TXT", color: "#94a3b8" },
-		SRV: { label: "SRV", color: "#2dd4bf" },
-		MX: { label: "MX", color: "#f43f5e" },
-		SOA: { label: "SOA", color: "#a78bfa" },
-		NS: { label: "NS", color: "#22d3ee" },
-		other: { label: "Other", color: "#64748b" },
+		A: { label: "A (IPv4)", color: "var(--chart-1)" },
+		AAAA: { label: "AAAA (IPv6)", color: "var(--chart-3)" },
+		HTTPS: { label: "HTTPS", color: "var(--chart-3)" },
+		PTR: { label: "PTR (Reverse)", color: "var(--chart-2)" },
+		CNAME: { label: "CNAME", color: "var(--chart-4)" },
+		TXT: { label: "TXT", color: "var(--muted-foreground)" },
+		SRV: { label: "SRV", color: "var(--chart-2)" },
+		MX: { label: "MX", color: "var(--chart-5)" },
+		SOA: { label: "SOA", color: "var(--chart-3)" },
+		NS: { label: "NS", color: "var(--chart-1)" },
+		other: { label: "Other", color: "var(--muted-foreground)" },
 	} satisfies Chart.ChartConfig;
 
 	const queryTypesList = $derived.by(() => {
@@ -50,7 +50,7 @@
 				qtype: item.qtype,
 				count: item.count,
 				pct: Math.round((item.count / total) * 100),
-				color: typeColors[item.qtype] || "#64748b",
+				color: typeColors[item.qtype] || "var(--muted-foreground)",
 			}))
 			.sort((a, b) => b.count - a.count);
 	});
@@ -64,13 +64,13 @@
 	<Card.Header class="pb-3 border-b border-border/50">
 		<div class="flex items-center justify-between">
 			<div class="flex items-center gap-2">
-				<ChartPieIcon class="size-4 text-purple-400" />
+				<ChartPieIcon class="size-4 text-muted-foreground" />
 				<div>
 					<Card.Title class="text-base">Query Types</Card.Title>
 					<p class="text-muted-foreground text-xs mt-0.5">Distribution of requested record types</p>
 				</div>
 			</div>
-			<Badge variant="outline" class="font-mono text-[10px]">
+			<Badge variant="outline" class="font-mono text-xs">
 				{queryTypesList.length} types
 			</Badge>
 		</div>
@@ -113,7 +113,7 @@
 					<span class="text-xl font-bold font-mono tracking-tight text-foreground">
 						{totalQueries.toLocaleString()}
 					</span>
-					<span class="text-[10px] text-muted-foreground uppercase tracking-wider font-medium">
+					<span class="text-xs font-medium text-muted-foreground">
 						Queries
 					</span>
 				</div>
@@ -129,7 +129,7 @@
 						</div>
 						<div class="flex items-center gap-2">
 							<span class="text-muted-foreground">{item.count.toLocaleString()}</span>
-							<Badge variant="secondary" class="font-mono text-[10px] px-1.5 py-0">
+							<Badge variant="secondary" class="font-mono text-xs px-1.5 py-0">
 								{item.pct}%
 							</Badge>
 						</div>

@@ -2,7 +2,6 @@
 	import { auth } from "$lib/stores/auth.svelte";
 	import FloatingSaveBar from "$lib/components/FloatingSaveBar.svelte";
 	import {
-		trafficStatus,
 		trafficConfig,
 		trafficUpdateConfig,
 		getSetupStatus,
@@ -10,20 +9,21 @@
 	} from "$lib/api/client";
 	import type {
 		TrafficConfig,
-		TrafficStatusResponse,
 		NetworkInterfaceInfo,
 		SetupStatusResponse,
 		PppoeConfig,
 	} from "$lib/api/types";
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
+	import { useTrafficStatus } from "../trafficStatusContext.svelte";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 
 	import TrafficTuningTab from "../components/TrafficTuningTab.svelte";
 
 	const canEdit = $derived(auth.can("config_write"));
 
-	let status = $state<TrafficStatusResponse | null>(null);
+	const shared = useTrafficStatus();
+	const status = $derived(shared.value);
 	let serverConfig = $state<TrafficConfig | null>(null);
 	let availableInterfaces = $state<NetworkInterfaceInfo[]>([]);
 	let setupStatus = $state<SetupStatusResponse | null>(null);
@@ -75,13 +75,13 @@
 	const isDirty = $derived.by(() => {
 		if (!serverConfig) return false;
 		if (tuningEnabled !== serverConfig.tuning.enabled) return true;
-		if (tuningCpuMask !== serverConfig.tuning.cpu_mask) return true;
-		if (tuningRxRing !== serverConfig.tuning.rx_ring) return true;
-		if (tuningTxRing !== serverConfig.tuning.tx_ring) return true;
-		if (tuningDisableEee !== serverConfig.tuning.disable_eee) return true;
-		if (tuningUdpGroForwarding !== serverConfig.tuning.udp_gro_forwarding) return true;
-		if (Number(tuningRpsFlowEntries) !== serverConfig.tuning.rps_flow_entries) return true;
-		if (Number(tuningRpsFlowCnt) !== serverConfig.tuning.rps_flow_cnt) return true;
+		if (tuningCpuMask !== (serverConfig.tuning.cpu_mask || "auto")) return true;
+		if (tuningRxRing !== (serverConfig.tuning.rx_ring || "auto")) return true;
+		if (tuningTxRing !== (serverConfig.tuning.tx_ring || "auto")) return true;
+		if (tuningDisableEee !== (serverConfig.tuning.disable_eee ?? true)) return true;
+		if (tuningUdpGroForwarding !== (serverConfig.tuning.udp_gro_forwarding ?? true)) return true;
+		if (Number(tuningRpsFlowEntries) !== (serverConfig.tuning.rps_flow_entries || 32768)) return true;
+		if (Number(tuningRpsFlowCnt) !== (serverConfig.tuning.rps_flow_cnt || 4096)) return true;
 		if (JSON.stringify(tuningInterfaces) !== JSON.stringify(serverConfig.tuning.interfaces)) return true;
 		return false;
 	});
@@ -90,13 +90,13 @@
 		if (!isDirty || !serverConfig) return 0;
 		let count = 0;
 		if (tuningEnabled !== serverConfig.tuning.enabled) count++;
-		if (tuningCpuMask !== serverConfig.tuning.cpu_mask) count++;
-		if (tuningRxRing !== serverConfig.tuning.rx_ring) count++;
-		if (tuningTxRing !== serverConfig.tuning.tx_ring) count++;
-		if (tuningDisableEee !== serverConfig.tuning.disable_eee) count++;
-		if (tuningUdpGroForwarding !== serverConfig.tuning.udp_gro_forwarding) count++;
-		if (Number(tuningRpsFlowEntries) !== serverConfig.tuning.rps_flow_entries) count++;
-		if (Number(tuningRpsFlowCnt) !== serverConfig.tuning.rps_flow_cnt) count++;
+		if (tuningCpuMask !== (serverConfig.tuning.cpu_mask || "auto")) count++;
+		if (tuningRxRing !== (serverConfig.tuning.rx_ring || "auto")) count++;
+		if (tuningTxRing !== (serverConfig.tuning.tx_ring || "auto")) count++;
+		if (tuningDisableEee !== (serverConfig.tuning.disable_eee ?? true)) count++;
+		if (tuningUdpGroForwarding !== (serverConfig.tuning.udp_gro_forwarding ?? true)) count++;
+		if (Number(tuningRpsFlowEntries) !== (serverConfig.tuning.rps_flow_entries || 32768)) count++;
+		if (Number(tuningRpsFlowCnt) !== (serverConfig.tuning.rps_flow_cnt || 4096)) count++;
 		if (JSON.stringify(tuningInterfaces) !== JSON.stringify(serverConfig.tuning.interfaces)) count++;
 		return Math.max(count, 1);
 	});
@@ -104,14 +104,12 @@
 	async function loadAll(silent = false) {
 		if (!silent) loading = true;
 		try {
-			const [s, c, setupRes, pppoeRes] = await Promise.all([
-				trafficStatus().catch(() => null),
+			const [c, setupRes, pppoeRes] = await Promise.all([
 				trafficConfig().catch(() => null),
 				getSetupStatus().catch(() => null),
 				// The PPPoE config holds the password (config_write); it only names the WAN here.
 				canEdit ? pppoeConfig().catch(() => null) : Promise.resolve(null),
 			]);
-			status = s;
 			setupStatus = setupRes;
 			pppoeCfg = pppoeRes;
 
@@ -139,6 +137,8 @@
 		toast.info("Changes discarded");
 	}
 
+	let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+
 	async function handleSave() {
 		if (!isDirty || !serverConfig) return;
 		saving = true;
@@ -163,9 +163,8 @@
 			syncFormFromConfig(payload);
 			toast.success("Hardware NIC tuning applied successfully");
 
-			setTimeout(async () => {
-				const s = await trafficStatus().catch(() => null);
-				if (s) status = s;
+			refreshTimer = setTimeout(async () => {
+				await shared.refresh();
 			}, 600);
 		} catch (err) {
 			toast.error(`Failed to save: ${err instanceof Error ? err.message : String(err)}`);
@@ -176,6 +175,7 @@
 
 	onMount(() => {
 		loadAll(false);
+		return () => clearTimeout(refreshTimer);
 	});
 </script>
 

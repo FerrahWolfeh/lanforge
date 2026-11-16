@@ -4,11 +4,9 @@
 	import PlayIcon from "@lucide/svelte/icons/play";
 	import SquareIcon from "@lucide/svelte/icons/square";
 	import RotateCwIcon from "@lucide/svelte/icons/rotate-cw";
-	import FolderIcon from "@lucide/svelte/icons/folder";
 	import RadioIcon from "@lucide/svelte/icons/radio";
 	import StatCard from "$lib/components/StatCard.svelte";
 	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
-	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
 
 	let {
 		loading = false,
@@ -35,16 +33,10 @@
 <StatCardGrid cols={2}>
 	<!-- Card 1: Service Lifecycle -->
 	<StatCard
-		label="TFTP Daemon Status"
+		label="Service"
 		value={serviceState ? serviceState.charAt(0).toUpperCase() + serviceState.slice(1) : "Inactive"}
 		icon={HardDriveDownloadIcon}
-		color={isServiceActive ? "emerald" : "zinc"}
-		badge={{
-			text: enabled ? "Enabled" : "Disabled",
-			variant: enabled ? "online" : "dormant",
-			showDot: true
-		}}
-		subtext={enabled ? "Daemon enabled in system configuration" : "Service disabled in configuration"}
+		subtext={enabled ? "Enabled in lanforge.toml" : "Disabled in lanforge.toml ([tftp] enabled = false)"}
 		{loading}
 	>
 		{#snippet actions()}
@@ -65,7 +57,7 @@
 					<Button
 						variant="outline"
 						size="sm"
-						class="h-7 px-2.5 text-xs text-rose-500 hover:text-rose-400 border-rose-500/20 hover:bg-rose-500/10"
+						class="h-7 px-2.5 text-xs text-danger hover:text-danger border-danger/20 hover:bg-danger/10"
 						onclick={() => onServiceControl("Stop")}
 						disabled={serviceActionLoading !== null}
 						title="Stop TFTP Server"
@@ -77,7 +69,7 @@
 					<Button
 						variant="outline"
 						size="sm"
-						class="h-7 px-2.5 text-xs text-emerald-500 hover:text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/10"
+						class="h-7 px-2.5 text-xs text-success hover:text-success border-success/20 hover:bg-success/10"
 						onclick={() => onServiceControl("Start")}
 						disabled={serviceActionLoading !== null}
 						title="Start TFTP Server"
@@ -90,28 +82,15 @@
 			{/if}
 		{/snippet}
 
-		{#snippet footer()}
-			<StatCardFooterItem
-				label="Daemon"
-				value={isServiceActive ? "Running" : "Stopped"}
-				color={isServiceActive ? "text-emerald-500" : "text-muted-foreground"}
-			/>
-			<StatCardFooterItem label="Supervisor" value="Managed" />
-		{/snippet}
 	</StatCard>
 
 	<!-- Card 2: Service Binding -->
 	<StatCard
-		label="Service Binding"
-		value={listenAddr || "0.0.0.0:69"}
+		label="Listening On"
+		value={listenAddr || "—"}
 		icon={RadioIcon}
-		color="sky"
-		subtext="UDP Port 69 (Dual-Stack)"
+		subtext={rootDir ? `Serving files from ${rootDir}` : ""}
 		{loading}
 	>
-		{#snippet footer()}
-			<StatCardFooterItem label="Root Directory" value={rootDir.split("/").pop() || "tftp"} />
-			<StatCardFooterItem label="Protocol" value="RFC 1350 TFTP" />
-		{/snippet}
 	</StatCard>
 </StatCardGrid>

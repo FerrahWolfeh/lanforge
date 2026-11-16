@@ -1,4 +1,6 @@
 <script lang="ts">
+import { errorMessage } from "$lib/utils";
+	import { originText } from "$lib/components/dns/dnsLog";
 	import { onMount } from "svelte";
 	import { toast } from "svelte-sonner";
 	import SearchIcon from "@lucide/svelte/icons/search";
@@ -9,26 +11,26 @@
 	import { Input } from "$lib/components/ui/input";
 	import { Badge } from "$lib/components/ui/badge";
 	import {
-		dnsAdblockStatus,
 		dnsStats,
 		dnsAnalytics,
 		dnsAdblockUrls,
 		dnsAdblockCheck,
 	} from "$lib/api/client";
 	import type {
-		DnsAdblockStatusResponse,
 		DnsStatsResponse,
 		DnsAnalyticsResponse,
 		DnsAdblockUrlEntry,
 		AdblockCheckResponse,
 	} from "$lib/api/types";
 
+	import { useAdblockStatus } from "./adblockStatusContext.svelte";
 	import DnsAdblockStatsCards from "./components/DnsAdblockStatsCards.svelte";
 	import DnsAdblockActivityChart from "./components/DnsAdblockActivityChart.svelte";
 	import DnsAdblockTopBlocked from "./components/DnsAdblockTopBlocked.svelte";
 
 	let loading = $state(true);
-	let status = $state<DnsAdblockStatusResponse | null>(null);
+	const shared = useAdblockStatus();
+	const status = $derived(shared.value);
 	let stats = $state<DnsStatsResponse | null>(null);
 	let analytics = $state<DnsAnalyticsResponse | null>(null);
 	let sources = $state<DnsAdblockUrlEntry[]>([]);
@@ -42,28 +44,29 @@
 	async function loadAllData() {
 		loading = true;
 		try {
-			const [statusRes, statsRes, analyticsRes, sourcesRes] =
+			const [statsRes, analyticsRes, sourcesRes] =
 				await Promise.allSettled([
-					dnsAdblockStatus(),
 					dnsStats(),
 					dnsAnalytics(10),
 					dnsAdblockUrls(),
 				]);
 
-			if (statusRes.status === "fulfilled" && statusRes.value) {
-				status = statusRes.value;
-			}
+			// A failed call keeps the last good data for its card.
 			if (statsRes.status === "fulfilled" && statsRes.value) {
 				stats = statsRes.value;
+			} else if (statsRes.status === "rejected") {
+				toast.error("Failed to load DNS statistics");
 			}
 			if (analyticsRes.status === "fulfilled" && analyticsRes.value) {
 				analytics = analyticsRes.value;
+			} else if (analyticsRes.status === "rejected") {
+				toast.error("Failed to load DNS analytics");
 			}
 			if (sourcesRes.status === "fulfilled" && sourcesRes.value) {
 				sources = sourcesRes.value;
+			} else if (sourcesRes.status === "rejected") {
+				toast.error("Failed to load adblock sources");
 			}
-		} catch {
-			toast.error("Failed to load adblock telemetry");
 		} finally {
 			loading = false;
 		}
@@ -71,6 +74,7 @@
 
 	async function handleCheckDomain(e?: Event) {
 		if (e) e.preventDefault();
+		if (checking) return;
 		const domain = checkDomainInput.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/\.$/, "");
 		if (!domain) {
 			toast.error("Please enter a domain to check");
@@ -82,8 +86,8 @@
 		try {
 			const res = await dnsAdblockCheck(domain, checkClientInput.trim() || undefined);
 			checkResult = res;
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to check domain");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to check domain"));
 		} finally {
 			checking = false;
 		}
@@ -122,7 +126,7 @@
 						Filter Rule Diagnostic
 					</Card.Title>
 				</div>
-				<Badge variant="outline" class="font-mono text-[11px]">
+				<Badge variant="outline" class="font-mono text-xs">
 					Live Resolution Check
 				</Badge>
 			</div>
@@ -164,24 +168,27 @@
 				<span>Quick test:</span>
 				<button
 					type="button"
+					disabled={checking}
 					onclick={() => setQuickCheck("doubleclick.net")}
-					class="underline hover:text-foreground font-mono"
+					class="underline hover:text-foreground font-mono disabled:opacity-50"
 				>
 					doubleclick.net
 				</button>
 				<span>•</span>
 				<button
 					type="button"
+					disabled={checking}
 					onclick={() => setQuickCheck("google-analytics.com")}
-					class="underline hover:text-foreground font-mono"
+					class="underline hover:text-foreground font-mono disabled:opacity-50"
 				>
 					google-analytics.com
 				</button>
 				<span>•</span>
 				<button
 					type="button"
+					disabled={checking}
 					onclick={() => setQuickCheck("github.com")}
-					class="underline hover:text-foreground font-mono"
+					class="underline hover:text-foreground font-mono disabled:opacity-50"
 				>
 					github.com
 				</button>
@@ -202,13 +209,13 @@
 				</div>
 			{/if}
 			{#if checkResult}
-				<div class="rounded-lg border p-4 space-y-3 {checkResult.matched && checkResult.filter?.action === 'block' ? 'bg-rose-500/5 border-rose-500/20' : 'bg-emerald-500/5 border-emerald-500/20'}">
+				<div class="rounded-lg border p-4 space-y-3 {checkResult.matched && checkResult.filter?.action === 'block' ? 'bg-danger/5 border-danger/20' : 'bg-success/5 border-success/20'}">
 					<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
 						<div class="flex items-center gap-2">
 							{#if checkResult.matched && checkResult.filter?.action === 'block'}
-								<ShieldAlertIcon class="size-5 text-rose-500" />
+								<ShieldAlertIcon class="size-5 text-danger" />
 								<div>
-									<div class="text-sm font-semibold text-rose-600 dark:text-rose-400">
+									<div class="text-sm font-semibold text-danger">
 										BLOCKED
 									</div>
 									<div class="text-xs text-muted-foreground">
@@ -216,9 +223,9 @@
 									</div>
 								</div>
 							{:else}
-								<ShieldCheckIcon class="size-5 text-emerald-500" />
+								<ShieldCheckIcon class="size-5 text-success" />
 								<div>
-									<div class="text-sm font-semibold text-emerald-600 dark:text-emerald-400">
+									<div class="text-sm font-semibold text-success">
 										ALLOWED
 									</div>
 									<div class="text-xs text-muted-foreground">
@@ -240,7 +247,7 @@
 					{#if checkResult.filter}
 						<div class="pt-3 border-t border-border/40 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
 							<div>
-								<span class="text-muted-foreground block text-[11px] font-medium uppercase tracking-wider">
+								<span class="text-muted-foreground block text-xs font-medium">
 									Matched Rule
 								</span>
 								<div class="flex items-center gap-2 mt-1">
@@ -248,7 +255,7 @@
 										{checkResult.filter.rule ?? checkResult.domain}
 									</code>
 									{#if checkResult.filter.important}
-										<Badge variant="secondary" class="font-mono text-[10px] bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20">
+										<Badge variant="secondary" class="font-mono text-xs bg-warning/10 text-warning border-warning/20">
 											$important
 										</Badge>
 									{/if}
@@ -256,23 +263,11 @@
 							</div>
 
 							<div>
-								<span class="text-muted-foreground block text-[11px] font-medium uppercase tracking-wider">
+								<span class="text-muted-foreground block text-xs font-medium">
 									Origin
 								</span>
-								<div class="mt-1 font-mono text-xs text-foreground">
-									{#if checkResult.filter.origin.type === 'user_rule'}
-										Custom User Rule
-									{:else if checkResult.filter.origin.type === 'user_allowlist'}
-										Manual Allowlist
-									{:else if checkResult.filter.origin.type === 'list'}
-										Remote Source List #{checkResult.filter.origin.source_id}
-									{:else if checkResult.filter.origin.type === 'group_rule'}
-										Group "{checkResult.filter.origin.group}" Rule
-									{:else if checkResult.filter.origin.type === 'group_allowlist'}
-										Group "{checkResult.filter.origin.group}" Allowlist
-									{:else if checkResult.filter.origin.type === 'group_list'}
-										Group "{checkResult.filter.origin.group}" Source List #{checkResult.filter.origin.source_id}
-									{/if}
+								<div class="mt-1 font-mono text-xs text-foreground first-letter:uppercase">
+									{originText(checkResult.filter.origin, checkResult.source_matches)}
 								</div>
 							</div>
 						</div>
@@ -280,7 +275,7 @@
 
 					{#if checkResult.source_matches && checkResult.source_matches.length > 0}
 						<div class="pt-3 border-t border-border/40 space-y-2">
-							<span class="text-muted-foreground block text-[11px] font-medium uppercase tracking-wider">
+							<span class="text-muted-foreground block text-xs font-medium">
 								Matching Source Lists ({checkResult.source_matches.length})
 							</span>
 							<div class="space-y-1.5">
@@ -289,7 +284,7 @@
 										<div class="flex items-center gap-2 min-w-0">
 											<Badge
 												variant="outline"
-												class="text-[10px] font-mono shrink-0 {sm.action === 'block' ? 'bg-rose-500/10 text-rose-600 border-rose-500/20' : 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'}"
+												class="text-xs font-mono shrink-0 {sm.action === 'block' ? 'bg-danger/10 text-danger border-danger/20' : 'bg-success/10 text-success border-success/20'}"
 											>
 												{sm.action.toUpperCase()}
 											</Badge>
@@ -298,7 +293,7 @@
 											</span>
 										</div>
 										{#if sm.rule}
-											<code class="font-mono text-[11px] shrink-0 text-foreground bg-muted/40 px-1 py-0.5 rounded">
+											<code class="font-mono text-xs shrink-0 text-foreground bg-muted/40 px-1 py-0.5 rounded">
 												{sm.rule}
 											</code>
 										{/if}

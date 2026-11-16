@@ -1,6 +1,7 @@
 <script lang="ts">
+	import { copyToClipboard, toMillis, createTimers, errorMessage } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
-	import { onMount } from "svelte";
+	import { onDestroy, onMount } from "svelte";
 	import * as Card from "$lib/components/ui/card";
 	import * as Table from "$lib/components/ui/table";
 	import { Button } from "$lib/components/ui/button";
@@ -62,11 +63,11 @@
 	let copiedUrl = $state<string | null>(null);
 	let updatingAll = $state(false);
 	let groupNames = $state<string[]>([]);
+	let loadError = $state(false);
 
 	function formatTimestamp(ts?: number | null): string {
 		if (!ts) return "Pending";
-		const ms = ts < 1e11 ? ts * 1000 : ts;
-		const date = new Date(ms);
+		const date = new Date(toMillis(ts));
 		return date.toLocaleDateString(undefined, {
 			month: "short",
 			day: "numeric",
@@ -83,14 +84,21 @@
 				dnsAdblockSources(),
 				dnsAdblockGroups(),
 			]);
-			const groups = groupsRes.status === "fulfilled" ? (groupsRes.value?.groups ?? []) : [];
+			// A failed request keeps the table as it was: a blank table would read as "no lists".
+			if (urlsRes.status === "rejected") toast.error("Failed to load adblock source URLs");
+			if (statusRes.status === "rejected") toast.error("Failed to load adblock source status");
+			if (groupsRes.status === "rejected") toast.error("Failed to load adblock groups");
+			if (urlsRes.status === "rejected" || statusRes.status === "rejected" || groupsRes.status === "rejected") {
+				loadError = true;
+				return;
+			}
+			loadError = false;
+
+			const groups = groupsRes.value?.groups ?? [];
 			groupNames = groups.map((g) => g.name);
 
-			const urls = urlsRes.status === "fulfilled" ? urlsRes.value : [];
-			const statuses =
-				statusRes.status === "fulfilled" && statusRes.value?.sources
-					? statusRes.value.sources
-					: [];
+			const urls = urlsRes.value;
+			const statuses = statusRes.value?.sources ?? [];
 
 			rawUrls = urls;
 
@@ -160,12 +168,16 @@
 			toast.success(`Added preset "${name}". Compiling rules in background...`);
 			// Loaded by the daemon on its own, like a source added by hand.
 			await loadSources();
-			setTimeout(loadSources, 1500);
-			setTimeout(loadSources, 3500);
-		} catch (err: any) {
-			toast.error(err?.message ?? `Failed to add "${name}"`);
+			later(loadSources, 1500);
+			later(loadSources, 3500);
+		} catch (err) {
+			toast.error(errorMessage(err, `Failed to add "${name}"`));
 		}
 	}
+
+	// Pending delayed refreshes, cleared on unmount.
+	const { later, clear: clearTimers } = createTimers();
+	onDestroy(clearTimers);
 
 	async function handleRemove(entry: MergedSource) {
 		try {
@@ -177,8 +189,8 @@
 			});
 			toast.success(`Removed list: ${entry.url}`);
 			await loadSources();
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to remove source URL");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to remove source URL"));
 		}
 	}
 
@@ -187,29 +199,22 @@
 		try {
 			await dnsAdblockReload();
 			toast.success("Triggered background list download & compilation");
-			setTimeout(async () => {
-				await loadSources();
-			}, 1500);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to update lists");
+			later(loadSources, 1500);
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to update lists"));
 		} finally {
-			setTimeout(() => {
+			later(() => {
 				updatingAll = false;
 			}, 1200);
 		}
 	}
 
 	async function copyUrl(url: string) {
-		try {
-			await navigator.clipboard.writeText(url);
-			copiedUrl = url;
-			toast.success("Copied URL to clipboard");
-			setTimeout(() => {
-				copiedUrl = null;
-			}, 2000);
-		} catch {
-			toast.error("Failed to copy URL");
-		}
+		if (!(await copyToClipboard(url, "URL"))) return;
+		copiedUrl = url;
+		later(() => {
+			copiedUrl = null;
+		}, 2000);
 	}
 
 	const filteredSources = $derived.by(() => {
@@ -317,7 +322,9 @@
 					{:else if filteredSources.length === 0}
 						<Table.Row>
 							<Table.Cell colspan={6} class="h-32 text-center text-muted-foreground text-xs">
-								{#if searchQuery}
+								{#if loadError}
+									Could not load the adblock lists. Refresh to try again.
+								{:else if searchQuery}
 									No source lists match your search query.
 								{:else}
 									No adblock lists configured yet. Click "Add Source" or select a preset above.
@@ -325,7 +332,7 @@
 							</Table.Cell>
 						</Table.Row>
 					{:else}
-						{#each filteredSources as source, idx (source.url + idx)}
+						{#each filteredSources as source (source.url)}
 							<Table.Row class="hover:bg-muted/40 transition-colors group">
 								<!-- Name & URL -->
 								<Table.Cell class="text-xs">
@@ -336,7 +343,7 @@
 											</span>
 										{/if}
 										<div class="flex items-center gap-2">
-											<span class="truncate font-mono {source.name ? 'text-[11px] text-muted-foreground' : 'text-foreground font-medium'}" title={source.url}>
+											<span class="truncate font-mono {source.name ? 'text-xs text-muted-foreground' : 'text-foreground font-medium'}" title={source.url}>
 												{source.url}
 											</span>
 											<button
@@ -346,7 +353,7 @@
 												title="Copy URL"
 											>
 												{#if copiedUrl === source.url}
-													<CheckIcon class="size-3.5 text-emerald-500" />
+													<CheckIcon class="size-3.5 text-success" />
 												{:else}
 													<CopyIcon class="size-3.5" />
 												{/if}
@@ -356,7 +363,7 @@
 											{#each source.usedBy as layer (layer)}
 												<Badge
 													variant="outline"
-													class="px-1.5 py-0 text-[10px] {layer === 'Global' ? '' : 'font-mono bg-primary/5'}"
+													class="px-1.5 py-0 text-xs {layer === 'Global' ? '' : 'font-mono bg-primary/5'}"
 												>
 													{layer === "Global" ? "Global" : `Group: ${layer}`}
 												</Badge>
@@ -368,11 +375,11 @@
 								<!-- Type / Purpose -->
 								<Table.Cell>
 									{#if source.kind === "blocklist"}
-										<Badge variant="outline" class="bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20 text-[11px] font-mono">
+										<Badge variant="outline" class="bg-danger/10 text-danger border-danger/20 text-xs font-mono">
 											Blocklist
 										</Badge>
 									{:else}
-										<Badge variant="outline" class="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 text-[11px] font-mono">
+										<Badge variant="outline" class="bg-success/10 text-success border-success/20 text-xs font-mono">
 											Allowlist
 										</Badge>
 									{/if}
@@ -381,11 +388,11 @@
 								<!-- Format -->
 								<Table.Cell>
 									<div class="flex items-center gap-1.5 flex-wrap">
-										<Badge variant="secondary" class="font-mono text-[10px] uppercase">
+										<Badge variant="secondary" class="font-mono text-xs uppercase">
 											{source.format}
 										</Badge>
 										{#if source.format_detected && source.format_detected !== source.format}
-											<span class="text-[10px] text-muted-foreground font-mono">
+											<span class="text-xs text-muted-foreground font-mono">
 												→ {source.format_detected}
 											</span>
 										{/if}
@@ -396,11 +403,11 @@
 								<Table.Cell>
 									<div class="flex flex-col text-xs">
 										{#if source.rules_count === 0 && !source.last_success}
-											<span class="font-mono text-[11px] text-muted-foreground animate-pulse">
+											<span class="font-mono text-xs text-muted-foreground animate-pulse">
 												Pending download...
 											</span>
 										{:else if source.kind === "allowlist"}
-											<span class="font-mono font-medium text-emerald-600 dark:text-emerald-400">
+											<span class="font-mono font-medium text-success">
 												{source.rules_count.toLocaleString()} allowed
 											</span>
 										{:else}
@@ -409,12 +416,12 @@
 											</span>
 										{/if}
 										{#if source.exceptions_count > 0}
-											<span class="text-[10px] font-mono text-emerald-600 dark:text-emerald-400">
+											<span class="text-xs font-mono text-success">
 												+{source.exceptions_count.toLocaleString()} exceptions
 											</span>
 										{/if}
 										{#if source.unsupported_count > 0}
-											<span class="text-[10px] font-mono text-amber-600 dark:text-amber-400" title="{source.unsupported_count} unsupported modifiers/syntax rules ignored">
+											<span class="text-xs font-mono text-warning" title="{source.unsupported_count} unsupported modifiers/syntax rules ignored">
 												{source.unsupported_count.toLocaleString()} unsupported
 											</span>
 										{/if}
@@ -426,24 +433,24 @@
 									{#if source.consecutive_failures > 0}
 										<Badge
 											variant="outline"
-											class="bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20 gap-1 font-mono text-[10px]"
+											class="bg-danger/10 text-danger border-danger/20 gap-1 font-mono text-xs"
 											title={source.last_error ?? "Fetch failed"}
 										>
-											<AlertCircleIcon class="size-3 text-rose-500" />
+											<AlertCircleIcon class="size-3 text-danger" />
 											Fail ({source.consecutive_failures})
 										</Badge>
 									{:else if source.last_success}
 										<Badge
 											variant="outline"
-											class="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 gap-1 font-mono text-[10px]"
+											class="bg-success/10 text-success border-success/20 gap-1 font-mono text-xs"
 											title="Last successful update: {formatTimestamp(source.last_success)}"
 										>
-											<span class="size-1.5 rounded-full bg-emerald-500"></span>
+											<span class="size-1.5 rounded-full bg-success"></span>
 											OK
 										</Badge>
 									{:else}
-										<Badge variant="outline" class="gap-1 font-mono text-[10px] text-amber-600 dark:text-amber-400 border-amber-500/20 bg-amber-500/10">
-											<span class="size-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+										<Badge variant="outline" class="gap-1 font-mono text-xs text-warning border-warning/20 bg-warning/10">
+											<span class="size-1.5 rounded-full bg-warning"></span>
 											Pending
 										</Badge>
 									{/if}

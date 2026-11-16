@@ -4,58 +4,82 @@
 	import { toast } from "svelte-sonner";
 	import {
 		listDevices,
-		whois,
 		purge,
 		wol,
 		scan,
 		eventsUrl,
+		openEventStream,
+		type EventStream,
+		dnsAnalytics,
 	} from "$lib/api/client";
-	import type { DeviceEntry } from "$lib/api/types";
-	import { createDebounce } from "$lib/utils";
+	import type { DeviceEntry, TopClientEntry } from "$lib/api/types";
+	import { createDebounce, createPolling, errorMessage } from "$lib/utils";
 
 	import DeviceTable from "./components/DeviceTable.svelte";
-	import DeviceWhoisModal from "./components/DeviceWhoisModal.svelte";
-	import DevicePromoteModal from "./components/DevicePromoteModal.svelte";
-	import DeviceAdblockModal from "./components/DeviceAdblockModal.svelte";
-	import DeviceLinkedModal from "./components/DeviceLinkedModal.svelte";
 	import MonitorIcon from "@lucide/svelte/icons/monitor";
-	import BookmarkIcon from "@lucide/svelte/icons/bookmark";
-	import WifiIcon from "@lucide/svelte/icons/wifi";
-	import GlobeIcon from "@lucide/svelte/icons/globe";
-	import ActivityIcon from "@lucide/svelte/icons/activity";
-	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import NavTabs from "$lib/components/NavTabs.svelte";
+	import { lanTabs } from "../tabs";
 	import PageHeader from "$lib/components/PageHeader.svelte";
-	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
-	import StatCard from "$lib/components/StatCard.svelte";
-	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
-
-	const lanTabs: NavTabItem[] = [
-		{ label: "Discovered Devices", href: "/network/devices", icon: MonitorIcon },
-		{ label: "Static Hosts", href: "/network/hosts", icon: BookmarkIcon },
-	];
 
 	let devices = $state<DeviceEntry[]>([]);
 	let meta = $state<{ total: number; online: number } | null>(null);
 	let loading = $state(true);
 	let scanning = $state(false);
 
-	// Details Modal State
-	let selectedDevice = $state<DeviceEntry | null>(null);
-	let detailsOpen = $state(false);
-	let loadingDetails = $state(false);
+	// The daemon's DNS analytics, one row per client device, over its hourly stats (about 7 days).
+	let dnsRows = $state<TopClientEntry[]>([]);
+	let stopDnsPolling: (() => void) | null = null;
 
-	// Promote Modal State
-	let promoteOpen = $state(false);
-	let promoteMac = $state("");
-	let promoteHostname = $state("");
-	let promoteV4 = $state("");
-	let promoteV6Suffix = $state("");
-	// Adblock Groups Modal State
-	let adblockOpen = $state(false);
-	let adblockDevice = $state<DeviceEntry | null>(null);
-	let linkedOpen = $state(false);
-	let linkedDevice = $state<DeviceEntry | null>(null);
-	let eventSource: EventSource | null = null;
+	/** Maps each device to its DNS counts: a row matches a device when any address is the device's. */
+	function dnsByDevice(list: DeviceEntry[], rows: TopClientEntry[]) {
+		const rowOf = new Map<string, number>();
+		rows.forEach((row, i) => {
+			for (const addr of [row.ip, ...(row.addresses ?? [])]) {
+				const key = addr?.toLowerCase();
+				if (key && !rowOf.has(key)) rowOf.set(key, i);
+			}
+		});
+		const out = new Map<string, { count: number; blocked: number }>();
+		for (const dev of list) {
+			const addrs = [
+				dev.primary_v4,
+				dev.v4?.ip,
+				dev.primary_v6,
+				dev.v6?.ip,
+				...dev.ipv6_addrs.map((a) => a.addr),
+				...(dev.linked_addresses ?? []),
+			];
+			// A device can own addresses in more than one row; each row counts once.
+			const hits = new Set<number>();
+			for (const addr of addrs) {
+				const i = addr ? rowOf.get(addr.toLowerCase()) : undefined;
+				if (i !== undefined) hits.add(i);
+			}
+			if (hits.size === 0) continue;
+			let count = 0;
+			let blocked = 0;
+			for (const i of hits) {
+				count += rows[i].count;
+				blocked += rows[i].blocked_count ?? 0;
+			}
+			out.set(dev.mac, { count, blocked });
+		}
+		return out;
+	}
+
+	const dnsByMac = $derived(dnsByDevice(devices, dnsRows));
+
+	async function loadDns() {
+		try {
+			const res = await dnsAnalytics(500);
+			dnsRows = res.top_clients ?? [];
+		} catch {
+			// The columns stay empty; the device list does not depend on DNS analytics.
+			dnsRows = [];
+		}
+	}
+
+	let eventSource: EventStream | null = null;
 
 	async function loadDevices(showSpinner = true) {
 		if (showSpinner) loading = true;
@@ -63,9 +87,9 @@
 			const res = await listDevices();
 			devices = res.devices;
 			meta = res.meta;
-		} catch (err: any) {
+		} catch (err) {
 			if (showSpinner) {
-				toast.error(err?.message || "Failed to load devices");
+				toast.error(errorMessage(err, "Failed to load devices"));
 			}
 		} finally {
 			if (showSpinner) loading = false;
@@ -78,8 +102,8 @@
 			await scan();
 			await loadDevices();
 			toast.success("Network devices refreshed");
-		} catch (err: any) {
-			toast.error(err?.message || "Failed to refresh devices");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to refresh devices"));
 		} finally {
 			scanning = false;
 		}
@@ -89,44 +113,20 @@
 		try {
 			await wol(mac);
 			toast.success(`Wake-on-LAN packet transmitted to ${mac}`);
-		} catch (err: any) {
-			toast.error(err?.message || "Failed to transmit WoL magic packet");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to transmit WoL magic packet"));
 		}
 	}
 
 	async function handlePurge(mac: string) {
-		if (!confirm(`Purge device ${mac} from cache and dynamic memory?`)) return;
+		if (!confirm(`Forget ${mac}? Its addresses and history are removed; it comes back when seen again.`)) return;
 		try {
 			await purge(mac);
-			toast.success(`Device ${mac} purged successfully`);
+			toast.success(`${mac} forgotten`);
 			await loadDevices();
-		} catch (err: any) {
-			toast.error(err?.message || "Failed to purge device");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to forget the device"));
 		}
-	}
-
-	async function openDetails(device: DeviceEntry) {
-		selectedDevice = device;
-		detailsOpen = true;
-		loadingDetails = true;
-		try {
-			const res = await whois(device.mac);
-			if (res?.entry) {
-				selectedDevice = res.entry;
-			}
-		} catch {
-			// keep fallback device
-		} finally {
-			loadingDetails = false;
-		}
-	}
-
-	function openPromoteModal(device: DeviceEntry) {
-		promoteMac = device.mac;
-		promoteHostname = device.hostname || "";
-		promoteV4 = device.primary_v4 || device.v4?.ip || "";
-		promoteV6Suffix = device.primary_v6 || device.v6?.ip || "";
-		promoteOpen = true;
 	}
 
 	const debouncedLoad = createDebounce(() => {
@@ -135,12 +135,13 @@
 
 	onMount(() => {
 		loadDevices();
+		loadDns();
+		stopDnsPolling = createPolling(loadDns, 60_000);
 
 		try {
 			const url = eventsUrl({ filter: "device" });
-			eventSource = new EventSource(url);
-
-			eventSource.onmessage = (e) => {
+			eventSource = openEventStream(url, {
+				onmessage: (e) => {
 				try {
 					const data = JSON.parse(e.data);
 					const kindStr = typeof data?.kind === "string" ? data.kind : "";
@@ -161,7 +162,8 @@
 				} catch {
 					// silent parse error
 				}
-			};
+				},
+			});
 		} catch {
 			// SSE unsupported
 		}
@@ -169,6 +171,8 @@
 
 	onDestroy(() => {
 		debouncedLoad.cancel();
+		stopDnsPolling?.();
+		stopDnsPolling = null;
 		if (eventSource) {
 			eventSource.close();
 			eventSource = null;
@@ -179,12 +183,6 @@
 		meta?.online ?? devices.filter((d) => d.online).length
 	);
 	const totalCount = $derived(meta?.total ?? devices.length);
-	const dualStackCount = $derived(
-		devices.filter((d) => (d.v4 || d.primary_v4) && (d.v6 || d.primary_v6)).length
-	);
-	const staticCount = $derived(
-		devices.filter((d) => d.origin === "Static").length
-	);
 </script>
 
 <svelte:head>
@@ -194,97 +192,26 @@
 <div class="flex flex-col gap-5">
 	<!-- Page Header -->
 	<PageHeader
-		title="Network Devices"
-		description="Discovered LAN endpoints tracked via ARP, NDP, and DHCP."
+		title="Devices"
+		description="Everything seen on the LAN through ARP, NDP and DHCP."
 		icon={MonitorIcon}
 	/>
 
 	<!-- LAN Inventory Tabs -->
 	<NavTabs tabs={lanTabs} ariaLabel="LAN inventory navigation" />
 
-	<!-- Vitals Cards Grid -->
-	<StatCardGrid cols={2}>
-		<StatCard
-			label="Connected Endpoints"
-			value={`${onlineCount} / ${totalCount}`}
-			subtext={`${onlineCount} active hosts responding on LAN`}
-			icon={WifiIcon}
-			color="emerald"
-			{loading}
-			badge={{
-				text: "L2/L3 Active",
-				variant: "online",
-				showDot: true,
-			}}
-		>
-			{#snippet footer()}
-				<StatCardFooterItem label="Online Hosts" value={onlineCount} color="text-emerald-400" />
-				<StatCardFooterItem label="Offline Hosts" value={Math.max(0, totalCount - onlineCount)} />
-			{/snippet}
-		</StatCard>
-
-		<StatCard
-			label="Static Reservations"
-			value={staticCount}
-			subtext="Pinned fixed IP leases and DHCP mappings"
-			icon={BookmarkIcon}
-			color="indigo"
-			{loading}
-			badge={{
-				text: "Pinned",
-				variant: "indigo",
-			}}
-		>
-			{#snippet footer()}
-				<StatCardFooterItem label="Fixed Leases" value={staticCount} color="text-indigo-400" />
-				<StatCardFooterItem label="Dynamic Scope" value={Math.max(0, totalCount - staticCount)} />
-			{/snippet}
-		</StatCard>
-	</StatCardGrid>
 
 	<!-- Device Table with integrated DataTableCard -->
 	<DeviceTable
 		{devices}
-		totalCount={meta?.total ?? devices.length}
-		onlineCount={meta?.online ?? devices.filter((d) => d.online).length}
+		dns={dnsByMac}
+		{totalCount}
+		{onlineCount}
 		{loading}
 		{scanning}
 		onRefresh={loadDevices}
 		onScan={auth.can("admin") ? triggerScan : undefined}
-		onInspect={openDetails}
 		onWol={auth.can("device_write") ? handleWol : undefined}
-		onPromote={auth.can("device_write") ? openPromoteModal : undefined}
-		onAdblock={auth.can("dns_write")
-			? (dev) => {
-					adblockDevice = dev;
-					adblockOpen = true;
-				}
-			: undefined}
-		onLinked={auth.can("device_write")
-			? (dev) => {
-					linkedDevice = dev;
-					linkedOpen = true;
-				}
-			: undefined}
 		onPurge={auth.can("device_write") ? handlePurge : undefined}
 	/>
 </div>
-
-<DeviceWhoisModal
-	bind:open={detailsOpen}
-	device={selectedDevice}
-	loading={loadingDetails}
-/>
-
-<DeviceAdblockModal bind:open={adblockOpen} device={adblockDevice} />
-
-<DeviceLinkedModal bind:open={linkedOpen} device={linkedDevice} onSaved={() => loadDevices(false)} />
-
-<DevicePromoteModal
-	bind:open={promoteOpen}
-	mac={promoteMac}
-	hostname={promoteHostname}
-	v4={promoteV4}
-	v6Suffix={promoteV6Suffix}
-	onPromoted={loadDevices}
-/>

@@ -1,4 +1,5 @@
 <script lang="ts">
+import { errorMessage } from "$lib/utils";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import * as Field from "$lib/components/ui/field";
 	import { Button } from "$lib/components/ui/button";
@@ -58,8 +59,8 @@
 			toast.success(`Converted ${formMac} into a static reservation!`);
 			open = false;
 			await onPromoted();
-		} catch (err: any) {
-			toast.error(err?.message || "Failed to create static reservation");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to create static reservation"));
 		} finally {
 			submitting = false;
 		}
@@ -70,7 +71,7 @@
 	<Dialog.Content class="w-[95vw] sm:max-w-md">
 		<Dialog.Header>
 			<Dialog.Title class="flex items-center gap-2">
-				<BookmarkPlusIcon class="size-5 text-amber-400" />
+				<BookmarkPlusIcon class="size-5 text-muted-foreground" />
 				<span>Convert Lease to Static Reservation</span>
 			</Dialog.Title>
 			<Dialog.Description class="text-xs">

@@ -126,7 +126,7 @@ impl PppoeArgs {
                 if printer.json {
                     return printer.print_json(&resp);
                 }
-                printer.success(&format!("PPPoE reconnection dispatched: {}", resp.message));
+                printer.success_detail("PPPoE reconnection dispatched", &resp.message);
                 Ok(())
             }
             PppoeSubcommand::Disconnect => {
@@ -138,7 +138,7 @@ impl PppoeArgs {
                 if printer.json {
                     return printer.print_json(&resp);
                 }
-                printer.success(&format!("PPPoE disconnection dispatched: {}", resp.message));
+                printer.success_detail("PPPoE disconnection dispatched", &resp.message);
                 Ok(())
             }
             PppoeSubcommand::Config(args) => execute_config(client, printer, args).await,

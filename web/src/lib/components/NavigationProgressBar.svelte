@@ -44,7 +44,7 @@
 		aria-valuenow={Math.round(progress)}
 	>
 		<div
-			class="h-full bg-gradient-to-r from-primary via-indigo-500 to-sky-400 shadow-[0_0_12px_rgba(99,102,241,0.8)] transition-all duration-150 ease-out"
+			class="h-full bg-brand-gradient transition-all duration-150 ease-out"
 			style="width: {progress}%; opacity: {progress === 100 ? 0 : 1};"
 		></div>
 	</div>

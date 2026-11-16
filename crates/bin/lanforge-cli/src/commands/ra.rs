@@ -519,10 +519,7 @@ async fn handle_trigger(client: &LanforgeClient, printer: &Printer) -> Result<()
     if printer.json {
         return printer.print_json(&resp);
     }
-    printer.success(&format!(
-        "Router Advertisement dispatched: {}",
-        resp.message
-    ));
+    printer.success_detail("Router Advertisement dispatched", &resp.message);
     Ok(())
 }
 

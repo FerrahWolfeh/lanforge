@@ -48,7 +48,9 @@ fn mismatch(cli: &BuildInfo, daemon: Option<&str>) -> Option<String> {
     ))
 }
 
-/// `0.40.0 (74ea33b0e126, 2026-11-03 12:44, local changes)`, commit time in local time.
+/// `0.63.0 (web 0.1.0, 74ea33b0e126, 2026-11-03 12:44, local changes)`, commit time in local
+/// time.
+#[must_use]
 pub fn describe(build: &BuildInfo) -> String {
     let Some(commit) = &build.commit else {
         return build.version.clone();
@@ -60,7 +62,10 @@ pub fn describe(build: &BuildInfo) -> String {
             format!(", {}", t.with_timezone(&Local).format("%Y-%m-%d %H:%M"))
         });
     let dirty = if commit.dirty { ", local changes" } else { "" };
-    format!("{} ({}{when}{dirty})", build.version, commit.hash)
+    format!(
+        "{} (web {}, {}{when}{dirty})",
+        build.version, commit.webui, commit.hash
+    )
 }
 
 #[cfg(test)]
@@ -74,24 +79,30 @@ mod tests {
 
     #[test]
     fn the_same_build_says_nothing() {
-        let cli = build("0.40.0+aaaa.200");
-        assert_eq!(mismatch(&cli, Some("0.40.0+aaaa.200")), None);
+        let cli = build("0.40.0+aaaa.200.0.1.0");
+        assert_eq!(mismatch(&cli, Some("0.40.0+aaaa.200.0.1.0")), None);
     }
 
     #[test]
     fn a_different_build_is_named_with_its_side() {
-        let cli = build("0.40.0+aaaa.1762160000");
-        let msg = mismatch(&cli, Some("0.40.1+bbbb.1762170000")).unwrap();
+        let cli = build("0.40.0+aaaa.1762160000.0.1.0");
+        let msg = mismatch(&cli, Some("0.40.1+bbbb.1762170000.0.1.0")).unwrap();
         assert!(msg.contains("newer than"), "{msg}");
-        assert!(msg.contains("daemon 0.40.1 (bbbb, 2025-11-0"), "{msg}");
-        let msg = mismatch(&cli, Some("0.40.0+aaaa.1762160000.dirty")).unwrap();
+        assert!(
+            msg.contains("daemon 0.40.1 (web 0.1.0, bbbb, 2025-11-0"),
+            "{msg}"
+        );
+        // Same versions on both sides: the commit time still tells which side is behind.
+        let msg = mismatch(&cli, Some("0.40.0+bbbb.1762150000.0.1.0")).unwrap();
+        assert!(msg.contains("older than"), "{msg}");
+        let msg = mismatch(&cli, Some("0.40.0+aaaa.1762160000.0.1.0.dirty")).unwrap();
         assert!(msg.contains("different from"), "{msg}");
         assert!(msg.contains("local changes"), "{msg}");
     }
 
     #[test]
     fn a_daemon_without_a_build_predates_the_check() {
-        let cli = build("0.40.0+aaaa.200");
+        let cli = build("0.40.0+aaaa.200.0.1.0");
         for daemon in [None, Some("garbage")] {
             let msg = mismatch(&cli, daemon).unwrap();
             assert!(msg.contains("predates"), "{msg}");

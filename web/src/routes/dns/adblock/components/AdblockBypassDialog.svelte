@@ -1,4 +1,5 @@
 <script lang="ts">
+import { errorMessage } from "$lib/utils";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import { Button } from "$lib/components/ui/button";
 	import ShieldOffIcon from "@lucide/svelte/icons/shield-off";
@@ -33,8 +34,8 @@
 			toast.success("Bypass saved");
 			open = false;
 			onSaved();
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to save the bypass");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to save the bypass"));
 		} finally {
 			submitting = false;
 		}
@@ -45,7 +46,7 @@
 	<Dialog.Content class="w-[95vw] sm:max-w-lg">
 		<Dialog.Header>
 			<div class="flex items-center gap-2">
-				<div class="p-2 rounded-lg bg-amber-500/10 text-amber-500">
+				<div class="p-2 rounded-lg bg-warning/10 text-warning">
 					<ShieldOffIcon class="size-4" />
 				</div>
 				<Dialog.Title>Bypass</Dialog.Title>

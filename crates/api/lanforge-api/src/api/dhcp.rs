@@ -26,6 +26,8 @@ pub struct LeaseEntry {
     pub expires: u64,
     /// Remaining lifetime in seconds.
     pub remaining_secs: u64,
+    /// `IA_NA`/`IA_PD` identifier; `None` for `DHCPv4`.
+    pub iaid: Option<u32>,
 }
 
 /// Supported DHCP lease types.

@@ -193,7 +193,7 @@ async fn the_build_request_is_variant_zero_and_names_the_daemon_build() {
     let client_ctx = init_test_context().await;
     client_ctx
         .ctx
-        .set_build(BuildInfo::parse("0.40.0+a1b2c3d4e5f6.1762160000").unwrap());
+        .set_build(BuildInfo::parse("0.40.0+a1b2c3d4e5f6.1762160000.0.1.0").unwrap());
     let (mut client, server) = duplex(8192);
     let handler_task = tokio::spawn(async move {
         handle_client(server, client_ctx).await.unwrap();
@@ -211,7 +211,7 @@ async fn the_build_request_is_variant_zero_and_names_the_daemon_build() {
     let mut resp_buf = vec![0u8; u32::from_be_bytes(len_buf) as usize];
     client.read_exact(&mut resp_buf).await.unwrap();
     // Variant 0, then the token as a postcard string (length, bytes).
-    let token = "0.40.0+a1b2c3d4e5f6.1762160000";
+    let token = "0.40.0+a1b2c3d4e5f6.1762160000.0.1.0";
     assert_eq!(resp_buf[0], 0);
     assert_eq!(usize::from(resp_buf[1]), token.len());
     assert_eq!(&resp_buf[2..], token.as_bytes());

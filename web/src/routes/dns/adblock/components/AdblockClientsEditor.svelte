@@ -53,7 +53,7 @@
 			{#each clients as selector (selector)}
 				<Badge
 					variant="secondary"
-					class="h-auto max-w-full gap-1 pr-1 font-mono text-[11px] whitespace-normal break-all"
+					class="h-auto max-w-full gap-1 pr-1 font-mono text-xs whitespace-normal break-all"
 					title={adblockClientMacs(devicesOf(selector))}
 				>
 					<span>{selector}</span>

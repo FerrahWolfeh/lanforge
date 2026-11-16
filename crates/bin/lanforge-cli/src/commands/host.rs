@@ -685,10 +685,10 @@ async fn set_host(client: &LanforgeClient, printer: &Printer, args: HostSetArgs)
         return printer.print_json(&resp);
     }
 
-    printer.success(&format!(
-        "Host {target_mac} field '{normalized_field}' updated to '{value}': {}",
-        resp.message
-    ));
+    printer.success_detail(
+        &format!("Host {target_mac} field '{normalized_field}' updated to '{value}'"),
+        &resp.message,
+    );
     Ok(())
 }
 
@@ -760,10 +760,10 @@ async fn remove_host(
         return printer.print_json(&resp);
     }
 
-    printer.success(&format!(
-        "Static host reservation '{target_name}' ({target_mac}) removed: {}",
-        resp.message
-    ));
+    printer.success_detail(
+        &format!("Static host reservation '{target_name}' ({target_mac}) removed"),
+        &resp.message,
+    );
     Ok(())
 }
 
@@ -821,10 +821,10 @@ async fn import_hosts(client: &LanforgeClient, printer: &Printer, file: String) 
         return printer.print_json(&resp);
     }
 
-    printer.success(&format!(
-        "Successfully imported {count} static host reservations from '{file}': {}",
-        resp.message
-    ));
+    printer.success_detail(
+        &format!("Successfully imported {count} static host reservations from '{file}'"),
+        &resp.message,
+    );
     Ok(())
 }
 

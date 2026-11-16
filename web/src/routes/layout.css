@@ -5,77 +5,117 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * Theme: graphite surfaces, one indigo accent, semantic state colours (UniFi-like).
+ * Dark is the default (ModeWatcher defaultMode="dark"); light uses the same token names.
+ * The green -> blue brand gradient is for the logo, usage bars, chart strokes/areas and the
+ * "all OK" status hairline only: never buttons, text or cards. Adblock "blocked" bars use --danger.
+ * Components take colour from these tokens, never from Tailwind's palette (emerald-400, sky-500...).
+ */
 :root {
-	--background: oklch(1 0 0);
-	--foreground: oklch(0.145 0 0);
-	--card: oklch(1 0 0);
-	--card-foreground: oklch(0.145 0 0);
-	--popover: oklch(1 0 0);
-	--popover-foreground: oklch(0.145 0 0);
-	--primary: oklch(0.457 0.24 277.023);
-	--primary-foreground: oklch(0.962 0.018 272.314);
-	--secondary: oklch(0.967 0.001 286.375);
-	--secondary-foreground: oklch(0.21 0.006 285.885);
-	--muted: oklch(0.97 0 0);
-	--muted-foreground: oklch(0.556 0 0);
-	--accent: oklch(0.97 0 0);
-	--accent-foreground: oklch(0.205 0 0);
-	--destructive: oklch(0.577 0.245 27.325);
-	--border: oklch(0.922 0 0);
-	--input: oklch(0.922 0 0);
-	--ring: oklch(0.708 0 0);
-	--chart-1: oklch(0.845 0.143 164.978);
-	--chart-2: oklch(0.696 0.17 162.48);
-	--chart-3: oklch(0.596 0.145 163.225);
-	--chart-4: oklch(0.508 0.118 165.612);
-	--chart-5: oklch(0.432 0.095 166.913);
-	--radius: 0.625rem;
-	--sidebar: oklch(0.985 0 0);
-	--sidebar-foreground: oklch(0.145 0 0);
-	--sidebar-primary: oklch(0.511 0.262 276.966);
-	--sidebar-primary-foreground: oklch(0.962 0.018 272.314);
-	--sidebar-accent: oklch(0.95 0 0);
-	--sidebar-accent-foreground: oklch(0.205 0 0);
-	--sidebar-border: oklch(0.922 0 0);
-	--sidebar-ring: oklch(0.708 0 0);
+	--background: #f4f5f7;
+	--foreground: #17181c;
+	--card: #ffffff;
+	--card-foreground: #17181c;
+	--popover: #ffffff;
+	--popover-foreground: #17181c;
+	--primary: #4f46e5;
+	--primary-foreground: #ffffff;
+	--secondary: #eef0f3;
+	--secondary-foreground: #17181c;
+	--muted: #f0f1f4;
+	--muted-foreground: #5d6270;
+	--accent: #eceef2;
+	--accent-foreground: #17181c;
+	--destructive: #d23f37;
+	--border: #e2e4e9;
+	--input: #d9dce2;
+	--ring: #4f46e5;
+
+	/* state */
+	--success: #17935f;
+	--warning: #b4720f;
+	--danger: #d23f37;
+	--info: #2f6fe0;
+	/* selection / active item */
+	--selected: rgb(79 70 229 / 0.09);
+	--selected-foreground: #4f46e5;
+	/* brand gradient */
+	--brand-from: #14a874;
+	--brand-to: #2f6fe0;
+
+	--chart-1: #2f6fe0;
+	--chart-2: #14a874;
+	--chart-3: #4f46e5;
+	--chart-4: #b4720f;
+	--chart-5: #d23f37;
+	--radius: 0.5rem;
+
+	--sidebar: #ffffff;
+	--sidebar-foreground: #17181c;
+	--sidebar-primary: #4f46e5;
+	--sidebar-primary-foreground: #ffffff;
+	--sidebar-accent: #f0f1f4;
+	--sidebar-accent-foreground: #17181c;
+	--sidebar-border: #e2e4e9;
+	--sidebar-ring: #4f46e5;
 }
 
 .dark {
-	--background: oklch(0.145 0 0);
-	--foreground: oklch(0.985 0 0);
-	--card: oklch(0.205 0 0);
-	--card-foreground: oklch(0.985 0 0);
-	--popover: oklch(0.205 0 0);
-	--popover-foreground: oklch(0.985 0 0);
-	--primary: oklch(0.58 0.22 277);
-	--primary-foreground: oklch(0.985 0 0);
-	--secondary: oklch(0.274 0.006 286.033);
-	--secondary-foreground: oklch(0.985 0 0);
-	--muted: oklch(0.269 0 0);
-	--muted-foreground: oklch(0.708 0 0);
-	--accent: oklch(0.269 0 0);
-	--accent-foreground: oklch(0.985 0 0);
-	--destructive: oklch(0.704 0.191 22.216);
-	--border: oklch(1 0 0 / 10%);
-	--input: oklch(1 0 0 / 15%);
-	--ring: oklch(0.556 0 0);
-	--chart-1: oklch(0.845 0.143 164.978);
-	--chart-2: oklch(0.696 0.17 162.48);
-	--chart-3: oklch(0.596 0.145 163.225);
-	--chart-4: oklch(0.508 0.118 165.612);
-	--chart-5: oklch(0.432 0.095 166.913);
-	--sidebar: oklch(0.185 0 0);
-	--sidebar-foreground: oklch(0.985 0 0);
-	--sidebar-primary: oklch(0.585 0.233 277.117);
-	--sidebar-primary-foreground: oklch(0.962 0.018 272.314);
-	--sidebar-accent: oklch(0.24 0 0);
-	--sidebar-accent-foreground: oklch(0.985 0 0);
-	--sidebar-border: oklch(1 0 0 / 10%);
-	--sidebar-ring: oklch(0.556 0 0);
+	--background: #0d0e10;
+	--foreground: #e8e9ec;
+	--card: #17181c;
+	--card-foreground: #e8e9ec;
+	--popover: #1b1c20;
+	--popover-foreground: #e8e9ec;
+	--primary: #6366f1;
+	--primary-foreground: #ffffff;
+	--secondary: #222328;
+	--secondary-foreground: #e8e9ec;
+	--muted: #1f2024;
+	--muted-foreground: #9196a1;
+	--accent: #232429;
+	--accent-foreground: #e8e9ec;
+	--destructive: #f0605a;
+	--border: #2a2c31;
+	--input: #34363d;
+	--ring: #7b7ff6;
+
+	--success: #34c38f;
+	--warning: #e6a23c;
+	--danger: #f0605a;
+	--info: #3b82f6;
+	--selected: rgb(99 102 241 / 0.16);
+	--selected-foreground: #8b8ef8;
+	--brand-from: #2ec08b;
+	--brand-to: #3b82f6;
+
+	--chart-1: #3b82f6;
+	--chart-2: #2ec08b;
+	--chart-3: #7b7ff6;
+	--chart-4: #e6a23c;
+	--chart-5: #f0605a;
+
+	--sidebar: #131417;
+	--sidebar-foreground: #e8e9ec;
+	--sidebar-primary: #6366f1;
+	--sidebar-primary-foreground: #ffffff;
+	--sidebar-accent: #1f2024;
+	--sidebar-accent-foreground: #e8e9ec;
+	--sidebar-border: #26282d;
+	--sidebar-ring: #7b7ff6;
 }
 
 @theme inline {
 	--font-sans: 'Inter Variable', sans-serif;
+	--color-success: var(--success);
+	--color-warning: var(--warning);
+	--color-danger: var(--danger);
+	--color-info: var(--info);
+	--color-selected: var(--selected);
+	--color-selected-foreground: var(--selected-foreground);
+	--color-brand-from: var(--brand-from);
+	--color-brand-to: var(--brand-to);
 	--color-sidebar-ring: var(--sidebar-ring);
 	--color-sidebar-border: var(--sidebar-border);
 	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -130,6 +170,33 @@
 		@apply bg-background text-foreground;
 		overscroll-behavior-y: none;
 	}
+}
+
+/* The brand gradient: logo, usage bars, chart strokes, the "all OK" hairline. Nothing else. */
+@utility bg-brand-gradient {
+	background-image: linear-gradient(90deg, var(--brand-from), var(--brand-to));
+}
+
+/* Light/dark switch (lib/theme.ts): one plain crossfade for every part of the page, overriding
+   the route-change slide of #page-content. */
+@keyframes theme-fade-out {
+	to {
+		opacity: 0;
+	}
+}
+@keyframes theme-fade-in {
+	from {
+		opacity: 0;
+	}
+}
+:root[data-vt="theme"]::view-transition-group(*) {
+	animation: none;
+}
+:root[data-vt="theme"]::view-transition-old(*) {
+	animation: 220ms ease both theme-fade-out;
+}
+:root[data-vt="theme"]::view-transition-new(*) {
+	animation: 220ms ease both theme-fade-in;
 }
 
 /* GPU & Compositor performance hints for buttery-smooth 60/120fps animations */

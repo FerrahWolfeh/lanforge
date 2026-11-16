@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { passwordError } from "$lib/utils/validation";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import * as Field from "$lib/components/ui/field";
 	import { Button } from "$lib/components/ui/button";
@@ -29,6 +30,9 @@
 			password = "";
 			confirmPassword = "";
 			role = "operator";
+		} else {
+			password = "";
+			confirmPassword = "";
 		}
 	});
 
@@ -46,12 +50,9 @@
 			toast.error("Please enter a password.");
 			return;
 		}
-		if (password.length < 8) {
-			toast.error("Password must be at least 8 characters.");
-			return;
-		}
-		if (password !== confirmPassword) {
-			toast.error("Passwords do not match.");
+		const passwordProblem = passwordError(password, confirmPassword);
+		if (passwordProblem) {
+			toast.error(passwordProblem);
 			return;
 		}
 
@@ -71,7 +72,7 @@
 </script>
 
 <Dialog.Root bind:open>
-	<Dialog.Content class="sm:max-w-md rounded-2xl">
+	<Dialog.Content class="sm:max-w-md rounded-lg">
 		<Dialog.Header>
 			<Dialog.Title class="text-base font-bold flex items-center gap-2">
 				<UserPlusIcon class="size-5 text-primary" />
@@ -99,7 +100,7 @@
 						id="new-username"
 						placeholder="e.g. operator1, sysadmin"
 						bind:value={username}
-						class="text-xs rounded-xl h-9 bg-background"
+						class="text-xs rounded-md h-9 bg-background"
 					/>
 				</Field.Field>
 
@@ -111,7 +112,7 @@
 					<select
 						id="new-user-role"
 						bind:value={role}
-						class="w-full h-9 text-xs rounded-xl bg-background border border-input px-3 text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+						class="w-full h-9 text-xs rounded-md bg-background border border-input px-3 text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
 					>
 						<option value="operator">Operator (Device, network, and DNS management)</option>
 						<option value="admin">Administrator (Unrestricted access to config & database)</option>
@@ -129,7 +130,7 @@
 						type="password"
 						placeholder="Secure password"
 						bind:value={password}
-						class="text-xs rounded-xl h-9 bg-background"
+						class="text-xs rounded-md h-9 bg-background"
 					/>
 				</Field.Field>
 
@@ -143,7 +144,7 @@
 						type="password"
 						placeholder="Repeat password"
 						bind:value={confirmPassword}
-						class="text-xs rounded-xl h-9 bg-background"
+						class="text-xs rounded-md h-9 bg-background"
 					/>
 				</Field.Field>
 			</Field.FieldGroup>
@@ -152,7 +153,7 @@
 				<Button
 					type="button"
 					variant="outline"
-					class="rounded-xl cursor-pointer text-xs"
+					class="rounded-md cursor-pointer text-xs"
 					onclick={() => (open = false)}
 				>
 					Cancel
@@ -160,7 +161,7 @@
 
 				<Button
 					type="submit"
-					class="rounded-xl cursor-pointer text-xs bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm"
+					class="rounded-md cursor-pointer text-xs bg-primary text-primary-foreground hover:bg-primary/90"
 					disabled={isSubmitting || !username.trim() || !password}
 				>
 					{#if isSubmitting}

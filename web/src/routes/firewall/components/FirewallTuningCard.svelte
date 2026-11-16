@@ -2,7 +2,6 @@
 	import * as Card from "$lib/components/ui/card";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Switch } from "$lib/components/ui/switch";
-	import { Separator } from "$lib/components/ui/separator";
 	import HelpPopover from "$lib/components/HelpPopover.svelte";
 	import ZapIcon from "@lucide/svelte/icons/zap";
 	import GaugeIcon from "@lucide/svelte/icons/gauge";
@@ -27,7 +26,7 @@
 	<Card.Root class="p-5">
 		<div class="flex items-start justify-between gap-4">
 			<div class="flex items-start gap-3">
-				<div class="flex size-10 items-center justify-center rounded-xl bg-amber-500/10 text-amber-500 shrink-0 mt-0.5">
+				<div class="flex size-10 items-center justify-center rounded-md bg-muted text-muted-foreground shrink-0 mt-0.5">
 					<ZapIcon class="size-5" />
 				</div>
 				<div class="flex flex-col gap-1">
@@ -45,11 +44,11 @@
 									<strong class="text-foreground">SBC Performance:</strong> Significantly lowers CPU utilization on Raspberry Pi and homelab SBCs during heavy gigabit traffic.
 								</p>
 								<p>
-									<strong class="text-amber-600 dark:text-amber-400 font-semibold">When to disable:</strong> If you use CAKE SQM or bufferbloat traffic shapers, disable flow offload so all packets can be metered by your queues.
+									<strong class="text-warning font-semibold">When to disable:</strong> If you use CAKE SQM or bufferbloat traffic shapers, disable flow offload so all packets can be metered by your queues.
 								</p>
 							</div>
 						</HelpPopover>
-						<Badge variant={suspended ? "outline" : flowOffload ? "default" : "secondary"} class="text-[10px] {suspended ? 'border-amber-500/40 text-amber-600 dark:text-amber-400 font-medium' : ''}">
+						<Badge variant={suspended ? "outline" : flowOffload ? "default" : "secondary"} class="text-xs {suspended ? 'border-warning/40 text-warning font-medium' : ''}">
 							{suspended ? "Suspended by SQM" : flowOffload ? "Fast-Path Active" : "Disabled"}
 						</Badge>
 					</div>
@@ -57,7 +56,7 @@
 						Bypasses standard routing lookups for established flows, processing packets at wire speed directly in the kernel dataplane.
 					</p>
 					{#if suspended}
-						<div class="mt-2 flex items-center gap-2 rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-1.5 text-xs text-amber-600 dark:text-amber-400">
+						<div class="mt-2 flex items-center gap-2 rounded-lg bg-warning/10 border border-warning/20 px-3 py-1.5 text-xs text-warning">
 							<AlertTriangleIcon class="size-4 shrink-0" />
 							<span>
 								<strong>Suspended by SQM (CAKE):</strong> Flow offload bypasses Traffic Control (TC), which would prevent latency and bufferbloat management.
@@ -86,12 +85,12 @@
 					<GaugeIcon class="size-4 text-primary" />
 					<span>TCP MSS Clamping</span>
 				</div>
-				<Badge variant="outline" class="text-[10px] font-mono">1452 / 1432</Badge>
+				<Badge variant="outline" class="text-xs font-mono">1452 / 1432</Badge>
 			</div>
 			<p class="text-xs text-muted-foreground leading-relaxed">
 				Automatically clamps TCP Maximum Segment Size on WAN and PPPoE interfaces to avoid packet fragmentation and MTU black holes.
 			</p>
-			<div class="mt-3 flex items-center gap-1.5 text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
+			<div class="mt-3 flex items-center gap-1.5 text-xs text-success font-medium">
 				<CheckIcon class="size-3.5" />
 				<span>Enforced in nftables mangle hook</span>
 			</div>
@@ -104,12 +103,12 @@
 					<NetworkIcon class="size-4 text-primary" />
 					<span>NAT Masquerade</span>
 				</div>
-				<Badge variant="outline" class="text-[10px] font-mono">Full Cone SNAT</Badge>
+				<Badge variant="outline" class="text-xs font-mono">Full Cone SNAT</Badge>
 			</div>
 			<p class="text-xs text-muted-foreground leading-relaxed">
 				Rewrites source IPs for outbound Internet egress traffic across WAN, PPPoE interfaces, and dynamic public uplink addresses.
 			</p>
-			<div class="mt-3 flex items-center gap-1.5 text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
+			<div class="mt-3 flex items-center gap-1.5 text-xs text-success font-medium">
 				<CheckIcon class="size-3.5" />
 				<span>Postrouting NAT active</span>
 			</div>
@@ -122,12 +121,12 @@
 					<ShieldCheckIcon class="size-4 text-primary" />
 					<span>Fast-Path Bypasses</span>
 				</div>
-				<Badge variant="outline" class="text-[10px] font-mono">DNS & IPsec</Badge>
+				<Badge variant="outline" class="text-xs font-mono">DNS & IPsec</Badge>
 			</div>
 			<p class="text-xs text-muted-foreground leading-relaxed">
 				Guarantees router-local DNS (port 53) and Wi-Fi calling tunnels (VoWiFi / IPsec ESP) bypass offload tables to preserve state tracking.
 			</p>
-			<div class="mt-3 flex items-center gap-1.5 text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
+			<div class="mt-3 flex items-center gap-1.5 text-xs text-success font-medium">
 				<CheckIcon class="size-3.5" />
 				<span>Strict conntrack preservation</span>
 			</div>

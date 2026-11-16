@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use axum::{
     Router,
-    extract::{Query, State},
+    extract::{Path, Query, State},
     response::{
         IntoResponse,
         sse::{Event, KeepAlive, Sse},
@@ -58,6 +58,7 @@ pub fn router() -> Router<AppState> {
         .route("/analytics", get(handle_dns_analytics))
         .route("/query", get(handle_dns_query))
         .route("/logs", get(handle_dns_logs))
+        .route("/domains/{domain}", get(handle_dns_domain))
         .merge(adblock::router())
         .merge(cache::router())
         .merge(rewrites::router())
@@ -67,6 +68,14 @@ pub fn router() -> Router<AppState> {
 async fn handle_dns_stats(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(ctx.handle_dns_stats().await, DnsStats)
+}
+
+async fn handle_dns_domain(
+    State(state): State<AppState>,
+    Path(domain): Path<String>,
+) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(ctx.handle_dns_domain(domain).await, DnsDomain)
 }
 
 async fn handle_dns_analytics(
@@ -197,6 +206,7 @@ fn handle_dns_logs_follow(
                     "protocol": entry.protocol,
                     "filter": entry.filter,
                     "coalesce_id": entry.coalesce_id,
+                    "repeats": entry.repeats,
                     "event": {
                         "Dns": {
                             "QueryResolved": {
@@ -212,6 +222,7 @@ fn handle_dns_logs_follow(
                                 "answer": entry.answer,
                                 "filter": entry.filter,
                                 "coalesce_id": entry.coalesce_id,
+                                "repeats": entry.repeats,
                             }
                         }
                     }

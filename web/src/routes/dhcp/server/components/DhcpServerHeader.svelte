@@ -29,7 +29,7 @@
 	} = $props();
 </script>
 
-<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-muted/30 border rounded-xl p-4 shadow-sm">
+<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-muted/30 border rounded-lg p-4">
 	<div class="flex items-center gap-3">
 		<div class="p-2.5 rounded-lg bg-primary/10 text-primary shrink-0">
 			<SlidersIcon class="size-6" />
@@ -40,7 +40,7 @@
 				{#if isDirty}
 					<Badge
 						variant="outline"
-						class="text-amber-500 border-amber-500/30 bg-amber-500/10 text-xs font-semibold animate-pulse"
+						class="text-warning border-warning/30 bg-warning/10 text-xs font-semibold"
 					>
 						Unsaved Changes
 					</Badge>
@@ -63,7 +63,7 @@
 			class="h-8 text-xs"
 		>
 			<ShieldCheckIcon
-				class={`size-3.5 mr-1.5 ${reconciling ? "animate-spin text-primary" : "text-emerald-500"}`}
+				class={`size-3.5 mr-1.5 ${reconciling ? "animate-spin text-primary" : "text-muted-foreground"}`}
 			/>
 			{reconciling ? "Auditing..." : "Reconcile Leases"}
 		</Button>
@@ -98,7 +98,7 @@
 			size="sm"
 			onclick={onSave}
 			disabled={!isDirty || saving || loading}
-			class="h-8 text-xs shadow-sm"
+			class="h-8 text-xs"
 		>
 			<SaveIcon class={`size-3.5 mr-1.5 ${saving ? "animate-spin" : ""}`} />
 			{saving ? "Saving..." : "Save Server Options"}

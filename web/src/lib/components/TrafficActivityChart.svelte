@@ -2,7 +2,6 @@
 	import { untrack } from "svelte";
 	import * as Card from "$lib/components/ui/card";
 	import { Skeleton } from "$lib/components/ui/skeleton";
-	import { Badge } from "$lib/components/ui/badge";
 	import * as Chart from "$lib/components/ui/chart/index.js";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import { AreaChart } from "layerchart";
@@ -16,11 +15,10 @@
 	import ChevronDownIcon from "@lucide/svelte/icons/chevron-down";
 	import ArrowDownIcon from "@lucide/svelte/icons/arrow-down";
 	import ArrowUpIcon from "@lucide/svelte/icons/arrow-up";
-	import { formatBps } from "$lib/utils";
+	import { formatBps, toMillis } from "$lib/utils";
 	import type {
 		DnsAnalyticsResponse,
 		StatusResponse,
-		DnsStatsResponse,
 		TrafficTelemetryResponse,
 		TrafficStatusResponse,
 	} from "$lib/api/types";
@@ -34,7 +32,6 @@
 		telemetryData?: TrafficTelemetryResponse | null;
 		statusData?: StatusResponse | null;
 		trafficStatus?: TrafficStatusResponse | null;
-		dnsData?: DnsStatsResponse | null;
 		analyticsData?: DnsAnalyticsResponse | null;
 	}
 
@@ -47,7 +44,6 @@
 		telemetryData = null,
 		statusData = null,
 		trafficStatus = null,
-		dnsData = null,
 		analyticsData = null,
 	}: Props = $props();
 
@@ -191,7 +187,7 @@
 		untrack(() => {
 			if (data.history && data.history.length > 0) {
 				const fresh: TelemetrySample[] = data.history.map((s) => {
-					const ms = s.timestamp < 10_000_000_000 ? s.timestamp * 1000 : s.timestamp;
+					const ms = toMillis(s.timestamp);
 					return {
 						date: new Date(ms),
 						timestamp: ms,
@@ -278,11 +274,11 @@
 	const trafficChartConfig = {
 		rxBps: {
 			label: "Download (Rx)",
-			color: "#38bdf8", // Sky 400
+			color: "var(--brand-from)",
 		},
 		txBps: {
 			label: "Upload (Tx)",
-			color: "#34d399", // Emerald 400
+			color: "var(--chart-3)",
 		},
 	} satisfies Chart.ChartConfig;
 
@@ -292,6 +288,11 @@
 			label: "Download (Rx)",
 			value: "rxBps",
 			color: trafficChartConfig.rxBps.color,
+			props: {
+				line: { stroke: "url(#lf-rx-stroke)" },
+				fill: "url(#lf-rx-fill)",
+				"fill-opacity": 1,
+			},
 		},
 		{
 			key: "txBps",
@@ -320,11 +321,11 @@
 	const dnsChartConfig = {
 		total: {
 			label: "Total Queries",
-			color: "#38bdf8",
+			color: "var(--chart-1)",
 		},
 		cached: {
 			label: "Cache Accelerated",
-			color: "#34d399",
+			color: "var(--chart-2)",
 		},
 	} satisfies Chart.ChartConfig;
 
@@ -338,7 +339,7 @@
 
 		const ratesMap = new Map<number, (typeof rates)[0]>();
 		for (const r of rates) {
-			const ms = r.timestamp < 10_000_000_000 ? r.timestamp * 1000 : r.timestamp;
+			const ms = toMillis(r.timestamp);
 			const bucketKey = Math.floor(ms / BUCKET_MS) * BUCKET_MS;
 			ratesMap.set(bucketKey, r);
 		}
@@ -346,13 +347,10 @@
 		return Array.from({ length: BUCKET_COUNT }, (_, i) => {
 			const bucketMs = currentBucketMs - (BUCKET_COUNT - 1 - i) * BUCKET_MS;
 			const date = new Date(bucketMs);
-			const label = `${date.getHours().toString().padStart(2, "0")}:${date.getMinutes().toString().padStart(2, "0")}`;
-
 			const r = ratesMap.get(bucketMs);
 			if (!r) {
 				return {
 					date,
-					label,
 					timestamp: bucketMs,
 					total: 0,
 					cached: 0,
@@ -360,15 +358,10 @@
 			}
 
 			const total = r.count;
-			const cacheCount =
-				r.cached ??
-				(dnsData && dnsData.total_requests > 0
-					? Math.round((dnsData.cache_hits / dnsData.total_requests) * total)
-					: Math.floor(total * 0.4));
+			const cacheCount = r.cached ?? 0;
 
 			return {
 				date,
-				label,
 				timestamp: bucketMs,
 				total,
 				cached: cacheCount,
@@ -403,20 +396,42 @@
 			color: dnsChartConfig.cached.color,
 		},
 	];
+
+	/** Interface filter chip: primary when selected, muted otherwise. `layout` adds the flex classes some chips need. */
+	function ifaceChipClass(selected: boolean, layout = "flex items-center gap-1"): string {
+		return [
+			"px-2 py-0.5 rounded text-xs font-mono transition-colors shrink-0",
+			layout,
+			selected
+				? "bg-primary text-primary-foreground font-semibold"
+				: "bg-muted/50 text-muted-foreground hover:text-foreground",
+		].filter(Boolean).join(" ");
+	}
 </script>
 
-<Card.Root class="relative overflow-hidden border-border/70 shadow-xs !py-0 !pt-0 [--card-spacing:0] gap-0">
-	<!-- Glow Header -->
-	<Card.Header class="pt-5 sm:pt-6 !pb-4 sm:!pb-5 px-4 sm:px-6 border-b border-border/50 bg-gradient-to-r from-sky-500/10 via-transparent to-emerald-500/10 rounded-t-3xl flex flex-col gap-3.5 w-full !items-stretch">
+<Card.Root class="relative overflow-hidden border-border/70 !py-0 !pt-0 [--card-spacing:0] gap-0">
+	<svg width="0" height="0" class="absolute" aria-hidden="true">
+		<defs>
+			<linearGradient id="lf-rx-stroke" x1="0%" y1="0%" x2="100%" y2="0%">
+				<stop offset="0%" stop-color="var(--brand-from)" />
+				<stop offset="100%" stop-color="var(--brand-to)" />
+			</linearGradient>
+			<linearGradient id="lf-rx-fill" x1="0%" y1="0%" x2="0%" y2="1">
+				<stop offset="0%" stop-color="var(--brand-from)" stop-opacity="0.28" />
+				<stop offset="100%" stop-color="var(--brand-from)" stop-opacity="0" />
+			</linearGradient>
+		</defs>
+	</svg>
+	<Card.Header class="pt-5 sm:pt-6 !pb-4 sm:!pb-5 px-4 sm:px-6 border-b border-border/50 flex flex-col gap-3.5 w-full !items-stretch">
 		<div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between w-full">
 			<!-- Title & Mode Switcher -->
 			<div class="flex flex-col sm:flex-row sm:items-center gap-3">
 				<div class="flex items-start gap-3">
-					<div class="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border border-sky-500/30 bg-sky-500/10">
+					<div class="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md bg-muted">
 						{#if activeMode === "bandwidth"}
-							<ActivityIcon class="size-4 text-sky-400" />
+							<ActivityIcon class="size-4 text-muted-foreground" />
 						{:else}
-							<GlobeIcon class="size-4 text-sky-400" />
+							<GlobeIcon class="size-4 text-muted-foreground" />
 						{/if}
 					</div>
 					<div>
@@ -424,10 +439,12 @@
 							<Card.Title class="text-base font-semibold">
 								{activeMode === "bandwidth" ? title : "Gateway DNS Activity"}
 							</Card.Title>
-							<div class="flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-400">
-								<span class="size-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-								<span>{activeMode === "bandwidth" ? "Live Stream" : "Online"}</span>
-							</div>
+							{#if activeMode === "bandwidth" ? telemetryData : analyticsData}
+								<div class="flex items-center gap-1.5 rounded-full border border-success/30 bg-success/10 px-2 py-0.5 text-xs font-medium text-success">
+									<span class="size-1.5 rounded-full bg-success"></span>
+									<span>{activeMode === "bandwidth" ? "Live Stream" : "Online"}</span>
+								</div>
+							{/if}
 						</div>
 						<p class="text-muted-foreground text-xs mt-0.5">
 							{#if description}
@@ -449,12 +466,13 @@
 							class={[
 								"inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
 								activeMode === "bandwidth"
-									? "bg-background text-foreground shadow-xs font-semibold"
+									? "bg-background text-foreground font-semibold"
 									: "text-muted-foreground hover:text-foreground",
 							].join(" ")}
+							aria-pressed={activeMode === "bandwidth"}
 							onclick={() => (activeMode = "bandwidth")}
 						>
-							<ActivityIcon class="size-3.5 text-sky-400" />
+							<ActivityIcon class="size-3.5 text-muted-foreground" />
 							<span>Live Bandwidth</span>
 						</button>
 						<button
@@ -462,12 +480,13 @@
 							class={[
 								"inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
 								activeMode === "dns"
-									? "bg-background text-foreground shadow-xs font-semibold"
+									? "bg-background text-foreground font-semibold"
 									: "text-muted-foreground hover:text-foreground",
 							].join(" ")}
+							aria-pressed={activeMode === "dns"}
 							onclick={() => (activeMode = "dns")}
 						>
-							<GlobeIcon class="size-3.5 text-emerald-400" />
+							<GlobeIcon class="size-3.5 text-muted-foreground" />
 							<span>DNS Activity</span>
 						</button>
 					</div>
@@ -478,34 +497,34 @@
 			{#if activeMode === "bandwidth"}
 				<div class="flex flex-wrap items-center gap-4 text-xs font-mono">
 					<div class="flex flex-col gap-0.5 text-right">
-						<span class="text-[10px] uppercase font-sans text-muted-foreground font-semibold tracking-wider flex items-center justify-end gap-1">
-							<ArrowDownIcon class="size-3 text-sky-400" />
+						<span class="text-xs font-medium text-muted-foreground flex items-center justify-end gap-1">
+							<ArrowDownIcon class="size-3 text-chart-2" />
 							Download (Rx)
 						</span>
-						<span class="text-sky-400 font-bold tabular-nums text-sm">
+						<span class="text-foreground font-semibold tabular-nums text-sm">
 							{formatBps(bandwidthStats.currRx)}
 						</span>
 					</div>
 					<div class="flex flex-col gap-0.5 text-right">
-						<span class="text-[10px] uppercase font-sans text-muted-foreground font-semibold tracking-wider flex items-center justify-end gap-1">
-							<ArrowUpIcon class="size-3 text-emerald-400" />
+						<span class="text-xs font-medium text-muted-foreground flex items-center justify-end gap-1">
+							<ArrowUpIcon class="size-3 text-chart-3" />
 							Upload (Tx)
 						</span>
-						<span class="text-emerald-400 font-bold tabular-nums text-sm">
+						<span class="text-foreground font-semibold tabular-nums text-sm">
 							{formatBps(bandwidthStats.currTx)}
 						</span>
 					</div>
 					<div class="hidden sm:flex flex-col gap-0.5 text-right">
-						<span class="text-[10px] uppercase font-sans text-muted-foreground font-semibold tracking-wider">Peak Window</span>
+						<span class="text-xs font-medium text-muted-foreground">Peak Window</span>
 						<span class="text-foreground font-bold tabular-nums">
 							{formatBps(bandwidthStats.peakRate)}
 						</span>
 					</div>
 					{#if showConntrack && conntrack}
 						<div class="hidden md:flex flex-col gap-0.5 text-right">
-							<span class="text-[10px] uppercase font-sans text-muted-foreground font-semibold tracking-wider">Conntrack</span>
-							<span class="text-violet-400 font-bold tabular-nums">
-								{conntrack.active_connections.toLocaleString()} <span class="text-[10px] font-normal text-muted-foreground">({conntrack.utilization_percent.toFixed(1)}%)</span>
+							<span class="text-xs font-medium text-muted-foreground">Conntrack</span>
+							<span class="text-foreground font-semibold tabular-nums">
+								{conntrack.active_connections.toLocaleString()} <span class="text-xs font-normal text-muted-foreground">({conntrack.utilization_percent.toFixed(1)}%)</span>
 							</span>
 						</div>
 					{/if}
@@ -513,20 +532,20 @@
 			{:else}
 				<div class="flex flex-wrap items-center gap-4 text-xs font-mono">
 					<div class="flex flex-col gap-0.5 text-right">
-						<span class="text-[10px] uppercase font-sans text-muted-foreground font-semibold tracking-wider">Avg Throughput</span>
+						<span class="text-xs font-medium text-muted-foreground">Avg Throughput</span>
 						<span class="text-foreground font-bold tabular-nums">
-							{dnsStatsValues.avgPerMin} <span class="text-[11px] font-normal text-muted-foreground">req/m</span>
+							{dnsStatsValues.avgPerMin} <span class="text-xs font-normal text-muted-foreground">req/m</span>
 						</span>
 					</div>
 					<div class="hidden sm:flex flex-col gap-0.5 text-right">
-						<span class="text-[10px] uppercase font-sans text-muted-foreground font-semibold tracking-wider">Peak Window</span>
-						<span class="text-sky-400 font-bold tabular-nums">
-							{dnsStatsValues.peakBucket} <span class="text-[11px] font-normal text-muted-foreground">pkts</span>
+						<span class="text-xs font-medium text-muted-foreground">Peak Window</span>
+						<span class="text-foreground font-semibold tabular-nums">
+							{dnsStatsValues.peakBucket} <span class="text-xs font-normal text-muted-foreground">queries</span>
 						</span>
 					</div>
 					<div class="flex flex-col gap-0.5 text-right">
-						<span class="text-[10px] uppercase font-sans text-muted-foreground font-semibold tracking-wider">Cache Efficiency</span>
-						<span class="text-emerald-400 font-bold tabular-nums">
+						<span class="text-xs font-medium text-muted-foreground">Cache Efficiency</span>
+						<span class="text-foreground font-semibold tabular-nums">
 							{dnsStatsValues.cacheHitRate}%
 						</span>
 					</div>
@@ -537,7 +556,7 @@
 		<!-- Categorized Interface Filter Bar (Bandwidth Mode) -->
 		{#if activeMode === "bandwidth" && availableInterfaces.length > 0}
 			<div class="flex items-center gap-1.5 pt-3 pb-0.5 text-xs border-t border-border/40 overflow-x-auto">
-				<span class="text-[11px] text-muted-foreground font-sans mr-1 shrink-0 flex items-center gap-1">
+				<span class="text-xs text-muted-foreground font-sans mr-1 shrink-0 flex items-center gap-1">
 					<NetworkIcon class="size-3" />
 					Interface:
 				</span>
@@ -546,16 +565,12 @@
 				{#if detectedWan}
 					<button
 						type="button"
-						class={[
-							"px-2 py-0.5 rounded text-[11px] font-mono transition-colors shrink-0 flex items-center gap-1",
-							effectiveSelectedIface === detectedWan
-								? "bg-primary text-primary-foreground font-semibold shadow-xs"
-								: "bg-muted/50 text-muted-foreground hover:text-foreground",
-						].join(" ")}
+						class={ifaceChipClass(effectiveSelectedIface === detectedWan)}
+						aria-pressed={effectiveSelectedIface === detectedWan}
 						onclick={() => (selectedIface = detectedWan)}
 						title="Active Gateway WAN interface"
 					>
-						<GlobeIcon class="size-3 text-sky-400" />
+						<GlobeIcon class="size-3 text-muted-foreground" />
 						<span>WAN ({detectedWan})</span>
 					</button>
 				{/if}
@@ -564,16 +579,12 @@
 				{#if detectedLan && detectedLan !== detectedWan}
 					<button
 						type="button"
-						class={[
-							"px-2 py-0.5 rounded text-[11px] font-mono transition-colors shrink-0 flex items-center gap-1",
-							effectiveSelectedIface === detectedLan
-								? "bg-primary text-primary-foreground font-semibold shadow-xs"
-								: "bg-muted/50 text-muted-foreground hover:text-foreground",
-						].join(" ")}
+						class={ifaceChipClass(effectiveSelectedIface === detectedLan)}
+						aria-pressed={effectiveSelectedIface === detectedLan}
 						onclick={() => (selectedIface = detectedLan)}
 						title="Local Network interface"
 					>
-						<NetworkIcon class="size-3 text-emerald-400" />
+						<NetworkIcon class="size-3 text-muted-foreground" />
 						<span>LAN ({detectedLan})</span>
 					</button>
 				{/if}
@@ -582,16 +593,12 @@
 				{#each vpnInterfaces as vpn (vpn)}
 					<button
 						type="button"
-						class={[
-							"px-2 py-0.5 rounded text-[11px] font-mono transition-colors shrink-0 flex items-center gap-1",
-							effectiveSelectedIface === vpn
-								? "bg-primary text-primary-foreground font-semibold shadow-xs"
-								: "bg-muted/50 text-muted-foreground hover:text-foreground",
-						].join(" ")}
+						class={ifaceChipClass(effectiveSelectedIface === vpn)}
+						aria-pressed={effectiveSelectedIface === vpn}
 						onclick={() => (selectedIface = vpn)}
 						title="Virtual Private Network overlay"
 					>
-						<ShieldCheckIcon class="size-3 text-violet-400" />
+						<ShieldCheckIcon class="size-3 text-muted-foreground" />
 						<span>{vpn} (VPN)</span>
 					</button>
 				{/each}
@@ -600,16 +607,12 @@
 				{#if detectedIngress}
 					<button
 						type="button"
-						class={[
-							"px-2 py-0.5 rounded text-[11px] font-mono transition-colors shrink-0 flex items-center gap-1",
-							effectiveSelectedIface === detectedIngress
-								? "bg-primary text-primary-foreground font-semibold shadow-xs"
-								: "bg-muted/50 text-muted-foreground hover:text-foreground",
-						].join(" ")}
+						class={ifaceChipClass(effectiveSelectedIface === detectedIngress)}
+						aria-pressed={effectiveSelectedIface === detectedIngress}
 						onclick={() => (selectedIface = detectedIngress)}
 						title="Kernel IFB queue redirect mirror for SQM ingress traffic shaping"
 					>
-						<GaugeIcon class="size-3 text-sky-400" />
+						<GaugeIcon class="size-3 text-muted-foreground" />
 						<span>SQM Ingress ({detectedIngress})</span>
 					</button>
 				{/if}
@@ -618,24 +621,19 @@
 				{#if containerInterfaces.length > 0 || otherInterfaces.length > 0}
 					<DropdownMenu.Root>
 						<DropdownMenu.Trigger
-							class={[
-								"px-2 py-0.5 rounded text-[11px] font-mono transition-colors shrink-0 flex items-center gap-1 cursor-pointer border border-border/40",
-								isContainerOrOtherSelected
-									? "bg-primary text-primary-foreground font-semibold shadow-xs"
-									: "bg-muted/50 text-muted-foreground hover:text-foreground",
-							].join(" ")}
+							class={ifaceChipClass(isContainerOrOtherSelected, "flex items-center gap-1 cursor-pointer border border-border/40")}
 							title="Container virtual devices (Podman/Docker) and secondary interfaces"
 						>
-							<BoxesIcon class="size-3 text-amber-400" />
+							<BoxesIcon class="size-3 text-muted-foreground" />
 							<span>{isContainerOrOtherSelected ? effectiveSelectedIface : `Containers & Others (${containerInterfaces.length + otherInterfaces.length})`}</span>
 							<ChevronDownIcon class="size-3 opacity-60" />
 						</DropdownMenu.Trigger>
 						<DropdownMenu.Content align="start" class="w-56 max-h-64 overflow-y-auto text-xs">
 							{#if containerInterfaces.length > 0}
-								<DropdownMenu.Label class="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">Containers (Podman / Docker)</DropdownMenu.Label>
+								<DropdownMenu.Label class="text-xs font-medium text-muted-foreground">Containers (Podman / Docker)</DropdownMenu.Label>
 								{#each containerInterfaces as cIface (cIface)}
 									<DropdownMenu.Item onclick={() => (selectedIface = cIface)} class="font-mono text-xs gap-2">
-										<BoxesIcon class="size-3.5 text-amber-400" />
+										<BoxesIcon class="size-3.5 text-muted-foreground" />
 										<span>{cIface}</span>
 									</DropdownMenu.Item>
 								{/each}
@@ -644,7 +642,7 @@
 								{#if containerInterfaces.length > 0}
 									<DropdownMenu.Separator />
 								{/if}
-								<DropdownMenu.Label class="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">Other Interfaces</DropdownMenu.Label>
+								<DropdownMenu.Label class="text-xs font-medium text-muted-foreground">Other Interfaces</DropdownMenu.Label>
 								{#each otherInterfaces as oIface (oIface)}
 									<DropdownMenu.Item onclick={() => (selectedIface = oIface)} class="font-mono text-xs gap-2">
 										<NetworkIcon class="size-3.5 text-muted-foreground" />
@@ -659,12 +657,8 @@
 				<!-- 6. All Interfaces (Excludes IFB mirrors from aggregation) -->
 				<button
 					type="button"
-					class={[
-						"px-2 py-0.5 rounded text-[11px] font-mono transition-colors shrink-0",
-						effectiveSelectedIface === "all"
-							? "bg-primary text-primary-foreground font-semibold shadow-xs"
-							: "bg-muted/50 text-muted-foreground hover:text-foreground",
-					].join(" ")}
+					class={ifaceChipClass(effectiveSelectedIface === "all", "")}
+					aria-pressed={effectiveSelectedIface === "all"}
 					onclick={() => (selectedIface = "all")}
 					title="Aggregated throughput across physical interfaces (excludes SQM IFB mirrors)"
 				>
@@ -677,7 +671,7 @@
 	<!-- Chart Canvas -->
 	<Card.Content class="p-4 sm:p-6">
 		{#if activeMode === "bandwidth"}
-			{#if loading && trafficHistory.length === 0}
+			{#if loading && !telemetryData}
 				<Skeleton class="h-[210px] w-full" />
 			{:else}
 				<Chart.Container config={trafficChartConfig} class="aspect-auto h-[210px] w-full">
@@ -772,18 +766,18 @@
 	<Card.Footer class="border-t border-border/50 bg-muted/10 px-4 sm:px-6 !py-3.5 sm:!py-4 !pt-3.5 sm:!pt-4 rounded-b-3xl">
 		<div class="flex flex-wrap items-center justify-between gap-3 w-full text-xs text-muted-foreground font-mono">
 			<div class="flex items-center gap-2">
-				<ZapIcon class="size-3.5 text-amber-400" />
-				<span>Gateway Uplink: <span class="text-foreground font-semibold font-sans">{detectedWan || statusData?.network?.lan_iface || "Auto"}</span></span>
+				<ZapIcon class="size-3.5 text-muted-foreground" />
+				<span>Gateway Uplink: <span class="text-foreground font-semibold font-sans">{detectedWan || "Not detected"}</span></span>
 			</div>
 			{#if showConntrack}
 				<div class="flex items-center gap-2">
-					<ShieldCheckIcon class="size-3.5 text-emerald-400" />
-					<span>Conntrack: <span class="text-emerald-400 font-semibold">{conntrack ? `${conntrack.active_connections.toLocaleString()} active` : "Protected"}</span></span>
+					<ShieldCheckIcon class="size-3.5 text-success" />
+					<span>Conntrack: <span class="text-foreground font-semibold">{conntrack ? `${conntrack.active_connections.toLocaleString()} active` : "Protected"}</span></span>
 				</div>
 			{/if}
 			<div class="flex items-center gap-2">
-				<GaugeIcon class="size-3.5 text-sky-400" />
-				<span>Bufferbloat (CAKE): <span class="text-sky-400 font-semibold">{telemetryData?.sqm?.active ? (detectedIngress ? `Active on ${detectedWan || 'WAN'} & ${detectedIngress}` : "Active AQM") : "Standard"}</span></span>
+				<GaugeIcon class="size-3.5 text-muted-foreground" />
+				<span>Bufferbloat (CAKE): <span class="text-foreground font-semibold">{telemetryData?.sqm?.active ? (detectedIngress ? `Active on ${detectedWan || 'WAN'} & ${detectedIngress}` : "Active AQM") : "Standard"}</span></span>
 			</div>
 		</div>
 	</Card.Footer>

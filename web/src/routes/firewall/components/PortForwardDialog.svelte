@@ -30,12 +30,15 @@
 		rule,
 		onSave,
 		onClose,
+		prefill = null,
 	}: {
 		open: boolean;
 		zones: string[];
 		rule: PortForwardRule | null;
 		onSave: (rule: PortForwardRule | PortForwardRule[]) => void;
 		onClose: () => void;
+		/** Opens an add form with the internal target (`dev:<name|mac>` or an IP) and comment preset. */
+		prefill?: { target: string; name?: string } | null;
 	} = $props();
 
 	// ── Form state ────────────────────────────────────────────────────────────
@@ -116,15 +119,25 @@
 						internalIpv6 = "";
 					}
 				} else {
-					comment = "";
+					comment = prefill?.name ?? "";
 					protocol = "Tcp";
-					srcZone = zones.find((z) => z === "external" || z === "wan") ?? zones[0] ?? "";
+					srcZone = zones.find((zone) => zone === "external" || zone === "wan") ?? zones[0] ?? "";
 					externalPort = 80;
 					internalIp = "";
 					internalIpv6 = "";
 					internalPort = 80;
 					ipMode = "v4";
 					enableHairpin = false;
+					const target = prefill?.target.trim();
+					if (target?.startsWith("dev:")) {
+						deviceTarget = target;
+						ipMode = "dual";
+					} else if (target?.includes(":")) {
+						ipMode = "v6";
+						internalIpv6 = cleanIp(target);
+					} else if (target) {
+						internalIp = cleanIp(target);
+					}
 				}
 			});
 		}
@@ -175,13 +188,16 @@
 		internalIpv6: ipv6Schema,
 	});
 
+	// An IPv6 pinhole is routed, so a device rule that includes IPv6 keeps the external port.
+	const portFollowsExternal = $derived(Boolean(deviceTarget) && ipMode !== "v4");
+
 	// ── Submit ────────────────────────────────────────────────────────────────
 	function handleSave() {
 		if (deviceTarget) {
 			const validation = validateForm(portForwardBaseSchema, {
 				srcZone,
 				externalPort: externalPort === "" ? NaN : externalPort,
-				internalPort: internalPort === "" ? NaN : internalPort,
+				internalPort: portFollowsExternal ? externalPort : internalPort === "" ? NaN : internalPort,
 				comment: comment.trim() || undefined,
 			});
 			if (!validation.success) {
@@ -196,7 +212,7 @@
 				internal_ip: deviceTarget,
 				external_port: Number(externalPort),
 				// An IPv6 pinhole is routed: it keeps the external port.
-				internal_port: ipMode === "v4" ? Number(internalPort) : Number(externalPort),
+				internal_port: portFollowsExternal ? Number(externalPort) : Number(internalPort),
 				protocol,
 				enable_hairpin: ipMode === "v6" ? false : enableHairpin,
 				family: ipMode === "dual" ? null : ipMode === "v4" ? "ipv4" : "ipv6",
@@ -321,7 +337,7 @@
 						{/snippet}
 					</DropdownMenu.Trigger>
 					<DropdownMenu.Content align="end" class="w-52">
-						<DropdownMenu.Label class="text-[11px] uppercase tracking-wide text-muted-foreground">
+						<DropdownMenu.Label class="text-xs text-muted-foreground">
 							Apply Preset
 						</DropdownMenu.Label>
 						<DropdownMenu.Separator />
@@ -342,14 +358,14 @@
 		<!-- Form -->
 		<div class="flex flex-col gap-4 py-2">
 			<!-- Device Picker -->
-			<div class="flex flex-col gap-1.5 p-3 rounded-xl border border-border bg-muted/30">
+			<div class="flex flex-col gap-1.5 p-3 rounded-lg border border-border bg-muted/30">
 				<div class="flex items-center justify-between">
 					<Label class="text-xs font-semibold flex items-center gap-1.5 text-foreground">
 						<LaptopIcon class="size-3.5 text-primary" />
 						Target LAN Device
 					</Label>
 					{#if selectedDevice}
-						<Badge variant="outline" class="text-[10px] font-mono text-emerald-500 bg-emerald-500/10 border-emerald-500/20">
+						<Badge variant="outline" class="text-xs font-mono">
 							{selectedDevice.origin === "Static" || selectedDevice.v6 !== null ? "Pinned / Static" : "Dynamic Discovery"}
 						</Badge>
 					{/if}
@@ -360,16 +376,16 @@
 					onselect={handleDeviceSelect}
 				/>
 				{#if selectedDevice}
-					<div class="flex flex-wrap items-center gap-1.5 text-[11px] pt-1">
+					<div class="flex flex-wrap items-center gap-1.5 text-xs pt-1">
 						<span class="text-muted-foreground">Detected:</span>
 						<span class="font-semibold text-foreground">{selectedDevice.hostname || selectedDevice.mac}</span>
 						{#if selectedDevice.primary_v4}
-							<Badge variant="secondary" class="font-mono text-[10px] h-5">
+							<Badge variant="secondary" class="font-mono text-xs h-5">
 								v4: {selectedDevice.primary_v4}
 							</Badge>
 						{/if}
 						{#if selectedDevice.primary_v6}
-							<Badge variant="secondary" class="font-mono text-[10px] h-5 text-purple-400">
+							<Badge variant="secondary" class="font-mono text-xs h-5 text-muted-foreground">
 								v6: {selectedDevice.primary_v6}
 							</Badge>
 						{/if}
@@ -392,11 +408,11 @@
 							Dual-Stack (v4 + v6)
 						</ToggleGroup.Item>
 						<ToggleGroup.Item value="v4" class="flex-1 text-xs gap-1.5">
-							<span class="text-blue-400 font-bold text-[10px]">IPv4</span>
+							<span class="text-muted-foreground font-bold text-xs">IPv4</span>
 							DNAT Only
 						</ToggleGroup.Item>
 						<ToggleGroup.Item value="v6" class="flex-1 text-xs gap-1.5">
-							<GlobeIcon class="size-3.5 text-purple-400" />
+							<GlobeIcon class="size-3.5 text-muted-foreground" />
 							IPv6 Pinhole
 						</ToggleGroup.Item>
 					</ToggleGroup.Root>
@@ -405,13 +421,13 @@
 
 			<!-- Target: a device (follows its addresses) or fixed IPs -->
 			{#if deviceTarget}
-				<div class="flex flex-col gap-1.5 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-[11px]">
+				<div class="flex flex-col gap-1.5 rounded-lg border border-border bg-muted/30 p-3 text-xs">
 					<div class="flex items-center justify-between gap-2">
 						<span class="font-mono font-semibold text-foreground">{deviceTarget}</span>
 						<Button
 							size="sm"
 							variant="ghost"
-							class="h-6 text-[11px]"
+							class="h-6 text-xs"
 							onclick={() => {
 								deviceTarget = null;
 								selectedDevice = null;
@@ -429,7 +445,7 @@
 				<Field.Field data-invalid={!!errors.internalIp || undefined}>
 					<Field.Label class="text-xs flex items-center justify-between">
 						<span>Internal IPv4 Address</span>
-						<span class="text-[10px] text-muted-foreground">Private LAN IP (DNAT)</span>
+						<span class="text-xs text-muted-foreground">Private LAN IP (DNAT)</span>
 					</Field.Label>
 					<Field.Content>
 						<Input
@@ -444,7 +460,7 @@
 						/>
 					</Field.Content>
 					{#if errors.internalIp}
-						<Field.Error class="flex items-center gap-1 text-[11px]">
+						<Field.Error class="flex items-center gap-1 text-xs">
 							<AlertCircleIcon class="size-3.5 shrink-0" />
 							<span>{errors.internalIp}</span>
 						</Field.Error>
@@ -456,7 +472,7 @@
 				<Field.Field data-invalid={!!errors.internalIpv6 || undefined}>
 					<Field.Label class="text-xs flex items-center justify-between">
 						<span>Target IPv6 Address</span>
-						<span class="text-[10px] text-purple-400">Routed global address (GUA)</span>
+						<span class="text-xs text-muted-foreground">Routed global address (GUA)</span>
 					</Field.Label>
 					<Field.Content>
 						<Input
@@ -471,7 +487,7 @@
 						/>
 					</Field.Content>
 					{#if errors.internalIpv6}
-						<Field.Error class="flex items-center gap-1 text-[11px]">
+						<Field.Error class="flex items-center gap-1 text-xs">
 							<AlertCircleIcon class="size-3.5 shrink-0" />
 							<span>{errors.internalIpv6}</span>
 						</Field.Error>
@@ -480,14 +496,14 @@
 					<!-- Quick switch between GUA and ULA if available -->
 					{#if selectedDevice && selectedDevice.ipv6_addrs && selectedDevice.ipv6_addrs.length > 1}
 						<div class="flex items-center gap-1.5 pt-1">
-							<span class="text-[10px] text-muted-foreground">Available on host:</span>
-							{#each selectedDevice.ipv6_addrs as addr}
+							<span class="text-xs text-muted-foreground">Available on host:</span>
+							{#each selectedDevice.ipv6_addrs as addr (addr)}
 								<Button
 									type="button"
 									variant="ghost"
 									size="sm"
 									class={cn(
-										"h-5 px-1.5 text-[10px] font-mono",
+										"h-5 px-1.5 text-xs font-mono",
 										internalIpv6 === addr.addr && "bg-primary/15 text-primary font-semibold"
 									)}
 									onclick={() => { internalIpv6 = addr.addr; if (errors.internalIpv6) errors = { ...errors, internalIpv6: "" }; }}
@@ -517,7 +533,7 @@
 						/>
 					</Field.Content>
 					{#if errors.externalPort}
-						<Field.Error class="flex items-center gap-1 text-[11px]">
+						<Field.Error class="flex items-center gap-1 text-xs">
 							<AlertCircleIcon class="size-3.5 shrink-0" />
 							<span>{errors.externalPort}</span>
 						</Field.Error>
@@ -527,19 +543,26 @@
 				<Field.Field data-invalid={!!errors.internalPort || undefined}>
 					<Field.Label class="text-xs">Internal Port</Field.Label>
 					<Field.Content>
-						<Input
-							type="number"
-							min="1"
-							max="65535"
-							bind:value={internalPort}
-							placeholder="80"
-							class={cn("font-mono text-xs", errors.internalPort && "border-destructive")}
-							aria-invalid={Boolean(errors.internalPort)}
-							oninput={() => { if (errors.internalPort) errors = { ...errors, internalPort: "" }; }}
-						/>
+						{#if portFollowsExternal}
+							<Input type="number" value={externalPort} disabled class="font-mono text-xs" />
+						{:else}
+							<Input
+								type="number"
+								min="1"
+								max="65535"
+								bind:value={internalPort}
+								placeholder="80"
+								class={cn("font-mono text-xs", errors.internalPort && "border-destructive")}
+								aria-invalid={Boolean(errors.internalPort)}
+								oninput={() => { if (errors.internalPort) errors = { ...errors, internalPort: "" }; }}
+							/>
+						{/if}
 					</Field.Content>
+					{#if portFollowsExternal}
+						<p class="text-xs text-muted-foreground">IPv6 pinholes are routed, so the host gets the external port.</p>
+					{/if}
 					{#if errors.internalPort}
-						<Field.Error class="flex items-center gap-1 text-[11px]">
+						<Field.Error class="flex items-center gap-1 text-xs">
 							<AlertCircleIcon class="size-3.5 shrink-0" />
 							<span>{errors.internalPort}</span>
 						</Field.Error>
@@ -582,14 +605,14 @@
 								{srcZone || "Select zone…"}
 							</Select.Trigger>
 							<Select.Content>
-								{#each zones as z (z)}
-									<Select.Item value={z} class="text-xs">{z}</Select.Item>
+								{#each zones as zone (zone)}
+									<Select.Item value={zone} class="text-xs">{zone}</Select.Item>
 								{/each}
 							</Select.Content>
 						</Select.Root>
 					</Field.Content>
 					{#if errors.srcZone}
-						<Field.Error class="flex items-center gap-1 text-[11px]">
+						<Field.Error class="flex items-center gap-1 text-xs">
 							<AlertCircleIcon class="size-3.5 shrink-0" />
 							<span>{errors.srcZone}</span>
 						</Field.Error>
@@ -610,7 +633,7 @@
 					/>
 				</Field.Content>
 				{#if errors.comment}
-					<Field.Error class="flex items-center gap-1 text-[11px]">
+					<Field.Error class="flex items-center gap-1 text-xs">
 						<AlertCircleIcon class="size-3.5 shrink-0" />
 						<span>{errors.comment}</span>
 					</Field.Error>
@@ -623,8 +646,8 @@
 			{#if ipMode !== "v6"}
 				<Field.Field orientation="horizontal">
 					<Field.Label class="text-xs flex-1">
-						Hairpin NAT <span class="text-[11px] text-muted-foreground">(IPv4 only)</span>
-						<Field.Description class="text-[11px] font-normal text-muted-foreground">
+						Hairpin NAT <span class="text-xs text-muted-foreground">(IPv4 only)</span>
+						<Field.Description class="text-xs font-normal text-muted-foreground">
 							Allows internal LAN devices to access this service using your public WAN IP or DDNS hostname.
 						</Field.Description>
 					</Field.Label>
@@ -633,7 +656,7 @@
 					</Field.Content>
 				</Field.Field>
 			{:else}
-				<div class="text-[11px] text-muted-foreground bg-muted/40 rounded-lg p-2.5 border border-border/60">
+				<div class="text-xs text-muted-foreground bg-muted/40 rounded-lg p-2.5 border border-border/60">
 					<strong class="text-foreground">IPv6 Direct Routing:</strong> Hairpin NAT is not required on IPv6 because LAN devices communicate directly with the target device's global address without address translation.
 				</div>
 			{/if}

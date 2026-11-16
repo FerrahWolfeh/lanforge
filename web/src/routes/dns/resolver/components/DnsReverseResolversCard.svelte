@@ -1,18 +1,17 @@
 <script lang="ts">
 	import * as Card from "$lib/components/ui/card";
 	import * as Table from "$lib/components/ui/table";
-	import * as Tooltip from "$lib/components/ui/tooltip";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import * as Empty from "$lib/components/ui/empty";
 	import { Button } from "$lib/components/ui/button";
 	import { Skeleton } from "$lib/components/ui/skeleton";
-	import { toast } from "svelte-sonner";
 	import CpuIcon from "@lucide/svelte/icons/cpu";
 	import PlusIcon from "@lucide/svelte/icons/plus";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
 	import CopyIcon from "@lucide/svelte/icons/copy";
 	import type { ReverseResolverEntry } from "$lib/api/types";
+	import { formatSubnet, copyToClipboard } from "$lib/utils";
 
 	let {
 		loading = true,
@@ -29,33 +28,8 @@
 		canEdit?: boolean;
 	} = $props();
 
-	function formatSubnet(s: any): string {
-		if (!s) return "";
-		if (typeof s === "string") return s;
-		if (typeof s === "object") {
-			if (s.subnet) return formatSubnet(s.subnet);
-			if (s.net && s.prefix !== undefined) return `${s.net}/${s.prefix}`;
-			if (s.cidr) return s.cidr;
-			if (s.ip && s.mask) return `${s.ip}/${s.mask}`;
-			if (s.addr && s.prefix_len !== undefined)
-				return `${s.addr}/${s.prefix_len}`;
-		}
-		return String(s);
-	}
-
 	function formatResolverUri(r: ReverseResolverEntry): string {
-		if (!r) return "—";
-		if (typeof r.resolver === "string") return r.resolver;
-		if (typeof r.resolver_uri === "string") return r.resolver_uri;
-		if (r.resolver && typeof r.resolver === "object") {
-			const res = r.resolver as any;
-			if (res.target) return String(res.target);
-			if (res.addr)
-				return res.protocol
-					? `${res.protocol}://${res.addr}`
-					: String(res.addr);
-		}
-		return "—";
+		return r?.resolver ?? "—";
 	}
 </script>
 
@@ -64,7 +38,7 @@
 		<div class="flex items-center justify-between">
 			<div class="flex flex-col gap-0.5">
 				<Card.Title class="text-base flex items-center gap-2">
-					<CpuIcon class="size-4 text-purple-400" />
+					<CpuIcon class="size-4 text-muted-foreground" />
 					<span>Reverse DNS (PTR) Resolvers</span>
 				</Card.Title>
 				<p class="text-muted-foreground text-xs font-normal">
@@ -115,11 +89,11 @@
 						{#each reverseResolvers as r, i (formatSubnet(r.subnet) + i)}
 							<Table.Row>
 								<Table.Cell
-									class="font-semibold text-emerald-400 font-mono"
+									class="font-semibold text-success font-mono"
 								>
 									{formatSubnet(r.subnet)}
 								</Table.Cell>
-								<Table.Cell class="text-sky-400 font-mono">
+								<Table.Cell class="text-muted-foreground font-mono">
 									{formatResolverUri(r)}
 								</Table.Cell>
 								<Table.Cell class="text-right font-sans">
@@ -138,13 +112,8 @@
 											<DropdownMenu.Item
 												onclick={() => {
 													const subnet =
-														formatSubnet(r);
-													navigator.clipboard.writeText(
-														subnet,
-													);
-													toast.success(
-														`Copied subnet ${subnet}`,
-													);
+														formatSubnet(r.subnet);
+													copyToClipboard(subnet, `subnet ${subnet}`);
 												}}
 												class="gap-2"
 											>
@@ -157,12 +126,7 @@
 												onclick={() => {
 													const uri =
 														formatResolverUri(r);
-													navigator.clipboard.writeText(
-														uri,
-													);
-													toast.success(
-														`Copied resolver URI ${uri}`,
-													);
+													copyToClipboard(uri, `resolver URI ${uri}`);
 												}}
 												class="gap-2"
 											>
@@ -176,7 +140,7 @@
 											<DropdownMenu.Item
 												onclick={() =>
 													onRemoveReverse(r)}
-												class="gap-2 text-rose-500"
+												class="gap-2 text-danger"
 											>
 												<Trash2Icon
 													class="h-3.5 w-3.5"

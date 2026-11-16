@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { cleanDomain, cleanAnswer, getResultBadge, originText, quickDnsRule } from "$lib/components/dns/dnsLog";
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import { Button } from "$lib/components/ui/button";
@@ -16,8 +17,9 @@
 	import BellOffIcon from "@lucide/svelte/icons/bell-off";
 	import LayersIcon from "@lucide/svelte/icons/layers";
 	import { toast } from "svelte-sonner";
-	import { dnsBlock, dnsAllow, dnsQuery, hostSet } from "$lib/api/client";
+	import { dnsQuery, hostSet } from "$lib/api/client";
 	import type { DnsQueryLogEntry } from "$lib/api/types";
+	import { createSequence, copyToClipboard, formatFullDate, formatLatency, errorMessage } from "$lib/utils";
 
 	let {
 		open = $bindable(false),
@@ -33,97 +35,54 @@
 	let actionLoading = $state(false);
 	let testQueryResult = $state<string | null>(null);
 	let testingQuery = $state(false);
+	const testSeq = createSequence();
 
-	function cleanDomain(raw: string): string {
-		if (!raw) return "";
-		return raw.trim().replace(/\.$/, "");
-	}
+	// The dialog is reused per row: a new entry drops the old result and any in-flight test.
+	$effect(() => {
+		void entry;
+		testSeq.next();
+		testQueryResult = null;
+		testingQuery = false;
+	});
 
-	function cleanAnswer(raw?: string | null): string {
-		if (!raw) return "—";
-		return raw
-			.replace(/^"|"$/g, "")
-			.replace(/^(A|AAAA|CNAME|PTR|NS)\((.*)\)$/, "$2")
-			.trim()
-			.replace(/\.$/, "");
-	}
-
-	function formatLatency(us: number): string {
-		if (us === 0) return "0 ms";
-		if (us < 1000) return `${us} µs`;
-		return `${(us / 1000).toFixed(2)} ms`;
-	}
-
-	function formatTimestamp(ts: number): string {
-		if (!ts) return "—";
-		const ms = ts < 1e11 ? ts * 1000 : ts;
-		const date = new Date(ms);
-		return date.toLocaleString(undefined, {
-			year: "numeric",
-			month: "2-digit",
-			day: "2-digit",
-			hour: "2-digit",
-			minute: "2-digit",
-			second: "2-digit",
-			hour12: false,
-		});
-	}
-
-	async function copyToClipboard(text: string, field: string) {
-		try {
-			await navigator.clipboard.writeText(text);
-			copiedField = field;
-			toast.success(`Copied ${field} to clipboard`);
-			setTimeout(() => {
-				copiedField = null;
-			}, 2000);
-		} catch {
-			toast.error("Failed to copy");
-		}
+	async function copyItem(text: string, field: string) {
+		if (!(await copyToClipboard(text, field))) return;
+		copiedField = field;
+		setTimeout(() => {
+			copiedField = null;
+		}, 2000);
 	}
 
 	async function handleTestQuery() {
 		if (!entry) return;
+		const seq = testSeq.next();
 		testingQuery = true;
 		testQueryResult = null;
 		try {
 			const res = await dnsQuery(cleanDomain(entry.domain), entry.qtype);
+			if (!testSeq.isCurrent(seq)) return;
 			testQueryResult = JSON.stringify(res, null, 2);
 			toast.success("Diagnostic query test executed");
-		} catch (err: any) {
-			testQueryResult = `Error: ${err?.message ?? "Query failed"}`;
+		} catch (err) {
+			if (!testSeq.isCurrent(seq)) return;
+			testQueryResult = `Error: ${errorMessage(err, "Query failed")}`;
 			toast.error("Diagnostic query failed");
-		} finally {
-			testingQuery = false;
 		}
+		testingQuery = false;
 	}
 
 	async function handleBlockDomain() {
 		if (!entry) return;
 		actionLoading = true;
-		const dom = cleanDomain(entry.domain);
-		try {
-			await dnsBlock(dom);
-			toast.success(`Added ${dom} to adblock black list`);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to block domain");
-		} finally {
-			actionLoading = false;
-		}
+		await quickDnsRule("block", entry.domain);
+		actionLoading = false;
 	}
 
 	async function handleAllowDomain() {
 		if (!entry) return;
 		actionLoading = true;
-		const dom = cleanDomain(entry.domain);
-		try {
-			await dnsAllow(dom);
-			toast.success(`Added ${dom} to allowlist`);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to allow domain");
-		} finally {
-			actionLoading = false;
-		}
+		await quickDnsRule("allow", entry.domain);
+		actionLoading = false;
 	}
 
 	function handleCreateRewrite() {
@@ -145,8 +104,8 @@
 			await hostSet(entry.src_mac, "add_ignored_log_domain", dom);
 			toast.success(`Silenced ${dom} in logs for ${entry.src_hostname || entry.src_mac}`);
 			open = false;
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to silence domain for this client");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to silence domain for this client"));
 		} finally {
 			actionLoading = false;
 		}
@@ -159,8 +118,8 @@
 			await hostSet(entry.src_mac, "ignore_dns_log", "true");
 			toast.success(`Silenced all DNS logs for ${entry.src_hostname || entry.src_mac}`);
 			open = false;
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to silence client in logs");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to silence client in logs"));
 		} finally {
 			actionLoading = false;
 		}
@@ -173,75 +132,13 @@
 		if (entry.src_hostname) return `${entry.src_hostname} (${entry.src_ip})`;
 		return entry.src_ip;
 	});
-	function getResultBadge(result: string, cached: boolean, filter?: any) {
-		if (filter?.action === "allow") {
-			return {
-				label: "Allowed (@@)",
-				class: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
-			};
-		}
-		const lower = (result || "").toLowerCase();
-		if (lower === "cachedblock" || lower === "cached_block" || (lower.includes("block") && cached)) {
-			return {
-				label: "Cached Block",
-				class: "bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/20",
-			};
-		}
-		if (lower.includes("block") || lower.includes("deny")) {
-			return {
-				label: "Blocked",
-				class: "bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20",
-			};
-		}
-		if (lower === "rewritten" || lower.includes("rewrite")) {
-			return {
-				label: "Rewritten",
-				class: "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20",
-			};
-		}
-		if (lower === "local") {
-			return {
-				label: "Local",
-				class: "bg-teal-500/10 text-teal-600 dark:text-teal-400 border-teal-500/20",
-			};
-		}
-		if (lower === "nxdomain") {
-			return {
-				label: "NXDomain",
-				class: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
-			};
-		}
-		if (lower === "error") {
-			return {
-				label: "Error",
-				class: "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20",
-			};
-		}
-		if (cached || lower === "cached") {
-			return {
-				label: "Cached",
-				class: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
-			};
-		}
-		if (lower === "coalesced") {
-			return {
-				label: "Coalesced",
-				class: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border-cyan-500/20",
-			};
-		}
-		return {
-			label: "Forwarded",
-			class: "bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/20",
-		};
-	}
-
 	const badgeInfo = $derived(
 		entry ? getResultBadge(entry.result, entry.cached, entry.filter) : { label: "—", class: "" }
 	);
 </script>
 
 <Dialog.Root bind:open>
-	<Dialog.Content class="w-[95vw] max-w-lg sm:max-w-lg overflow-hidden border shadow-lg">
+	<Dialog.Content class="w-[95vw] max-w-lg sm:max-w-lg border">
 		<Dialog.Header class="space-y-1 min-w-0 pr-6">
 			<div class="flex items-center gap-2 min-w-0">
 				<Badge variant="outline" class="font-mono text-xs px-2 py-0.5 shrink-0">
@@ -252,7 +149,7 @@
 				</Dialog.Title>
 			</div>
 			<Dialog.Description class="text-xs">
-				Detailed DNS query telemetry, client attribution, and quick actions.
+				The full answer, which device asked, and quick actions.
 			</Dialog.Description>
 		</Dialog.Header>
 
@@ -262,21 +159,25 @@
 				<div class="grid grid-cols-1 gap-3 rounded-lg border p-3 bg-muted/20 min-w-0">
 					<!-- Domain -->
 					<div class="min-w-0">
-						<span class="text-[11px] text-muted-foreground font-medium uppercase tracking-wider block">
+						<span class="text-xs text-muted-foreground font-medium block">
 							Requested Domain
 						</span>
 						<div class="flex items-start justify-between gap-2 mt-1 min-w-0">
-							<span class="font-mono font-medium text-xs break-all text-foreground min-w-0 flex-1 leading-relaxed">
+							<a
+								href={`/dns/domains/${encodeURIComponent(domainClean)}`}
+								class="font-mono font-medium text-xs break-all text-foreground min-w-0 flex-1 leading-relaxed hover:underline"
+								onclick={() => (open = false)}
+							>
 								{domainClean}
-							</span>
+							</a>
 							<Button
 								variant="ghost"
 								size="icon"
 								class="h-6 w-6 shrink-0 mt-0.5"
-								onclick={() => copyToClipboard(domainClean, "Domain Name")}
+								onclick={() => copyItem(domainClean, "Domain Name")}
 							>
 								{#if copiedField === "Domain Name"}
-									<CheckIcon class="h-3 w-3 text-emerald-500" />
+									<CheckIcon class="h-3 w-3 text-success" />
 								{:else}
 									<CopyIcon class="h-3 w-3 text-muted-foreground" />
 								{/if}
@@ -286,15 +187,23 @@
 
 					<!-- Client Info -->
 					<div class="min-w-0">
-						<span class="text-[11px] text-muted-foreground font-medium uppercase tracking-wider block">
+						<span class="text-xs text-muted-foreground font-medium block">
 							Requesting Client
 						</span>
 						<div class="flex items-center justify-between gap-2 mt-1 min-w-0">
 							<div class="flex items-center gap-1.5 font-mono text-xs text-foreground min-w-0 truncate">
 								<LaptopIcon class="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-								<span class="truncate">{clientLabel}</span>
 								{#if entry.src_mac}
-									<Badge variant="secondary" class="text-[10px] font-mono px-1 py-0 shrink-0">
+									<a
+										href={`/network/devices/${encodeURIComponent(entry.src_mac)}`}
+										class="truncate hover:underline"
+										onclick={() => (open = false)}>{clientLabel}</a
+									>
+								{:else}
+									<span class="truncate">{clientLabel}</span>
+								{/if}
+								{#if entry.src_mac}
+									<Badge variant="secondary" class="text-xs font-mono px-1 py-0 shrink-0">
 										{entry.src_mac}
 									</Badge>
 								{/if}
@@ -303,10 +212,10 @@
 								variant="ghost"
 								size="icon"
 								class="h-6 w-6 shrink-0"
-								onclick={() => copyToClipboard(entry.src_ip, "Client IP")}
+								onclick={() => copyItem(entry.src_ip, "Client IP")}
 							>
 								{#if copiedField === "Client IP"}
-									<CheckIcon class="h-3 w-3 text-emerald-500" />
+									<CheckIcon class="h-3 w-3 text-success" />
 								{:else}
 									<CopyIcon class="h-3 w-3 text-muted-foreground" />
 								{/if}
@@ -316,14 +225,14 @@
 
 					<!-- Resolution Outcome / Answer -->
 					<div class="min-w-0">
-						<span class="text-[11px] text-muted-foreground font-medium uppercase tracking-wider block">
+						<span class="text-xs text-muted-foreground font-medium block">
 							Resolution Result / Answer
 						</span>
 						<div class="flex items-start justify-between gap-2 mt-1 min-w-0">
 							<div class="flex flex-wrap items-center gap-2 min-w-0 flex-1">
 								<Badge
 									variant="outline"
-									class="text-[11px] font-mono border font-medium uppercase shrink-0 {badgeInfo.class}"
+									class="text-xs font-mono border font-medium uppercase shrink-0 {badgeInfo.class}"
 								>
 									{badgeInfo.label}
 								</Badge>
@@ -336,10 +245,10 @@
 									variant="ghost"
 									size="icon"
 									class="h-6 w-6 shrink-0 mt-0.5"
-									onclick={() => copyToClipboard(answerClean, "Answer")}
+									onclick={() => copyItem(answerClean, "Answer")}
 								>
 									{#if copiedField === "Answer"}
-										<CheckIcon class="h-3 w-3 text-emerald-500" />
+										<CheckIcon class="h-3 w-3 text-success" />
 									{:else}
 										<CopyIcon class="h-3 w-3 text-muted-foreground" />
 									{/if}
@@ -352,7 +261,7 @@
 					<div class="flex items-center justify-between gap-2 pt-2 border-t border-border/50 text-xs min-w-0">
 						<div class="flex items-center gap-1.5 text-muted-foreground min-w-0">
 							<ClockIcon class="h-3.5 w-3.5 shrink-0" />
-							<span class="truncate font-mono">{formatTimestamp(entry.timestamp)}</span>
+							<span class="truncate font-mono">{formatFullDate(entry.timestamp)}</span>
 						</div>
 						<div class="flex items-center gap-1.5 text-muted-foreground shrink-0">
 							<GaugeIcon class="h-3.5 w-3.5 shrink-0" />
@@ -373,15 +282,15 @@
 				{#if entry.filter}
 					<div class="rounded-lg border p-3 bg-muted/20 space-y-2">
 						<div class="flex items-center justify-between">
-							<span class="text-[11px] text-muted-foreground font-medium uppercase tracking-wider block">
+							<span class="text-xs text-muted-foreground font-medium block">
 								Filter Rule Attribution
 							</span>
 							{#if entry.filter.action === 'block'}
-								<Badge variant="outline" class="bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20 font-mono text-[10px]">
+								<Badge variant="outline" class="bg-danger/10 text-danger border-danger/20 font-mono text-xs">
 									Blocked by Filter
 								</Badge>
 							{:else}
-								<Badge variant="outline" class="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 font-mono text-[10px]">
+								<Badge variant="outline" class="bg-success/10 text-success border-success/20 font-mono text-xs">
 									Allowed Exception (@@)
 								</Badge>
 							{/if}
@@ -390,13 +299,13 @@
 						<div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs pt-1">
 							{#if entry.filter.rule}
 								<div>
-									<span class="text-[10px] text-muted-foreground block">Matched Rule</span>
+									<span class="text-xs text-muted-foreground block">Matched Rule</span>
 									<div class="flex items-center gap-1.5 mt-0.5">
 										<code class="font-mono text-xs bg-muted px-1.5 py-0.5 rounded font-medium text-foreground">
 											{entry.filter.rule}
 										</code>
 										{#if entry.filter.important}
-											<Badge variant="secondary" class="font-mono text-[9px] bg-amber-500/10 text-amber-600 border-amber-500/20">
+											<Badge variant="secondary" class="font-mono text-xs bg-warning/10 text-warning border-warning/20">
 												$important
 											</Badge>
 										{/if}
@@ -405,21 +314,9 @@
 							{/if}
 
 							<div>
-								<span class="text-[10px] text-muted-foreground block">Rule Origin</span>
-								<div class="font-mono text-xs text-foreground mt-0.5">
-									{#if entry.filter.origin.type === 'user_rule'}
-										Custom User Rule
-									{:else if entry.filter.origin.type === 'user_allowlist'}
-										Manual Allowlist
-									{:else if entry.filter.origin.type === 'list'}
-										Source List #{entry.filter.origin.source_id}
-									{:else if entry.filter.origin.type === 'group_rule'}
-										Group "{entry.filter.origin.group}" Rule
-									{:else if entry.filter.origin.type === 'group_allowlist'}
-										Group "{entry.filter.origin.group}" Allowlist
-									{:else if entry.filter.origin.type === 'group_list'}
-										Group "{entry.filter.origin.group}" Source List #{entry.filter.origin.source_id}
-									{/if}
+								<span class="text-xs text-muted-foreground block">Rule Origin</span>
+								<div class="font-mono text-xs text-foreground mt-0.5 first-letter:uppercase">
+									{originText(entry.filter.origin)}
 								</div>
 							</div>
 						</div>
@@ -428,9 +325,9 @@
 
 				<!-- Coalesced Batch Attribution -->
 				{#if entry.coalesce_id != null}
-					<div class="rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-3 text-xs space-y-1.5">
+					<div class="rounded-lg border border-info/30 bg-info/5 p-3 text-xs space-y-1.5">
 						<div class="flex items-center justify-between">
-							<div class="flex items-center gap-1.5 font-medium text-cyan-700 dark:text-cyan-300">
+							<div class="flex items-center gap-1.5 font-medium text-info">
 								<LayersIcon class="h-3.5 w-3.5" />
 								<span>
 									{#if entry.result === 'coalesced'}
@@ -440,11 +337,11 @@
 									{/if}
 								</span>
 							</div>
-							<Badge variant="outline" class="bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border-cyan-500/20 font-mono text-[10px]">
+							<Badge variant="outline" class="bg-info/10 text-info border-info/20 font-mono text-xs">
 								Batch #{entry.coalesce_id}
 							</Badge>
 						</div>
-						<p class="text-muted-foreground text-[11px] leading-relaxed">
+						<p class="text-muted-foreground text-xs leading-relaxed">
 							{#if entry.result === 'coalesced'}
 								This query arrived while an identical request was already in-flight to upstream resolvers. It was served in-memory from the leader's upstream response without generating extra network I/O.
 							{:else}
@@ -456,7 +353,7 @@
 
 				<!-- Quick Action Toolbar -->
 				<div>
-					<span class="text-[11px] font-medium text-muted-foreground uppercase tracking-wider block mb-2">
+					<span class="text-xs font-medium text-muted-foreground block mb-2">
 						Quick Administrative Actions
 					</span>
 					<div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -467,7 +364,7 @@
 							disabled={testingQuery}
 							onclick={handleTestQuery}
 						>
-							<SearchIcon class="h-3.5 w-3.5 text-blue-500" />
+							<SearchIcon class="h-3.5 w-3.5 text-muted-foreground" />
 							<span>Test Query</span>
 						</Button>
 
@@ -479,7 +376,7 @@
 							disabled={actionLoading}
 							onclick={handleBlockDomain}
 						>
-							<ShieldAlertIcon class="h-3.5 w-3.5 text-rose-500" />
+							<ShieldAlertIcon class="h-3.5 w-3.5 text-danger" />
 							<span>Block</span>
 						</Button>
 
@@ -490,7 +387,7 @@
 							disabled={actionLoading}
 							onclick={handleAllowDomain}
 						>
-							<ShieldCheckIcon class="h-3.5 w-3.5 text-emerald-500" />
+							<ShieldCheckIcon class="h-3.5 w-3.5 text-success" />
 							<span>Allow</span>
 						</Button>
 
@@ -500,7 +397,7 @@
 							class="h-8 text-xs justify-start gap-1.5"
 							onclick={handleCreateRewrite}
 						>
-							<ArrowRightLeftIcon class="h-3.5 w-3.5 text-amber-500" />
+							<ArrowRightLeftIcon class="h-3.5 w-3.5 text-warning" />
 							<span>Rewrite</span>
 						</Button>
 						{/if}
@@ -510,7 +407,7 @@
 				<!-- Log Noise Suppression (Device-targeted, a device setting: device_write) -->
 				{#if entry.src_mac && auth.can("device_write")}
 					<div class="rounded-lg border p-3 bg-muted/20 space-y-2">
-						<span class="text-[11px] font-medium text-muted-foreground uppercase tracking-wider block">
+						<span class="text-xs font-medium text-muted-foreground block">
 							Log Noise Suppression ({entry.src_hostname || entry.src_mac})
 						</span>
 						<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -521,7 +418,7 @@
 								disabled={actionLoading}
 								onclick={handleSilenceDomainForClient}
 							>
-								<EyeOffIcon class="h-3.5 w-3.5 text-purple-400" />
+								<EyeOffIcon class="h-3.5 w-3.5 text-muted-foreground" />
 								<span class="truncate">Silence domain for client</span>
 							</Button>
 
@@ -532,7 +429,7 @@
 								disabled={actionLoading}
 								onclick={handleSilenceClientEntirely}
 							>
-								<BellOffIcon class="h-3.5 w-3.5 text-purple-400" />
+								<BellOffIcon class="h-3.5 w-3.5 text-muted-foreground" />
 								<span class="truncate">Mute all logs from client</span>
 							</Button>
 						</div>

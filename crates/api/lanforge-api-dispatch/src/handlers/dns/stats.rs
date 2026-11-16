@@ -34,6 +34,7 @@ fn per_device(state: &State, rows: Vec<(String, u64, u64)>, limit: usize) -> Vec
             row.addresses.push(ip);
             continue;
         }
+        let mac_text = mac.map(|m| m.to_string());
         if let Some(mac) = mac {
             row_of.insert(mac, out.len());
         }
@@ -43,6 +44,7 @@ fn per_device(state: &State, rows: Vec<(String, u64, u64)>, limit: usize) -> Vec
             hostname,
             count,
             blocked_count: blocked,
+            mac: mac_text,
         });
     }
     out.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.ip.cmp(&b.ip)));

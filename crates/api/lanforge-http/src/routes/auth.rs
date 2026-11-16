@@ -403,7 +403,7 @@ async fn login(state: AppState, payload: LoginRequest) -> HttpResult<impl IntoRe
 async fn handle_status(State(state): State<AppState>, req: Request) -> impl IntoResponse {
     let auth_required = check_auth_required(&state);
 
-    let authenticated = extract_token(req.headers(), req.uri().query())
+    let authenticated = extract_token(req.headers())
         .is_some_and(|token| authenticate_token(&token, &state.auth, state.db.as_ref()).is_ok());
 
     Json(AuthStatusResponse {

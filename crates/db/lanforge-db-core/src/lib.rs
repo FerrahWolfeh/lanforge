@@ -11,7 +11,7 @@ use lanforge_types::network::dns::{DnsLifetimeStats, DnsRecordType};
 use lanforge_types::network::{
     Hostname, Ipv6AddrOrSuffix, QueryLogEntry, QueryResult, TrafficHistorySample,
 };
-use lanforge_types::storage::DnsAnalyticsData;
+use lanforge_types::storage::{DnsAnalyticsData, DnsClientActivity, DnsDomainActivity};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
@@ -536,6 +536,27 @@ pub trait LogStore: Send + Sync {
 
     /// Retrieves blocked query rate timeline.
     fn get_dns_blocked_query_rate(&self, since_secs: u64) -> Result<Vec<(u64, u64)>, DbError>;
+
+    /// One client's activity in the query log from `since_secs` on, in `bucket_secs` buckets
+    /// up to `now_secs`. `is_client(src_ip, src_mac)` says which lines are the client's.
+    fn get_dns_client_activity(
+        &self,
+        since_secs: u64,
+        now_secs: u64,
+        bucket_secs: u64,
+        limit: usize,
+        is_client: &mut dyn FnMut(IpAddr, Option<MacAddr>) -> bool,
+    ) -> Result<DnsClientActivity, DbError>;
+
+    /// One domain's activity in the query log from `since_secs` on, in `bucket_secs` buckets up
+    /// to `now_secs`. `domain` is as the log stores it (lowercase, no trailing dot).
+    fn get_dns_domain_activity(
+        &self,
+        since_secs: u64,
+        now_secs: u64,
+        bucket_secs: u64,
+        domain: &str,
+    ) -> Result<DnsDomainActivity, DbError>;
 
     /// Loads persistent cumulative DNS lifetime statistics.
     fn load_dns_lifetime_stats(&self) -> Result<DnsLifetimeStats, DbError> {

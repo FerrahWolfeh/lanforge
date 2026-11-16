@@ -11,8 +11,8 @@
 	import CheckIcon from "@lucide/svelte/icons/check";
 	import Loader2Icon from "@lucide/svelte/icons/loader-2";
 	import { deleteToken, renewToken } from "$lib/api/client";
-	import { copyToClipboard } from "$lib/utils";
-	import type { AuthToken } from "$lib/api/types";
+	import { copyToClipboard, formatDateTime, formatTimeAgo, toMillis } from "$lib/utils";
+	import type { AuthToken, GeneratedToken } from "$lib/api/types";
 	import { toast } from "svelte-sonner";
 	import DataTableCard from "$lib/components/DataTableCard.svelte";
 
@@ -27,7 +27,7 @@
 		isLoading: boolean;
 		onRefresh: () => Promise<void> | void;
 		onOpenCreate: () => void;
-		onRenewed: (token: AuthToken) => void;
+		onRenewed: (token: GeneratedToken) => void;
 	} = $props();
 
 	let searchQuery = $state("");
@@ -47,31 +47,7 @@
 	function isExpired(t: AuthToken): boolean {
 		if (!t.expires_at) return false;
 		const nowSecs = Math.floor(Date.now() / 1000);
-		const expSecs = t.expires_at > 1e11 ? Math.floor(t.expires_at / 1000) : t.expires_at;
-		return expSecs < nowSecs;
-	}
-
-	function formatDate(ts: number | null | undefined): string {
-		if (!ts) return "Never";
-		const ms = ts > 1e11 ? ts : ts * 1000;
-		const d = new Date(ms);
-		return d.toLocaleDateString(undefined, {
-			year: "numeric",
-			month: "short",
-			day: "2-digit",
-			hour: "2-digit",
-			minute: "2-digit"
-		});
-	}
-
-	function formatRelative(ts: number | null | undefined): string {
-		if (!ts) return "Never used";
-		const ms = ts > 1e11 ? ts : ts * 1000;
-		const diffSecs = Math.round((Date.now() - ms) / 1000);
-		if (diffSecs < 60) return "Just now";
-		if (diffSecs < 3600) return `${Math.floor(diffSecs / 60)}m ago`;
-		if (diffSecs < 86400) return `${Math.floor(diffSecs / 3600)}h ago`;
-		return `${Math.floor(diffSecs / 86400)}d ago`;
+		return toMillis(t.expires_at) / 1000 < nowSecs;
 	}
 
 	function confirmRevoke(token: AuthToken) {
@@ -208,7 +184,7 @@
 					<div class="flex flex-col gap-0.5">
 						<span class="text-xs font-bold text-foreground">{token.name}</span>
 						<div class="flex items-center gap-1.5">
-							<span class="text-[11px] font-mono text-muted-foreground">
+							<span class="text-xs font-mono text-muted-foreground">
 								ID: #{token.id}
 							</span>
 							<button
@@ -224,7 +200,7 @@
 								}}
 							>
 								{#if copiedTokenId === token.id}
-									<CheckIcon class="size-3 text-emerald-500" />
+									<CheckIcon class="size-3 text-success" />
 								{:else}
 									<CopyIcon class="size-3" />
 								{/if}
@@ -237,17 +213,17 @@
 			<!-- Scopes -->
 			<Table.Cell class="py-3 font-sans">
 				<div class="flex flex-wrap gap-1 max-w-xs">
-					{#each token.scopes as sc}
+					{#each token.scopes as sc (sc)}
 						{#if sc === "admin"}
-							<Badge variant="default" class="text-[10px] px-1.5 py-0 font-mono">
+							<Badge variant="default" class="text-xs px-1.5 py-0 font-mono">
 								admin
 							</Badge>
 						{:else if sc === "monitoring"}
-							<Badge variant="secondary" class="text-[10px] px-1.5 py-0 font-mono">
+							<Badge variant="secondary" class="text-xs px-1.5 py-0 font-mono">
 								monitoring
 							</Badge>
 						{:else}
-							<Badge variant="outline" class="text-[10px] px-1.5 py-0 font-mono text-muted-foreground">
+							<Badge variant="outline" class="text-xs px-1.5 py-0 font-mono text-muted-foreground">
 								{sc}
 							</Badge>
 						{/if}
@@ -257,34 +233,34 @@
 
 			<!-- Created At -->
 			<Table.Cell class="py-3 font-sans text-xs text-muted-foreground whitespace-nowrap">
-				{formatDate(token.created_at)}
+				{formatDateTime(token.created_at)}
 			</Table.Cell>
 
 			<!-- Last Used -->
 			<Table.Cell class="py-3 font-sans whitespace-nowrap">
-				<span class="text-xs text-muted-foreground" title={formatDate(token.last_used)}>
-					{formatRelative(token.last_used)}
+				<span class="text-xs text-muted-foreground" title={token.last_used ? formatDateTime(token.last_used) : "Never"}>
+					{token.last_used ? formatTimeAgo(token.last_used) : "Never used"}
 				</span>
 			</Table.Cell>
 
 			<!-- Status / Expiration -->
 			<Table.Cell class="py-3 font-sans whitespace-nowrap">
 				{#if expired}
-					<Badge variant="destructive" class="text-[10px] px-1.5 py-0 font-medium">
+					<Badge variant="destructive" class="text-xs px-1.5 py-0 font-medium">
 						Expired
 					</Badge>
-					<p class="text-[10px] text-destructive/80 mt-0.5">
-						{formatDate(token.expires_at)}
+					<p class="text-xs text-destructive/80 mt-0.5">
+						{formatDateTime(token.expires_at)}
 					</p>
 				{:else if token.expires_at}
-					<Badge variant="outline" class="text-[10px] px-1.5 py-0 font-medium text-emerald-600 dark:text-emerald-400 border-emerald-500/30 bg-emerald-500/10">
+					<Badge variant="outline" class="text-xs px-1.5 py-0 font-medium text-success border-success/30 bg-success/10">
 						Active
 					</Badge>
-					<p class="text-[10px] text-muted-foreground mt-0.5">
-						Expires on {formatDate(token.expires_at)}
+					<p class="text-xs text-muted-foreground mt-0.5">
+						Expires on {formatDateTime(token.expires_at)}
 					</p>
 				{:else}
-					<Badge variant="outline" class="text-[10px] px-1.5 py-0 font-medium text-emerald-600 dark:text-emerald-400 border-emerald-500/30 bg-emerald-500/10">
+					<Badge variant="outline" class="text-xs px-1.5 py-0 font-medium text-success border-success/30 bg-success/10">
 						Active (Permanent)
 					</Badge>
 				{/if}
@@ -322,7 +298,7 @@
 
 <!-- AlertDialog for Revoke -->
 <AlertDialog.Root bind:open={isRevokeOpen}>
-	<AlertDialog.Content class="rounded-xl">
+	<AlertDialog.Content class="rounded-lg">
 		<AlertDialog.Header>
 			<AlertDialog.Title class="text-base font-bold text-foreground">
 				Revoke API Key?
@@ -353,7 +329,7 @@
 
 <!-- AlertDialog for Renew -->
 <AlertDialog.Root bind:open={isRenewOpen}>
-	<AlertDialog.Content class="rounded-xl">
+	<AlertDialog.Content class="rounded-lg">
 		<AlertDialog.Header>
 			<AlertDialog.Title class="text-base font-bold text-foreground">
 				Renew API Key?
@@ -367,7 +343,7 @@
 				Cancel
 			</AlertDialog.Cancel>
 			<AlertDialog.Action
-				class="cursor-pointer text-xs bg-primary text-primary-foreground hover:bg-primary/90 shadow-xs"
+				class="cursor-pointer text-xs bg-primary text-primary-foreground hover:bg-primary/90"
 				onclick={handleRenewToken}
 				disabled={isRenewing}
 			>

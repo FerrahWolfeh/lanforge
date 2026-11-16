@@ -14,39 +14,39 @@
 	import { commandState } from "$lib/stores/command.svelte";
 	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
 
-	let { uptime = $bindable(0) }: { uptime?: number } = $props();
+	let { uptime = 0 }: { uptime?: number } = $props();
 	let isMobileOpen = $state(false);
 
 	const titleMap: Record<string, string> = {
 		"/": "Dashboard",
-		"/network/devices": "Network Devices",
-		"/network/hosts": "Static Host Reservations",
+		"/network/devices": "Devices",
+		"/network/hosts": "Static Hosts",
 		"/network/traffic": "Traffic & SQM",
 		"/network/traffic/sqm": "Bufferbloat (CAKE)",
-		"/network/traffic/tuning": "Hardware NIC Tuning",
-		"/firewall": "Firewall & Security",
+		"/network/traffic/tuning": "NIC Tuning",
+		"/firewall": "Firewall",
 		"/network/ra": "IPv6 Router Advertisements",
-		"/network/pppoe": "PPPoE WAN Client",
+		"/network/pppoe": "PPPoE WAN",
 		"/dns/resolver": "DNS Resolver",
 		"/dns/log": "DNS Query Log",
-		"/dns/rewrites": "Custom DNS Rewrites",
-		"/dns/cache": "DNS Cache Entries",
-		"/dns/adblock": "Adblock & Domain Filtering",
+		"/dns/rewrites": "DNS Rewrites",
+		"/dns/cache": "DNS Cache",
+		"/dns/adblock": "Adblock",
 		"/dns/adblock/lists": "Adblock Lists",
 		"/dns/adblock/rules": "Adblock Custom Rules",
 		"/dns/adblock/settings": "Adblock Settings",
 		"/dhcp": "DHCP Server",
-		"/dhcp/leases": "DHCP Active Leases",
-		"/dhcp/pools": "DHCP Scopes & Pools",
+		"/dhcp/leases": "DHCP Leases",
+		"/dhcp/pools": "DHCP Pools",
 		"/dhcp/server": "DHCP Server Options",
 		"/tftp": "TFTP Server",
-		"/system": "System Status",
-		"/system/services": "System Services",
-		"/system/database": "Database & Persistence",
+		"/system": "Status & Services",
+		"/system/services": "Services",
+		"/system/database": "Database",
 		"/system/database/maintenance": "Database Maintenance",
 		"/system/database/backup": "Database Backup & Restore",
-		"/system/users": "User Accounts",
-		"/system/keys": "API & Auth Keys",
+		"/system/users": "Users & Tokens",
+		"/system/keys": "API Tokens",
 	};
 
 	const currentTitle = $derived(
@@ -54,7 +54,7 @@
 		(page.url.pathname.startsWith("/dhcp")
 			? "DHCP Server"
 			: page.url.pathname.startsWith("/dns")
-			? "DNS & Security"
+			? "DNS"
 			: page.url.pathname.startsWith("/network")
 			? "Network"
 			: page.url.pathname.startsWith("/system")
@@ -65,7 +65,7 @@
 
 <header
 	id="app-topbar"
-	class="gpu-accelerated sticky top-0 z-30 flex h-16 w-full shrink-0 items-center justify-between border-b border-border/70 bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60 lg:px-6 lg:rounded-t-2xl"
+	class="gpu-accelerated sticky top-0 z-30 flex h-16 w-full shrink-0 items-center justify-between border-b border-border/70 bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60 lg:px-6 lg:rounded-t-xl"
 >
 	<div class="flex items-center gap-3 min-w-0">
 		<!-- Desktop Sidebar Toggle Button -->
@@ -119,18 +119,16 @@
 		<Tooltip.Provider>
 			<Tooltip.Root>
 				<Tooltip.Trigger
-					class="flex items-center gap-2 px-2.5 py-1 rounded-lg hover:bg-accent/60 transition-colors border border-border/40"
+					class="flex items-center gap-2 px-2.5 py-1 rounded-md hover:bg-accent/60 transition-colors border border-border"
+					aria-label={uptime > 0 ? "Daemon status: live" : "Daemon status: offline"}
 				>
 					<span class="relative flex size-2 shrink-0">
-						{#if uptime > 0}
-							<span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
-						{/if}
 						<span
 							class={[
 								"relative inline-flex size-2 rounded-full transition-all",
 								uptime > 0
-									? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.9)]"
-									: "bg-zinc-500",
+									? "bg-success ring-3 ring-success/20"
+									: "bg-muted-foreground/50",
 							].join(" ")}
 						></span>
 					</span>
@@ -160,15 +158,15 @@
 				<Tooltip.Root>
 					<Tooltip.Trigger
 						class={[
-							"flex items-center gap-1.5 h-8 px-2.5 rounded-xl border text-xs font-mono font-medium transition-colors cursor-pointer select-none",
+							"flex items-center gap-1.5 h-8 px-2.5 rounded-md border text-xs font-mono font-medium transition-colors cursor-pointer select-none",
 							capabilitiesState.debugMode
-								? "bg-amber-500/15 border-amber-500/40 text-amber-500 hover:bg-amber-500/25 shadow-xs"
+								? "bg-warning/15 border-warning/40 text-warning hover:bg-warning/25"
 								: "bg-muted/40 border-border/70 text-muted-foreground hover:text-foreground hover:bg-muted/80",
 						].join(" ")}
 						onclick={() => capabilitiesState.toggleDebugMode()}
 						aria-label="Toggle capabilities debug override (Vite Dev only)"
 					>
-						<BugIcon class="size-3.5 shrink-0 {capabilitiesState.debugMode ? 'text-amber-500' : 'text-muted-foreground'}" />
+						<BugIcon class="size-3.5 shrink-0 {capabilitiesState.debugMode ? 'text-warning' : 'text-muted-foreground'}" />
 						<span class="hidden sm:inline">Caps:</span>
 						<span class="font-semibold">{capabilitiesState.debugMode ? "All" : "Live"}</span>
 					</Tooltip.Trigger>
@@ -187,13 +185,13 @@
 		<!-- Quick Search / Command Palette trigger -->
 		<button
 			type="button"
-			class="hidden md:flex items-center gap-2 h-8 px-2.5 rounded-xl border border-border/70 bg-muted/40 hover:bg-muted/80 text-muted-foreground hover:text-foreground text-xs transition-colors cursor-pointer"
+			class="hidden md:flex items-center gap-2 h-8 px-2.5 rounded-md border border-border bg-muted/60 hover:bg-muted text-muted-foreground hover:text-foreground text-xs transition-colors cursor-pointer"
 			onclick={() => commandState.open()}
 			aria-label="Search or execute command (Ctrl+K)"
 		>
 			<SearchIcon class="size-3.5" />
 			<span>Search...</span>
-			<kbd class="pointer-events-none inline-flex h-4.5 select-none items-center gap-0.5 rounded border border-border/80 bg-background px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
+			<kbd class="pointer-events-none inline-flex h-4.5 select-none items-center gap-0.5 rounded border border-border/80 bg-background px-1.5 font-mono text-xs font-medium text-muted-foreground">
 				<span>⌘</span>K
 			</kbd>
 		</button>
@@ -201,7 +199,7 @@
 		<!-- Mobile Search Icon Button -->
 		<button
 			type="button"
-			class="flex md:hidden items-center justify-center size-8 rounded-xl border border-border/70 text-muted-foreground hover:text-foreground hover:bg-muted/50 cursor-pointer"
+			class="flex md:hidden items-center justify-center size-8 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-muted/50 cursor-pointer"
 			onclick={() => commandState.open()}
 			aria-label="Search (Ctrl+K)"
 		>

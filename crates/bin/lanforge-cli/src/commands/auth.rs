@@ -162,7 +162,7 @@ async fn delete_token(
         return printer.print_json(&resp);
     }
 
-    printer.success(&format!("API token '{target}' revoked: {}", resp.message));
+    printer.success_detail(&format!("API token '{target}' revoked"), &resp.message);
     Ok(())
 }
 

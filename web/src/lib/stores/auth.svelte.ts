@@ -3,17 +3,18 @@
  * Uses Svelte 5 runes wrapped in a reactive class pattern.
  */
 
-import { me, setClientToken } from '$lib/api/client';
-import type { Permission, UserInfo } from '$lib/api/types';
-
-const TOKEN_KEY = 'lf_session';
+import { ApiError, getToken, logout, me, onTokenChange, setClientToken } from '$lib/api/client';
+import type { Permission, SessionUser } from '$lib/api/types';
 
 function createAuthStore() {
-	let token = $state<string | null>(
-		typeof localStorage !== 'undefined' ? localStorage.getItem(TOKEN_KEY) : null
-	);
-	let user = $state<UserInfo | null>(null);
+	// The client owns the token; this copy only makes it reactive.
+	let token = $state<string | null>(getToken());
+	let user = $state<SessionUser | null>(null);
 	let loading = $state(false);
+	onTokenChange((t) => {
+		token = t;
+		if (t === null) user = null;
+	});
 
 	return {
 		get token() {
@@ -40,26 +41,36 @@ function createAuthStore() {
 		},
 
 		setToken(t: string) {
-			token = t;
 			setClientToken(t);
 		},
 
-		async fetchUser() {
-			if (!token) return;
+		/** Loads the profile; false when it could not be loaded (the session is kept unless rejected). */
+		async fetchUser(): Promise<boolean> {
+			if (!token) return false;
 			loading = true;
 			try {
 				user = await me();
-			} catch {
-				// token may have expired
-				this.clear();
+				return true;
+			} catch (err) {
+				// Only a rejected token ends the session; a network or server error must not.
+				if (err instanceof ApiError && err.status === 401) this.clear();
+				return false;
 			} finally {
 				loading = false;
 			}
 		},
 
+		/** Ends the session on the daemon (which may be unreachable) and forgets it here. */
+		async signOut() {
+			try {
+				await logout();
+			} catch {
+				// the local session ends either way
+			}
+			this.clear();
+		},
+
 		clear() {
-			token = null;
-			user = null;
 			setClientToken(null);
 		}
 	};

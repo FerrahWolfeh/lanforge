@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from "svelte";
 	import { Button } from "$lib/components/ui/button";
 	import ChevronLeftIcon from "@lucide/svelte/icons/chevron-left";
 	import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
@@ -30,6 +31,14 @@
 	}: Props = $props();
 
 	const totalPages = $derived(Math.max(1, Math.ceil(totalItems / pageSize)));
+
+	// The total can shrink under the current page (a filter, a refresh): fall back to the last page.
+	$effect(() => {
+		if (pageIndex > totalPages - 1) {
+			pageIndex = totalPages - 1;
+			untrack(() => onPageChange?.(pageIndex));
+		}
+	});
 	const startItem = $derived(totalItems > 0 ? pageIndex * pageSize + 1 : 0);
 	const endItem = $derived(Math.min((pageIndex + 1) * pageSize, totalItems));
 
@@ -53,7 +62,7 @@
 >
 	<!-- Left: Record summary -->
 	<div class="flex items-center gap-2">
-		<span class="text-[11px]">
+		<span class="text-xs">
 			Showing <strong class="text-foreground font-semibold">{startItem}–{endItem}</strong> of{" "}
 			<strong class="text-foreground font-semibold">{totalItems}</strong> {itemName}
 		</span>
@@ -62,7 +71,7 @@
 	<!-- Right: Controls -->
 	<div class="flex flex-wrap items-center gap-3">
 		{#if showPageSize && totalItems > pageSizeOptions[0]}
-			<div class="flex items-center gap-1.5 text-[11px]">
+			<div class="flex items-center gap-1.5 text-xs">
 				<span>Rows:</span>
 				<select
 					value={pageSize}
@@ -77,7 +86,7 @@
 			</div>
 		{/if}
 
-		<span class="text-[11px] font-medium whitespace-nowrap">
+		<span class="text-xs font-medium whitespace-nowrap">
 			Page {pageIndex + 1} of {totalPages}
 		</span>
 
@@ -85,7 +94,7 @@
 			<Button
 				variant="outline"
 				size="icon"
-				class="size-7 rounded-lg"
+				class="size-7 max-sm:size-9 rounded-lg"
 				disabled={pageIndex === 0 || disabled}
 				onclick={() => handlePage(0)}
 				title="First page"
@@ -95,7 +104,7 @@
 			<Button
 				variant="outline"
 				size="icon"
-				class="size-7 rounded-lg"
+				class="size-7 max-sm:size-9 rounded-lg"
 				disabled={pageIndex === 0 || disabled}
 				onclick={() => handlePage(pageIndex - 1)}
 				title="Previous page"
@@ -105,7 +114,7 @@
 			<Button
 				variant="outline"
 				size="icon"
-				class="size-7 rounded-lg"
+				class="size-7 max-sm:size-9 rounded-lg"
 				disabled={pageIndex >= totalPages - 1 || disabled}
 				onclick={() => handlePage(pageIndex + 1)}
 				title="Next page"
@@ -115,7 +124,7 @@
 			<Button
 				variant="outline"
 				size="icon"
-				class="size-7 rounded-lg"
+				class="size-7 max-sm:size-9 rounded-lg"
 				disabled={pageIndex >= totalPages - 1 || disabled}
 				onclick={() => handlePage(totalPages - 1)}
 				title="Last page"

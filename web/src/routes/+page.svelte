@@ -1,14 +1,12 @@
 <script lang="ts">
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Card from "$lib/components/ui/card";
-	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import { Skeleton } from "$lib/components/ui/skeleton";
-	import { formatBytes, formatBps, formatIpv6Prefix, createPolling } from "$lib/utils";
+	import { formatBytes, formatBuild, formatIpv6Prefix, formatUptime, createPolling } from "$lib/utils";
 	import {
 		status,
-		dnsStats,
-		leases,
+		dhcpPools,
 		listDevices,
 		scan,
 		dnsAnalytics,
@@ -17,40 +15,38 @@
 	import {
 		normalizeServices,
 		type StatusResponse,
-		type DnsStatsResponse,
 		type DnsAnalyticsResponse,
-		type DhcpLease,
+		type DhcpPoolsResponse,
 		type DeviceEntry,
 		type ServiceBanner,
 		type TrafficTelemetryResponse,
 	} from "$lib/api/types";
 	import TrafficActivityChart from "$lib/components/TrafficActivityChart.svelte";
 	import PageHeader from "$lib/components/PageHeader.svelte";
-	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
-	import StatCard from "$lib/components/StatCard.svelte";
+	import StatStrip, { type StatStripItem } from "$lib/components/StatStrip.svelte";
+	import StatusLine, { type StatusTone } from "$lib/components/StatusLine.svelte";
+	import StatusBadge from "$lib/components/StatusBadge.svelte";
 	import StatusDot from "$lib/components/StatusDot.svelte";
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
 	import MonitorIcon from "@lucide/svelte/icons/monitor";
-	import GlobeIcon from "@lucide/svelte/icons/globe";
-	import NetworkIcon from "@lucide/svelte/icons/network";
 	import ZapIcon from "@lucide/svelte/icons/zap";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
-	import DatabaseIcon from "@lucide/svelte/icons/database";
 	import CpuIcon from "@lucide/svelte/icons/cpu";
 	import WifiIcon from "@lucide/svelte/icons/wifi";
 	import ActivityIcon from "@lucide/svelte/icons/activity";
-	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 	import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
+	import { degradedReason, getServiceMeta } from "$lib/services";
+	import ShieldBanIcon from "@lucide/svelte/icons/shield-ban";
+	import ServerIcon from "@lucide/svelte/icons/server";
 
 	const trafficTelemetry = trafficTelemetryFeed();
 
 	let statusData = $state<StatusResponse | null>(null);
-	let dnsData = $state<DnsStatsResponse | null>(null);
-	let leasesData = $state<DhcpLease[] | null>(null);
+	let poolsData = $state<DhcpPoolsResponse | null>(null);
 	let devicesData = $state<{
 		devices: DeviceEntry[];
-		meta?: { total: number; online: number; last_scan_secs_ago: number };
+		meta?: { total: number; online: number };
 	} | null>(null);
 	let analyticsData = $state<DnsAnalyticsResponse | null>(null);
 	let telemetryData = $state<TrafficTelemetryResponse | null>(null);
@@ -60,19 +56,16 @@
 	async function loadAll() {
 		loadingData = true;
 		try {
-			const [s, dns, ls, dev, aRes, telem] = await Promise.allSettled([
+			const [s, pools, dev, aRes, telem] = await Promise.allSettled([
 				status(),
-				dnsStats(),
-				leases(),
+				dhcpPools(),
 				listDevices(),
 				dnsAnalytics(10),
 				trafficTelemetry(),
 			]);
+			// A failed call keeps the last good data for its panel.
 			if (s.status === "fulfilled") statusData = s.value;
-			if (dns.status === "fulfilled") dnsData = dns.value;
-			if (ls.status === "fulfilled") {
-				leasesData = ls.value;
-			}
+			if (pools.status === "fulfilled") poolsData = pools.value;
 			if (dev.status === "fulfilled") {
 				devicesData = dev.value;
 			}
@@ -81,6 +74,13 @@
 			}
 			if (telem.status === "fulfilled") {
 				telemetryData = telem.value;
+			}
+			const results = [s, pools, dev, aRes, telem];
+			const failed = results.filter((r) => r.status === "rejected").length;
+			if (failed === results.length) {
+				toast.error("Failed to load dashboard data");
+			} else if (failed > 0) {
+				toast.error(`Failed to load ${failed} of ${results.length} dashboard sources`);
 			}
 		} finally {
 			loadingData = false;
@@ -111,16 +111,7 @@
 		}, 2500);
 	});
 
-	const rssBytes = $derived(
-		statusData?.resources?.memory_rss_bytes ??
-			statusData?.resources?.rss_bytes ??
-			0,
-	);
-	const vmsBytes = $derived(
-		statusData?.resources?.memory_vms_bytes ??
-			statusData?.resources?.vms_bytes ??
-			0,
-	);
+	const rssBytes = $derived(statusData?.resources?.memory_rss_bytes ?? null);
 
 	const onlineDevicesCount = $derived.by(() => {
 		if (!devicesData) return 0;
@@ -136,155 +127,109 @@
 		return devicesData.devices?.length ?? 0;
 	});
 
-	const dnsSparkline = $derived.by(() => {
-		// Real query rate only: no history yet means no sparkline, never a made-up curve.
-		const points = analyticsData?.query_rate?.map((r) => r.count) ?? [];
-		return points.length > 0 ? points.slice(-16) : undefined;
-	});
-
-	const gatewayTraffic = $derived.by(() => {
-		const wan = telemetryData?.wan_interface;
-		if (wan) {
-			const found = telemetryData?.interfaces?.find((i) => i.interface === wan);
-			if (found) {
-				return { rx: found.rx_rate_bps, tx: found.tx_rate_bps };
-			}
-		}
-		// Fallback: sum across physical interfaces (excluding ifb* and veth*)
-		let rx = 0;
-		let tx = 0;
-		for (const i of telemetryData?.interfaces ?? []) {
-			if (i.interface.startsWith("ifb") || i.interface.startsWith("veth")) continue;
-			rx += i.rx_rate_bps;
-			tx += i.tx_rate_bps;
-		}
-		return { rx, tx };
-	});
-
-	const totalRxBps = $derived(gatewayTraffic.rx);
-	const totalTxBps = $derived(gatewayTraffic.tx);
-	const totalTrafficBps = $derived(totalRxBps + totalTxBps);
 	const conntrack = $derived(telemetryData?.conntrack);
 
-	const statCards = $derived([
-		{
-			label: "Active Devices",
-			value: devicesData
-				? `${onlineDevicesCount} / ${totalDevicesCount}`
-				: null,
-			subtext: devicesData
-				? `${onlineDevicesCount} online on LAN`
-				: "LAN host activity",
-			icon: WifiIcon,
-			color: "emerald" as const,
-			href: "/network/devices",
-		},
-		{
-			label: "DHCP Leases",
-			value: leasesData ? leasesData.length.toString() : null,
-			subtext: "Active IPv4/v6 leases",
-			icon: NetworkIcon,
-			color: "teal" as const,
-			href: "/dhcp/leases",
-		},
-		{
-			label: "DNS Queries",
-			value: dnsData ? dnsData.total_requests.toLocaleString() : null,
-			subtext: dnsData
-				? `${dnsData.cache_hits.toLocaleString()} cache hits`
-				: "Total requests",
-			icon: GlobeIcon,
-			color: "sky" as const,
-			sparklineData: dnsSparkline,
-			sparklineColor: "#0ea5e9",
-			href: "/dns/resolver",
-		},
-		{
-			label: "Firewall Conntrack",
-			value: conntrack
-				? `${conntrack.active_connections.toLocaleString()} / ${conntrack.max_connections.toLocaleString()}`
-				: null,
-			subtext: conntrack
-				? `${conntrack.utilization_percent.toFixed(1)}% session capacity`
-				: "Active stateful sessions",
-			icon: ShieldCheckIcon,
-			color: "violet" as const,
-			href: "/firewall",
-		},
-	]);
-
-	const liveBanners = $derived(normalizeServices(statusData));
-	const bannersMap = $derived.by(() => {
-		const m = new Map<string, ServiceBanner>();
-		for (const b of liveBanners) {
-			if (b.id) m.set(b.id.toLowerCase(), b);
-			m.set(b.name.toLowerCase(), b);
-		}
-		return m;
+	// DHCPv4 pools together: the figure that runs out first on a home LAN.
+	const poolV4 = $derived.by(() => {
+		const pools = poolsData?.v4_pools ?? [];
+		if (pools.length === 0) return null;
+		return {
+			used: pools.reduce((n, p) => n + (p.used || 0), 0),
+			total: pools.reduce((n, p) => n + (p.total || 0), 0),
+		};
 	});
 
-	function getBanner(id: string, name: string): ServiceBanner | undefined {
-		return bannersMap.get(id.toLowerCase()) ?? bannersMap.get(name.toLowerCase());
+	// Last 24 hours, the same window the DNS pages use.
+	const dns24h = $derived.by(() => {
+		const rates = analyticsData?.query_rate ?? [];
+		if (rates.length === 0) return null;
+		return {
+			total: rates.reduce((n, r) => n + r.count, 0),
+			blocked: rates.reduce((n, r) => n + (r.blocked ?? 0), 0),
+		};
+	});
+
+	const stripItems = $derived.by((): StatStripItem[] => {
+		const ratio = (a: number, b: number) => (b > 0 ? a / b : 0);
+		const poolRatio = poolV4 ? ratio(poolV4.used, poolV4.total) : 0;
+		return [
+			{
+				label: "devices online",
+				value: devicesData ? onlineDevicesCount : loadingData ? null : "—",
+				of: devicesData ? totalDevicesCount : undefined,
+				icon: WifiIcon,
+				href: "/network/devices",
+			},
+			{
+				label: "DHCPv4 pool in use",
+				value: poolV4 ? poolV4.used : loadingData ? null : "—",
+				of: poolV4?.total,
+				icon: ServerIcon,
+				bar: poolV4 ? poolRatio : undefined,
+				barTone: poolRatio >= 0.9 ? "danger" : poolRatio >= 0.75 ? "warning" : "brand",
+				href: "/dhcp/pools",
+			},
+			{
+				label: "queries blocked in 24h",
+				value: dns24h ? dns24h.blocked : loadingData ? null : "—",
+				of: dns24h?.total,
+				icon: ShieldBanIcon,
+				bar: dns24h ? ratio(dns24h.blocked, dns24h.total) : undefined,
+				barTone: "danger",
+				href: "/dns/adblock",
+			},
+			{
+				label: "connections tracked",
+				value: conntrack ? conntrack.active_connections : loadingData ? null : "—",
+				of: conntrack?.max_connections,
+				icon: ActivityIcon,
+				bar: conntrack ? ratio(conntrack.active_connections, conntrack.max_connections) : undefined,
+				href: "/firewall",
+			},
+		];
+	});
+
+	const banners = $derived(normalizeServices(statusData));
+
+	const PROBLEM_STATES = ["degraded", "error", "paused"];
+	const isProblem = (b: ServiceBanner) => PROBLEM_STATES.includes(b.state);
+	const isRunning = (b: ServiceBanner) => b.state === "online" || b.state === "active";
+
+	/** Why a service is not fine, in one line: the degraded reason, else the daemon's own summary. */
+	function reasonOf(b: ServiceBanner): string {
+		return degradedReason(b.detail) ?? b.summary ?? b.state;
 	}
 
-	const subsystemServices = [
-		{
-			id: "ra",
-			name: "IPv6 Router Advertisements",
-			tag: "RADVD / SLAAC",
-			proto: "ICMPv6 (NDP)",
-			desc: "Autoconfiguration prefix announcements (GUA/ULA)",
-			href: "/network/ra",
-		},
-		{
-			id: "dhcpv4",
-			name: "DHCPv4 Server",
-			tag: "Dynamic Leases",
-			proto: "UDP Port 67",
-			desc: "IPv4 address allocation with option 3 (gateway) & 6 (DNS)",
-			href: "/dhcp/server",
-		},
-		{
-			id: "dhcpv6",
-			name: "DHCPv6 Server",
-			tag: "Stateful / Stateless",
-			proto: "UDP Port 547",
-			desc: "IPv6 stateful address & prefix delegation",
-			href: "/dhcp/pools",
-		},
-		{
-			id: "dns",
-			name: "DNS Resolver & Engine",
-			tag: "DNS Cache & Block",
-			proto: "UDP/TCP Port 53",
-			desc: "Upstream recursive forwarding, cache, & adblock filtering",
-			href: "/dns/resolver",
-		},
-		{
-			id: "tftp",
-			name: "Bootstrapping TFTP",
-			tag: "PXE Boot",
-			proto: "UDP Port 69",
-			desc: "Network boot firmware & image distribution server",
-			href: "/tftp",
-		},
-		{
-			id: "pppoe",
-			name: "PPPoE Concentrator",
-			tag: "Relay / Tunnel",
-			proto: "PPPoverEthernet",
-			desc: "DSL/FTTH encapsulation & point-to-point tunneling",
-			href: "/network/pppoe",
-		},
-		{
-			id: "monitor",
-			name: "Neighbor Monitor",
-			tag: "Passive / Netlink",
-			proto: "Kernel Netlink",
-			desc: "Real-time L2/L3 neighbor discovery and device tracking",
-			href: "/network/devices",
-		},
-	];
+	// Problems first, then running services, then the ones switched off.
+	const sortedBanners = $derived(
+		[...banners].sort((a, b) => {
+			const rank = (x: ServiceBanner) => (isProblem(x) ? 0 : isRunning(x) ? 1 : 2);
+			return rank(a) - rank(b);
+		})
+	);
+
+	const statusLine = $derived.by((): { tone: StatusTone; title: string; text: string; href?: string } | null => {
+		if (!statusData) return null;
+		const problems = banners.filter(isProblem);
+		const issues = statusData.config_issues ?? [];
+		if (problems.length === 0 && issues.length === 0) return null;
+		const parts = problems.map((b) => `${getServiceMeta(b.id, b.name).name}: ${reasonOf(b)}`);
+		if (issues.length > 0) parts.push(`${issues.length} configuration ${issues.length === 1 ? "issue" : "issues"} (listed above)`);
+		const count = parts.length;
+		return {
+			tone: problems.some((b) => b.state === "error") ? "danger" : "warning",
+			title: count === 1 ? "Needs attention: " : `${count} things need attention: `,
+			text: parts.join(" · "),
+			href: problems.length === 1 ? getServiceMeta(problems[0].id, problems[0].name).configHref : problems.length > 1 ? "/system/services" : undefined,
+		};
+	});
+
+	function stateVariant(state: string): string {
+		if (state === "online" || state === "active") return "online";
+		if (state === "degraded" || state === "paused" || state === "starting" || state === "waiting") return "warning";
+		if (state === "error") return "error";
+		return "dormant";
+	}
 </script>
 
 <svelte:head>
@@ -294,8 +239,8 @@
 <div class="flex flex-col gap-5 sm:gap-6">
 	<!-- Page Header -->
 	<PageHeader
-		title="Router Dashboard"
-		description="Network status, DHCP leases, DNS activity, and connected devices"
+		title="Dashboard"
+		description="What the router and the LAN are doing right now."
 		icon={MonitorIcon}
 	>
 		{#snippet actions()}
@@ -328,206 +273,102 @@
 		{/snippet}
 	</PageHeader>
 
-	<!-- Top Stat Cards (Core Router Metrics) -->
-	<StatCardGrid cols={4}>
-		{#each statCards as card (card.label)}
-			<StatCard
-				label={card.label}
-				value={card.value}
-				subtext={card.subtext}
-				icon={card.icon}
-				color={card.color}
-				href={card.href}
-				sparkline={card.sparklineData
-					? { data: card.sparklineData, color: card.sparklineColor, height: 28 }
-					: undefined}
-				loading={loadingData || card.value === null}
-			/>
-		{/each}
-	</StatCardGrid>
+	{#if statusLine}
+		<StatusLine tone={statusLine.tone} title={statusLine.title} text={statusLine.text} href={statusLine.href} />
+	{/if}
 
-	<!-- Gateway Network Activity Hero Chart -->
+	<StatStrip items={stripItems} />
+
 	<TrafficActivityChart
 		loading={loadingData}
 		showDnsToggle={true}
 		title="Real-Time Bandwidth & Throughput"
 		{analyticsData}
 		{statusData}
-		{dnsData}
 		{telemetryData}
 	/>
 
-	<!-- Main Grid: Subsystem Overview (2 Cols) + Network & System Vitals (1 Col) -->
-	<div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
-		<!-- Left Main Panel: Router Service Health -->
-		<Card.Root class="flex flex-col lg:col-span-2">
-			<Card.Header class="p-4 py-3 border-b border-border/50">
-				<div class="flex items-center justify-between gap-2 min-w-0">
-					<div class="flex items-center gap-2 min-w-0">
-						<ActivityIcon class="size-4 text-emerald-400 shrink-0" />
-						<Card.Title class="text-sm sm:text-base font-semibold truncate">
-							Service Status<span class="hidden md:inline">&nbsp;& Runtime Health</span>
-						</Card.Title>
-					</div>
-					<div class="flex items-center gap-2 shrink-0">
-						<a
-							href="/system/services"
-							class="text-xs text-muted-foreground hover:text-primary transition-colors flex items-center gap-1 font-medium"
-						>
-							<span>All Daemons</span>
-							<ArrowRightIcon class="size-3" />
-						</a>
-					</div>
+	<div class="grid grid-cols-1 gap-5 lg:grid-cols-3">
+		<!-- Every service the daemon reports, problems first -->
+		<Card.Root class="flex flex-col gap-0 py-0 lg:col-span-2">
+			<div class="flex items-center justify-between gap-2 border-b px-4 py-3">
+				<div class="flex items-center gap-2 min-w-0">
+					<ActivityIcon class="size-4 text-muted-foreground shrink-0" />
+					<span class="text-sm font-semibold">Services</span>
+					{#if banners.length > 0}
+						<span class="text-xs text-muted-foreground tabular-nums">
+							{banners.filter(isRunning).length} of {banners.length} running
+						</span>
+					{/if}
 				</div>
-			</Card.Header>
-			<Card.Content class="p-3 divide-y divide-border/40">
-				{#each subsystemServices as svc (svc.name)}
-					{@const banner = getBanner(svc.id, svc.name)}
-					<div class="flex items-center justify-between py-2.5 px-2 hover:bg-muted/20 rounded-md transition-colors">
-						<div class="flex items-center gap-3 min-w-0">
-							<StatusDot state={banner?.state ?? "online"} size="sm" />
-							<div class="flex flex-col min-w-0">
-								<div class="flex items-center gap-2">
-									<a href={svc.href} class="text-xs font-semibold text-foreground hover:text-primary transition-colors truncate">
-										{svc.name}
-									</a>
-									<Badge variant="outline" class="text-[9px] font-mono px-1 py-0 hidden sm:inline-flex">
-										{svc.tag}
-									</Badge>
-								</div>
-								<span class="text-[11px] text-muted-foreground truncate">{svc.desc}</span>
-							</div>
-						</div>
-
-						<div class="flex items-center gap-3 shrink-0 font-mono text-[11px]">
-							<span class="text-muted-foreground text-[10px] hidden md:inline">
-								{#if banner?.summary}
-									{banner.summary}
-								{:else}
-									{svc.proto}
-								{/if}
-							</span>
-							<Badge
-								variant={banner?.state === "online" || banner?.state === "active" ? "secondary" : "outline"}
-								class="text-[10px] capitalize font-mono"
+				<a
+					href="/system/services"
+					class="text-xs text-muted-foreground hover:text-selected-foreground transition-colors flex items-center gap-1 font-medium"
+				>
+					Manage <ArrowRightIcon class="size-3" />
+				</a>
+			</div>
+			<div class="flex flex-col divide-y divide-border">
+				{#if loadingData && banners.length === 0}
+					{#each { length: 6 } as _, i (i)}
+						<div class="px-4 py-2.5"><Skeleton class="h-5 w-full" /></div>
+					{/each}
+				{:else}
+					{#each sortedBanners as banner (banner.id ?? banner.name)}
+						{@const meta = getServiceMeta(banner.id, banner.name)}
+						{@const Icon = meta.icon}
+						<a
+							href={meta.configHref}
+							class="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-accent/40 min-w-0"
+						>
+							<StatusDot state={stateVariant(banner.state)} size="sm" />
+							<Icon class="size-4 shrink-0 text-muted-foreground" />
+							<span class="text-sm font-medium text-foreground truncate min-w-0">{meta.name}</span>
+							<span
+								class="ml-auto truncate text-xs min-w-0 text-right {isProblem(banner)
+									? 'text-warning'
+									: 'text-muted-foreground font-mono'}"
+								title={reasonOf(banner)}
 							>
-								{banner?.state ?? "active"}
-							</Badge>
-						</div>
-					</div>
-				{/each}
-			</Card.Content>
+								{isProblem(banner) ? reasonOf(banner) : (banner.summary ?? "")}
+							</span>
+							<StatusBadge text={banner.state} variant={stateVariant(banner.state)} class="capitalize shrink-0" />
+						</a>
+					{/each}
+				{/if}
+			</div>
 		</Card.Root>
 
-		<!-- Right Main Panel: Network Vitals & Host Overview -->
-		<Card.Root class="flex flex-col lg:col-span-1">
-			<Card.Header class="p-4 py-3 border-b border-border/50">
-				<div class="flex items-center gap-2 min-w-0">
-					<CpuIcon class="size-4 text-purple-400 shrink-0" />
-					<Card.Title class="text-sm sm:text-base font-semibold truncate">Network & Vitals</Card.Title>
+		<!-- The router itself: only values the daemon reported, "—" otherwise -->
+		<Card.Root class="flex flex-col gap-0 py-0 lg:col-span-1">
+			<div class="flex items-center gap-2 border-b px-4 py-3">
+				<CpuIcon class="size-4 text-muted-foreground shrink-0" />
+				<span class="text-sm font-semibold">Router</span>
+			</div>
+			{#if loadingData && !statusData}
+				<div class="flex flex-col gap-3 p-4">
+					<Skeleton class="h-5 w-full" />
+					<Skeleton class="h-5 w-full" />
+					<Skeleton class="h-5 w-full" />
 				</div>
-			</Card.Header>
-			<Card.Content class="flex flex-1 flex-col gap-4 p-5 text-xs">
-				{#if loadingData}
-					<div class="flex flex-col gap-3">
-						<Skeleton class="h-10 w-full" />
-						<Skeleton class="h-10 w-full" />
-						<Skeleton class="h-10 w-full" />
-					</div>
-				{:else}
-					<!-- Interface & IPv4 -->
-					<div
-						class="flex flex-col gap-1.5 rounded-lg border border-border/60 bg-muted/20 p-3"
-					>
-						<div class="flex items-center justify-between">
-							<span class="text-muted-foreground font-medium"
-								>LAN Interface</span
-							>
-							<Badge variant="outline" class="font-mono text-[10px]"
-								>{statusData?.network?.lan_iface || "eth0"}</Badge
-							>
-						</div>
-						<div class="flex items-center justify-between font-mono">
-							<span class="text-muted-foreground">IPv4 Gateway</span>
-							<span class="text-emerald-400 font-semibold"
-								>{statusData?.network?.lan_ipv4 || "192.168.1.1"}</span
-							>
-						</div>
-					</div>
-
-					<!-- IPv6 Prefixes -->
-					<div
-						class="flex flex-col gap-1.5 rounded-lg border border-border/60 bg-muted/20 p-3"
-					>
-						<span class="text-muted-foreground font-medium"
-							>IPv6 Prefixes</span
-						>
-						<div class="flex justify-between font-mono text-[11px]">
-							<span class="text-muted-foreground">GUA</span>
-							<span class="text-sky-400 truncate max-w-[170px]" title={formatIpv6Prefix(statusData?.network?.gua)}
-								>{formatIpv6Prefix(statusData?.network?.gua)}</span
-							>
-						</div>
-						<div class="flex justify-between font-mono text-[11px]">
-							<span class="text-muted-foreground">ULA</span>
-							<span class="text-purple-400 truncate max-w-[170px]" title={formatIpv6Prefix(statusData?.network?.ula)}
-								>{formatIpv6Prefix(statusData?.network?.ula)}</span
-							>
-						</div>
-					</div>
-
-					<!-- Database Engine -->
-					<div
-						class="flex flex-col gap-1.5 rounded-lg border border-border/60 bg-muted/20 p-3"
-					>
-						<div class="flex items-center justify-between">
-							<div class="flex items-center gap-1.5">
-								<DatabaseIcon class="size-3.5 text-amber-400" />
-								<span class="text-muted-foreground font-medium"
-									>Database Storage</span
-								>
-							</div>
-							<Badge
-								variant="secondary"
-								class="text-[10px] uppercase font-mono"
-							>
-								redb
-							</Badge>
-						</div>
-						<div class="flex items-center justify-between font-mono text-[11px]">
-							<span class="text-muted-foreground">Footprint</span>
-							<span class="text-foreground font-medium">
-								{statusData?.db?.size_bytes ? formatBytes(statusData.db.size_bytes) : "—"}
-							</span>
-						</div>
-						<div class="flex items-center justify-between font-mono text-[11px]">
-							<span class="text-muted-foreground">Last Disk Sync</span>
-							<span class="text-emerald-400 font-medium">
-								{statusData?.db?.last_flush_secs_ago !== undefined ? `${statusData.db.last_flush_secs_ago}s ago` : "—"}
-							</span>
-						</div>
-					</div>
-
-					<!-- Process Memory -->
-					<div
-						class="flex flex-col gap-1.5 rounded-lg border border-border/60 bg-muted/20 p-3"
-					>
-						<div class="flex items-center justify-between">
-							<span class="text-muted-foreground font-medium"
-								>Process Memory (RSS / VMS)</span
-							>
-						</div>
-						<div class="flex items-center justify-between font-mono">
-							<span class="text-foreground font-bold"
-								>{formatBytes(rssBytes)}</span
-							>
-							<span class="text-muted-foreground text-[11px]"
-								>VMS: {formatBytes(vmsBytes)}</span
-							>
-						</div>
-					</div>
-				{/if}
-			</Card.Content>
+			{:else}
+				<dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2.5 p-4 text-sm">
+					<dt class="text-muted-foreground">LAN interface</dt>
+					<dd class="text-right font-mono text-foreground truncate">{statusData?.network?.lan_iface || "—"}</dd>
+					<dt class="text-muted-foreground">IPv4</dt>
+					<dd class="text-right font-mono text-foreground truncate">{statusData?.network?.lan_ipv4 || "—"}</dd>
+					<dt class="text-muted-foreground">IPv6 GUA</dt>
+					<dd class="text-right font-mono text-foreground truncate" title={formatIpv6Prefix(statusData?.network?.gua)}>{statusData?.network?.gua ? formatIpv6Prefix(statusData.network.gua) : "—"}</dd>
+					<dt class="text-muted-foreground">IPv6 ULA</dt>
+					<dd class="text-right font-mono text-muted-foreground truncate" title={formatIpv6Prefix(statusData?.network?.ula)}>{statusData?.network?.ula ? formatIpv6Prefix(statusData.network.ula) : "—"}</dd>
+					<dt class="text-muted-foreground">Uptime</dt>
+					<dd class="text-right tabular-nums text-foreground">{statusData ? formatUptime(statusData.uptime_secs) : "—"}</dd>
+					<dt class="text-muted-foreground">Memory</dt>
+					<dd class="text-right tabular-nums text-foreground">{rssBytes !== null ? formatBytes(rssBytes) : "—"}</dd>
+					<dt class="text-muted-foreground">Version</dt>
+					<dd class="text-right font-mono text-xs text-muted-foreground truncate self-center" title={statusData?.version ?? ""}>{statusData?.version ? formatBuild(statusData.version) : "—"}</dd>
+				</dl>
+			{/if}
 		</Card.Root>
 	</div>
 </div>

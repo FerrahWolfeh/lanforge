@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { formatDateTime, formatTimeAgo } from "$lib/utils";
 	import * as Table from "$lib/components/ui/table";
 	import * as AlertDialog from "$lib/components/ui/alert-dialog";
 	import { Button } from "$lib/components/ui/button";
@@ -37,29 +38,6 @@
 	let isDeleteOpen = $state(false);
 	let userToDelete = $state<UserInfo | null>(null);
 	let isDeleting = $state(false);
-
-	function formatDate(ts: number | null | undefined): string {
-		if (!ts) return "—";
-		const ms = ts > 1e11 ? ts : ts * 1000;
-		const d = new Date(ms);
-		return d.toLocaleDateString(undefined, {
-			year: "numeric",
-			month: "short",
-			day: "2-digit",
-			hour: "2-digit",
-			minute: "2-digit"
-		});
-	}
-
-	function formatRelative(ts: number | null | undefined): string {
-		if (!ts) return "Never logged in";
-		const ms = ts > 1e11 ? ts : ts * 1000;
-		const diffSecs = Math.round((Date.now() - ms) / 1000);
-		if (diffSecs < 60) return "Just now";
-		if (diffSecs < 3600) return `${Math.floor(diffSecs / 60)}m ago`;
-		if (diffSecs < 86400) return `${Math.floor(diffSecs / 3600)}h ago`;
-		return `${Math.floor(diffSecs / 86400)}d ago`;
-	}
 
 	function confirmDelete(u: UserInfo) {
 		userToDelete = u;
@@ -167,12 +145,12 @@
 						<div class="flex items-center gap-1.5">
 							<span class="text-xs font-bold text-foreground">{user.username}</span>
 							{#if isSelf}
-								<Badge variant="outline" class="text-[10px] px-1.5 py-0 border-primary/30 text-primary bg-primary/10">
+								<Badge variant="outline" class="text-xs px-1.5 py-0 border-primary/30 text-primary bg-primary/10">
 									You
 								</Badge>
 							{/if}
 						</div>
-						<span class="text-[11px] font-mono text-muted-foreground">
+						<span class="text-xs font-mono text-muted-foreground">
 							ID: #{user.id}
 						</span>
 					</div>
@@ -182,15 +160,15 @@
 			<!-- Role -->
 			<Table.Cell class="py-3 font-sans">
 				{#if user.role === "admin"}
-					<Badge variant="default" class="text-[10px] px-2 py-0.5">
+					<Badge variant="default" class="text-xs px-2 py-0.5">
 						Administrator
 					</Badge>
 				{:else if user.role === "operator"}
-					<Badge variant="secondary" class="text-[10px] px-2 py-0.5">
+					<Badge variant="secondary" class="text-xs px-2 py-0.5">
 						Operator
 					</Badge>
 				{:else}
-					<Badge variant="outline" class="text-[10px] px-2 py-0.5 text-muted-foreground">
+					<Badge variant="outline" class="text-xs px-2 py-0.5 text-muted-foreground">
 						Viewer
 					</Badge>
 				{/if}
@@ -198,13 +176,13 @@
 
 			<!-- Created At -->
 			<Table.Cell class="py-3 font-sans text-xs text-muted-foreground whitespace-nowrap">
-				{formatDate(user.created_at)}
+				{formatDateTime(user.created_at)}
 			</Table.Cell>
 
 			<!-- Last Access -->
 			<Table.Cell class="py-3 font-sans whitespace-nowrap">
-				<span class="text-xs text-muted-foreground" title={formatDate(user.last_login)}>
-					{formatRelative(user.last_login)}
+				<span class="text-xs text-muted-foreground" title={formatDateTime(user.last_login)}>
+					{user.last_login ? formatTimeAgo(user.last_login) : "Never logged in"}
 				</span>
 			</Table.Cell>
 
@@ -241,7 +219,7 @@
 
 <!-- AlertDialog for User Deletion -->
 <AlertDialog.Root bind:open={isDeleteOpen}>
-	<AlertDialog.Content class="rounded-xl">
+	<AlertDialog.Content class="rounded-lg">
 		<AlertDialog.Header>
 			<AlertDialog.Title class="text-base font-bold text-foreground">
 				Delete User?

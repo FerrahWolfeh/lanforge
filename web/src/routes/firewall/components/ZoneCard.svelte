@@ -54,11 +54,11 @@
 
   // ── Zone-name → accent dot colour ────────────────────────────────────────
   const DOT_COLOURS: Record<string, string> = {
-    internal: "bg-emerald-500",
+    internal: "bg-success",
     external: "bg-destructive",
     trusted: "bg-primary",
-    guest: "bg-amber-500",
-    iot: "bg-purple-500",
+    guest: "bg-warning",
+    iot: "bg-muted-foreground",
   };
 
   const dotColour = $derived(DOT_COLOURS[zone.name.toLowerCase()] ?? "bg-muted-foreground");
@@ -149,7 +149,7 @@
     <!-- Interfaces -->
     <div class="flex flex-col gap-1.5">
       <div class="flex items-center justify-between">
-        <span class="text-muted-foreground text-xs font-medium uppercase tracking-wide">
+        <span class="text-muted-foreground text-xs font-medium">
           Interfaces
         </span>
       </div>
@@ -179,7 +179,7 @@
             {iface}
             <button
               type="button"
-              class="rounded-full p-0.5 hover:bg-muted focus-visible:outline-none focus-visible:ring-1 cursor-pointer"
+              class="rounded-full p-0.5 max-sm:-m-1.5 max-sm:p-2 hover:bg-muted focus-visible:outline-none focus-visible:ring-1 cursor-pointer"
               onclick={() => removeInterface(iface)}
               aria-label="Remove {iface}"
             >
@@ -192,7 +192,7 @@
           <Button
             variant="outline"
             size="icon"
-            class="size-6"
+            class="size-6 max-sm:size-8"
             aria-label="Add interface"
             onclick={() => {
               addingInterface = true;
@@ -207,7 +207,7 @@
       {#if addingInterface}
         <div class="flex flex-col gap-2 p-2.5 rounded-lg border border-border/70 bg-muted/30 w-full mt-1">
           <div class="flex items-center justify-between">
-            <span class="text-[11px] font-semibold text-foreground">Attach Interface</span>
+            <span class="text-xs font-semibold text-foreground">Attach Interface</span>
             <button
               type="button"
               class="text-muted-foreground hover:text-foreground text-xs cursor-pointer"
@@ -225,7 +225,7 @@
                 bind:value={selectedIfaceToAdd}
               >
                 <option value="" disabled>Select interface…</option>
-                {#each unassignedInterfaces as iface}
+                {#each unassignedInterfaces as iface (iface.name)}
                   <option value={iface.name}>
                     {iface.name} ({iface.bus_type} - {iface.carrier_up ? '🟢 Connected' : '⚪ Disconnected'} {iface.ips[0] ? `[${iface.ips[0]}]` : ''})
                   </option>
@@ -242,7 +242,7 @@
             </div>
             <button
               type="button"
-              class="text-[11px] text-primary hover:underline text-left cursor-pointer"
+              class="text-xs text-primary hover:underline text-left cursor-pointer"
               onclick={() => { customInterfaceMode = true; }}
             >
               Or type custom / virtual interface name…
@@ -271,7 +271,7 @@
             {#if unassignedInterfaces.length > 0}
               <button
                 type="button"
-                class="text-[11px] text-primary hover:underline text-left cursor-pointer"
+                class="text-xs text-primary hover:underline text-left cursor-pointer"
                 onclick={() => { customInterfaceMode = false; }}
               >
                 ← Back to detected interface list
@@ -286,7 +286,7 @@
 
     <!-- Input Policy -->
     <div class="flex flex-col gap-1.5">
-      <span class="text-muted-foreground text-xs font-medium uppercase tracking-wide">
+      <span class="text-muted-foreground text-xs font-medium">
         Input Policy
       </span>
       <ToggleGroup.Root
@@ -296,15 +296,15 @@
         value={zone.input_policy}
         onValueChange={setInputPolicy}
       >
-        <ToggleGroup.Item value="Accept">Accept</ToggleGroup.Item>
-        <ToggleGroup.Item value="Drop">Drop</ToggleGroup.Item>
-        <ToggleGroup.Item value="Reject">Reject</ToggleGroup.Item>
+        <ToggleGroup.Item value="Accept" class="max-sm:min-h-8 max-sm:min-w-8 data-[state=on]:bg-success/15 data-[state=on]:text-success">Accept</ToggleGroup.Item>
+        <ToggleGroup.Item value="Drop" class="max-sm:min-h-8 max-sm:min-w-8 data-[state=on]:bg-danger/15 data-[state=on]:text-danger">Drop</ToggleGroup.Item>
+        <ToggleGroup.Item value="Reject" class="max-sm:min-h-8 max-sm:min-w-8 data-[state=on]:bg-danger/15 data-[state=on]:text-danger">Reject</ToggleGroup.Item>
       </ToggleGroup.Root>
     </div>
 
     <!-- Forward Policy -->
     <div class="flex flex-col gap-1.5">
-      <span class="text-muted-foreground text-xs font-medium uppercase tracking-wide">
+      <span class="text-muted-foreground text-xs font-medium">
         Forward Policy
       </span>
       <ToggleGroup.Root
@@ -314,9 +314,9 @@
         value={zone.forward_policy}
         onValueChange={setForwardPolicy}
       >
-        <ToggleGroup.Item value="Accept">Accept</ToggleGroup.Item>
-        <ToggleGroup.Item value="Drop">Drop</ToggleGroup.Item>
-        <ToggleGroup.Item value="Reject">Reject</ToggleGroup.Item>
+        <ToggleGroup.Item value="Accept" class="max-sm:min-h-8 max-sm:min-w-8 data-[state=on]:bg-success/15 data-[state=on]:text-success">Accept</ToggleGroup.Item>
+        <ToggleGroup.Item value="Drop" class="max-sm:min-h-8 max-sm:min-w-8 data-[state=on]:bg-danger/15 data-[state=on]:text-danger">Drop</ToggleGroup.Item>
+        <ToggleGroup.Item value="Reject" class="max-sm:min-h-8 max-sm:min-w-8 data-[state=on]:bg-danger/15 data-[state=on]:text-danger">Reject</ToggleGroup.Item>
       </ToggleGroup.Root>
     </div>
 

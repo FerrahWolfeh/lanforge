@@ -9,7 +9,6 @@
 	import { Label } from "$lib/components/ui/label";
 	import HelpPopover from "$lib/components/HelpPopover.svelte";
 	import InfoPopover from "$lib/components/InfoPopover.svelte";
-	import CpuIcon from "@lucide/svelte/icons/cpu";
 	import ZapOffIcon from "@lucide/svelte/icons/zap-off";
 	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import SlidersIcon from "@lucide/svelte/icons/sliders";
@@ -123,10 +122,10 @@
 			</Card.Description>
 		</Card.Header>
 		<Card.Content class="p-4 flex flex-col gap-5">
-			<div class="flex items-center justify-between rounded-xl border p-3.5 bg-muted/20">
+			<div class="flex items-center justify-between rounded-lg border p-3.5 bg-muted/20">
 				<div class="flex flex-col gap-0.5">
 					<Label class="text-xs font-semibold">Enable NIC Hardware Tuning</Label>
-					<p class="text-[11px] text-muted-foreground">
+					<p class="text-xs text-muted-foreground">
 						When enabled, Lanforge configures RPS, RFS, max ring buffers, and disables EEE on target interfaces.
 					</p>
 				</div>
@@ -214,7 +213,7 @@
 										<Select.Item value={iface.name} class="text-xs font-mono">
 											<div class="flex items-center justify-between w-full gap-3">
 												<span class="font-medium">{iface.name}</span>
-												<span class="text-[10px] text-muted-foreground">{iface.bus_type}</span>
+												<span class="text-xs text-muted-foreground">{iface.bus_type}</span>
 											</div>
 										</Select.Item>
 									{/each}
@@ -270,7 +269,7 @@
 							</InfoPopover>
 						</div>
 						{#if effectiveCpuMask}
-							<Badge variant="outline" class="font-mono text-[10px]">
+							<Badge variant="outline" class="font-mono text-xs">
 								Effective: 0x{effectiveCpuMask}
 							</Badge>
 						{/if}
@@ -286,7 +285,7 @@
 						placeholder="auto"
 						class="font-mono text-xs h-9"
 					/>
-					<span class="text-[11px] text-muted-foreground">
+					<span class="text-xs text-muted-foreground">
 						Use <code>auto</code> for automatic core detection, or provide a hex mask (e.g. <code>ff</code>).
 					</span>
 				</Card.Content>
@@ -333,7 +332,7 @@
 							/>
 						</div>
 					</div>
-					<span class="text-[11px] text-muted-foreground">
+					<span class="text-xs text-muted-foreground">
 						Set to <code>auto</code> to apply maximum driver limits, or enter specific buffer sizes.
 					</span>
 				</Card.Content>
@@ -350,14 +349,14 @@
 			</Card.Header>
 			<Card.Content class="p-4 flex flex-col gap-4">
 				<!-- Disable EEE -->
-				<div class="flex items-center justify-between rounded-xl border p-3.5 bg-muted/20">
+				<div class="flex items-center justify-between rounded-lg border p-3.5 bg-muted/20">
 					<div class="flex items-start gap-3">
-						<div class="flex size-9 items-center justify-center rounded-lg bg-amber-500/10 text-amber-500 shrink-0 mt-0.5">
+						<div class="flex size-9 items-center justify-center rounded-md bg-muted text-muted-foreground shrink-0 mt-0.5">
 							<ZapOffIcon class="size-4" />
 						</div>
 						<div class="flex flex-col gap-0.5">
 							<span class="text-xs font-semibold text-foreground">Disable Energy Efficient Ethernet (EEE)</span>
-							<p class="text-[11px] text-muted-foreground leading-relaxed max-w-xl">
+							<p class="text-xs text-muted-foreground leading-relaxed max-w-xl">
 								Disables IEEE 802.3az low-power idle states on Ethernet PHYs, preventing link micro-sleeps and latency spikes during bursts.
 							</p>
 						</div>
@@ -369,14 +368,14 @@
 				</div>
 
 				<!-- UDP GRO Forwarding -->
-				<div class="flex items-center justify-between rounded-xl border p-3.5 bg-muted/20">
+				<div class="flex items-center justify-between rounded-lg border p-3.5 bg-muted/20">
 					<div class="flex items-start gap-3">
-						<div class="flex size-9 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-500 shrink-0 mt-0.5">
+						<div class="flex size-9 items-center justify-center rounded-md bg-muted text-muted-foreground shrink-0 mt-0.5">
 							<ActivityIcon class="size-4" />
 						</div>
 						<div class="flex flex-col gap-0.5">
 							<span class="text-xs font-semibold text-foreground">UDP GRO Forwarding Offload</span>
-							<p class="text-[11px] text-muted-foreground leading-relaxed max-w-xl">
+							<p class="text-xs text-muted-foreground leading-relaxed max-w-xl">
 								Enables <code>net.ipv4.udp_gro_forwarding=1</code>, aggregating consecutive UDP packets before routing to significantly increase WireGuard, Tailscale, and QUIC throughput.
 							</p>
 						</div>
@@ -395,7 +394,7 @@
 				<Card.Header class="p-4 flex flex-row items-center justify-between">
 					<div class="flex items-center gap-2">
 						<SlidersIcon class="size-4 text-muted-foreground" />
-						<span class="text-xs font-semibold text-foreground uppercase tracking-wider">
+						<span class="text-xs font-medium text-muted-foreground">
 							Advanced Kernel Flow Tables (RFS)
 						</span>
 					</div>
@@ -427,7 +426,7 @@
 								bind:value={rpsFlowEntries}
 								class="h-9 text-xs"
 							/>
-							<span class="text-[11px] text-muted-foreground">
+							<span class="text-xs text-muted-foreground">
 								Default: 32768 entries. Global kernel flow table size.
 							</span>
 						</div>
@@ -443,7 +442,7 @@
 								bind:value={rpsFlowCnt}
 								class="h-9 text-xs"
 							/>
-							<span class="text-[11px] text-muted-foreground">
+							<span class="text-xs text-muted-foreground">
 								Default: 4096 entries per receive queue.
 							</span>
 						</div>

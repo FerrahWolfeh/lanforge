@@ -46,7 +46,7 @@
 	}}
 >
 	<!-- Opens over the dialog whose action needs the password: keep it a layer above. -->
-	<Dialog.Content class="sm:max-w-sm rounded-2xl z-[60]" overlayClass="z-[60]">
+	<Dialog.Content class="sm:max-w-sm rounded-lg z-[60]" overlayClass="z-[60]">
 		<Dialog.Header>
 			<Dialog.Title class="text-base font-bold flex items-center gap-2">
 				<ShieldCheckIcon class="size-5 text-primary" />
@@ -74,7 +74,7 @@
 					autocomplete="current-password"
 					placeholder="Current password"
 					bind:value={password}
-					class="text-xs rounded-xl h-9 bg-background"
+					class="text-xs rounded-md h-9 bg-background"
 				/>
 				{#if error}
 					<p class="text-xs text-destructive">{error}</p>
@@ -85,14 +85,14 @@
 				<Button
 					type="button"
 					variant="outline"
-					class="rounded-xl cursor-pointer text-xs"
+					class="rounded-md cursor-pointer text-xs"
 					onclick={() => settle(null)}
 				>
 					Cancel
 				</Button>
 				<Button
 					type="submit"
-					class="rounded-xl cursor-pointer text-xs bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm"
+					class="rounded-md cursor-pointer text-xs bg-primary text-primary-foreground hover:bg-primary/90"
 					disabled={!password}
 				>
 					<ShieldCheckIcon data-icon="inline-start" />

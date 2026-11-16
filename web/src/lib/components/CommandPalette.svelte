@@ -3,12 +3,11 @@
 	import { dev } from "$app/environment";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import { Badge } from "$lib/components/ui/badge";
-	import { toggleMode } from "mode-watcher";
+	import { switchMode } from "$lib/theme";
 	import { sidebarState } from "$lib/stores/sidebar.svelte";
 	import { auth } from "$lib/stores/auth.svelte";
 	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
-	import { logout } from "$lib/api/client";
-	import type { Component } from "svelte";
+		import type { Component } from "svelte";
 
 	import SearchIcon from "@lucide/svelte/icons/search";
 	import LayoutDashboardIcon from "@lucide/svelte/icons/layout-dashboard";
@@ -32,9 +31,9 @@
 	import SlidersHorizontalIcon from "@lucide/svelte/icons/sliders-horizontal";
 	import BugIcon from "@lucide/svelte/icons/bug";
 	import { commandState } from "$lib/stores/command.svelte";
-	import type { Permission } from "$lib/api/types";
+	import { isNavDebugOnly, isNavVisible, type NavGate } from "$lib/navGate";
 
-	interface CommandItem {
+	interface CommandItem extends NavGate {
 		id: string;
 		title: string;
 		subtitle?: string;
@@ -42,8 +41,6 @@
 		category: "Pages & Navigation" | "Quick Actions";
 		icon: Component<Record<string, unknown>>;
 		action: () => void;
-		cap?: string | string[];
-		perm?: Permission;
 	}
 
 	let search = $state("");
@@ -72,7 +69,7 @@
 			keywords: ["theme", "dark", "light", "mode", "colors"],
 			category: "Quick Actions",
 			icon: SunMoonIcon,
-			action: () => toggleMode()
+			action: () => switchMode()
 		},
 		{
 			id: "action-sidebar",
@@ -91,12 +88,8 @@
 			category: "Quick Actions",
 			icon: LogOutIcon,
 			action: async () => {
-				try {
-					await logout();
-				} finally {
-					auth.clear();
-					goto("/login");
-				}
+				await auth.signOut();
+				goto("/login");
 			}
 		},
 
@@ -112,7 +105,7 @@
 		},
 		{
 			id: "page-devices",
-			title: "Network Devices",
+			title: "Devices",
 			subtitle: "/network/devices",
 			keywords: ["devices", "computers", "clients", "mac", "ip"],
 			category: "Pages & Navigation",
@@ -150,7 +143,7 @@
 		},
 		{
 			id: "page-firewall",
-			title: "Firewall & Security",
+			title: "Firewall",
 			subtitle: "/firewall",
 			keywords: ["firewall", "nftables", "port forward", "dmz", "pinhole", "rules", "zones"],
 			category: "Pages & Navigation",
@@ -260,7 +253,7 @@
 		},
 		{
 			id: "page-system",
-			title: "System Status & Telemetry",
+			title: "System Status",
 			subtitle: "/system",
 			keywords: ["status", "cpu", "memory", "uptime", "system", "hardware"],
 			category: "Pages & Navigation",
@@ -296,7 +289,7 @@
 		},
 		{
 			id: "page-users",
-			title: "Local Users & Access",
+			title: "Users",
 			subtitle: "/system/users",
 			keywords: ["users", "accounts", "login", "passwords", "permissions", "admin"],
 			category: "Pages & Navigation",
@@ -316,16 +309,7 @@
 		}
 	];
 
-	const availableItems = $derived(
-		items.filter((item) => {
-			if (item.perm && !auth.can(item.perm)) return false;
-			if (!item.cap) return true;
-			if (Array.isArray(item.cap)) {
-				return item.cap.some((c) => capabilitiesState.isEnabled(c));
-			}
-			return capabilitiesState.isEnabled(item.cap);
-		})
-	);
+	const availableItems = $derived(items.filter(isNavVisible));
 
 	const filteredItems = $derived.by(() => {
 		const q = search.trim().toLowerCase();
@@ -347,10 +331,9 @@
 	});
 
 	$effect(() => {
-		// Reset selected index when search query changes
-		if (search) {
-			selectedIndex = 0;
-		}
+		// Reset the highlight on every change of the query, including clearing it.
+		void search;
+		selectedIndex = 0;
 	});
 
 	function executeItem(item: CommandItem) {
@@ -386,7 +369,7 @@
 <Dialog.Root bind:open={commandState.isOpen}>
 	<Dialog.Content
 		showCloseButton={false}
-		class="p-0 overflow-hidden sm:max-w-xl rounded-2xl shadow-2xl border border-border/80 bg-card gap-0 top-[20%] sm:top-[25%]"
+		class="p-0 overflow-hidden sm:max-w-xl rounded-lg shadow-2xl border border-border/80 bg-card gap-0 top-4 translate-y-0 sm:top-[15%]"
 	>
 		<Dialog.Header class="sr-only">
 			<Dialog.Title>Command Palette</Dialog.Title>
@@ -399,16 +382,17 @@
 			<input
 				bind:this={inputEl}
 				bind:value={search}
+				aria-label="Search commands and pages"
 				placeholder="Type a command or search for a page..."
 				class="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
 			/>
-			<Badge variant="outline" class="font-mono text-[10px] text-muted-foreground px-1.5 py-0">
+			<Badge variant="outline" class="font-mono text-xs text-muted-foreground px-1.5 py-0">
 				ESC
 			</Badge>
 		</div>
 
 		<!-- Results List -->
-		<div class="max-h-80 overflow-y-auto p-2 space-y-1">
+		<div class="max-h-80 overflow-y-auto p-2 space-y-1" role="listbox" aria-label="Results">
 			{#if filteredItems.length === 0}
 				<div class="py-10 text-center text-xs text-muted-foreground">
 					No results found for "<span class="font-semibold text-foreground">{search}</span>".
@@ -417,14 +401,12 @@
 				{#each filteredItems as item, idx (item.id)}
 					{@const isSelected = idx === selectedIndex}
 					{@const Icon = item.icon}
-					{@const isDbgOnly = capabilitiesState.debugMode && item.cap && (
-						Array.isArray(item.cap)
-							? !capabilitiesState.isAnyActualEnabled(item.cap)
-							: !capabilitiesState.isActualEnabled(item.cap)
-					)}
+					{@const isDbgOnly = isNavDebugOnly(item)}
 					<button
 						type="button"
-						class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl text-left transition-colors cursor-pointer {isSelected
+						role="option"
+						aria-selected={isSelected}
+						class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-md text-left transition-colors cursor-pointer {isSelected
 							? 'bg-primary text-primary-foreground'
 							: 'hover:bg-muted/60 text-foreground'}"
 						onclick={() => executeItem(item)}
@@ -444,7 +426,7 @@
 								</span>
 								{#if item.subtitle}
 									<span
-										class="text-[11px] truncate font-mono {isSelected
+										class="text-xs truncate font-mono {isSelected
 											? 'text-primary-foreground/80'
 											: 'text-muted-foreground'}"
 									>
@@ -457,14 +439,14 @@
 						<div class="flex items-center gap-1.5 shrink-0">
 							{#if isDbgOnly}
 								<span
-									class="text-[9px] font-mono font-medium px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-500 border border-amber-500/30"
+									class="text-xs font-mono font-medium px-1.5 py-0.5 rounded bg-warning/15 text-warning border border-warning/30"
 									title="Disabled on daemon (visible in dev mode)"
 								>
 									DBG
 								</span>
 							{/if}
 							<span
-								class="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded {isSelected
+								class="text-xs font-medium px-1.5 py-0.5 rounded {isSelected
 									? 'bg-primary-foreground/20 text-primary-foreground'
 									: 'bg-muted/60 text-muted-foreground'}"
 							>
@@ -479,16 +461,16 @@
 			{/if}
 		</div>
 
-		<!-- Footer Help -->
-		<div class="flex items-center justify-between px-4 py-2 border-t border-border/50 bg-muted/20 text-[11px] text-muted-foreground">
+		<!-- Footer Help (keyboard hints: no use on a touch screen) -->
+		<div class="max-sm:hidden flex items-center justify-between px-4 py-2 border-t border-border/50 bg-muted/20 text-xs text-muted-foreground">
 			<div class="flex items-center gap-3">
 				<span class="flex items-center gap-1">
-					<kbd class="rounded border border-border/80 bg-background px-1 py-0.5 font-mono text-[10px]">↑</kbd>
-					<kbd class="rounded border border-border/80 bg-background px-1 py-0.5 font-mono text-[10px]">↓</kbd>
+					<kbd class="rounded border border-border/80 bg-background px-1 py-0.5 font-mono text-xs">↑</kbd>
+					<kbd class="rounded border border-border/80 bg-background px-1 py-0.5 font-mono text-xs">↓</kbd>
 					navigate
 				</span>
 				<span class="flex items-center gap-1">
-					<kbd class="rounded border border-border/80 bg-background px-1 py-0.5 font-mono text-[10px]">↵</kbd>
+					<kbd class="rounded border border-border/80 bg-background px-1 py-0.5 font-mono text-xs">↵</kbd>
 					execute
 				</span>
 			</div>

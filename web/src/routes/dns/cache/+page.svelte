@@ -1,23 +1,18 @@
 <script lang="ts">
+import { errorMessage } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import { Button } from "$lib/components/ui/button";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import DatabaseIcon from "@lucide/svelte/icons/database";
-	import GlobeIcon from "@lucide/svelte/icons/globe";
-	import BookmarkIcon from "@lucide/svelte/icons/bookmark";
 	import AlertTriangleIcon from "@lucide/svelte/icons/alert-triangle";
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
-	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import NavTabs from "$lib/components/NavTabs.svelte";
+	import { dnsTabs } from "../tabs";
 	import PageHeader from "$lib/components/PageHeader.svelte";
 
-	const dnsTabs: NavTabItem[] = [
-		{ label: "Resolver & Analytics", href: "/dns/resolver", icon: GlobeIcon },
-		{ label: "Cache Inspection", href: "/dns/cache", icon: DatabaseIcon },
-		{ label: "Custom Rewrites", href: "/dns/rewrites", icon: BookmarkIcon },
-	];
 	import { createPolling, createDebounce } from "$lib/utils/polling";
 	import {
 		dnsCacheDump,
@@ -30,7 +25,6 @@
 	} from "$lib/api/types";
 
 	// Child components
-	import DnsCacheStatsCards from "./components/DnsCacheStatsCards.svelte";
 	import DnsCacheTypeDistribution from "./components/DnsCacheTypeDistribution.svelte";
 	import DnsCacheTable from "./components/DnsCacheTable.svelte";
 
@@ -114,8 +108,8 @@
 			flushModalOpen = false;
 			offset = 0;
 			await refreshAll();
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to flush DNS cache");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to flush DNS cache"));
 		} finally {
 			flushing = false;
 		}
@@ -141,8 +135,8 @@
 <div class="space-y-6">
 	<!-- Top Action Bar -->
 	<PageHeader
-		title="DNS Cache Inspection"
-		description="Inspect live in-memory DNS resolution records, memory footprint, and lifetime expirations."
+		title="DNS Cache"
+		description="Answers the resolver is holding and when they expire."
 		icon={DatabaseIcon}
 	>
 		{#snippet actions()}
@@ -176,8 +170,6 @@
 	<!-- DNS Sub-Navigation Tabs -->
 	<NavTabs tabs={dnsTabs} ariaLabel="DNS system navigation" />
 
-	<!-- Top Metric Summary Cards -->
-	<DnsCacheStatsCards {loading} {stats} />
 
 	<!-- Record Type Breakdown Pills -->
 	<DnsCacheTypeDistribution

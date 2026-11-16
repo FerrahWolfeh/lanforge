@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { downloadBlob, errorMessage } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import {
 		hostList,
@@ -13,15 +14,10 @@
 
 	import HostTable from "./components/HostTable.svelte";
 	import HostDialog from "./components/HostDialog.svelte";
-	import MonitorIcon from "@lucide/svelte/icons/monitor";
 	import BookmarkIcon from "@lucide/svelte/icons/bookmark";
-	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import NavTabs from "$lib/components/NavTabs.svelte";
+	import { lanTabs } from "../tabs";
 	import PageHeader from "$lib/components/PageHeader.svelte";
-
-	const lanTabs: NavTabItem[] = [
-		{ label: "Discovered Devices", href: "/network/devices", icon: MonitorIcon },
-		{ label: "Static Hosts", href: "/network/hosts", icon: BookmarkIcon },
-	];
 
 	let hosts = $state<HostConfigEntry[]>([]);
 	let discoveredDevices = $state<DeviceEntry[]>([]);
@@ -41,11 +37,16 @@
 				hostList(),
 				listDevices(),
 			]);
+			// A failed call keeps the last good data for its table.
 			if (hRes.status === "fulfilled") {
 				hosts = hRes.value;
+			} else {
+				toast.error("Failed to load static host rules");
 			}
 			if (dRes.status === "fulfilled") {
 				discoveredDevices = dRes.value.devices;
+			} else {
+				toast.error("Failed to load discovered devices");
 			}
 		} catch {
 			toast.error("Failed to load static host configurations");
@@ -80,14 +81,7 @@
 	async function handleExportJson() {
 		try {
 			const entries = await hostExport();
-			const jsonStr = JSON.stringify(entries, null, 2);
-			const blob = new Blob([jsonStr], { type: "application/json;charset=utf-8" });
-			const url = URL.createObjectURL(blob);
-			const a = document.createElement("a");
-			a.href = url;
-			a.download = "lanforge-hosts.json";
-			a.click();
-			URL.revokeObjectURL(url);
+			downloadBlob(JSON.stringify(entries, null, 2), "lanforge-hosts.json", "application/json;charset=utf-8");
 			toast.success("Static host definitions exported as JSON");
 		} catch {
 			toast.error("Failed to export static hosts");
@@ -109,8 +103,8 @@
 				await hostImport(entries);
 				toast.success("Successfully imported host rules");
 				await loadHostsAndDevices();
-			} catch (err: any) {
-				toast.error(err?.message || "Failed to parse and import JSON");
+			} catch (err) {
+				toast.error(errorMessage(err, "Failed to parse and import JSON"));
 			}
 		};
 		reader.readAsText(file);
@@ -126,8 +120,8 @@
 <div class="flex flex-col gap-5">
 	<!-- Page Header -->
 	<PageHeader
-		title="Static Hosts & Reservations"
-		description="Fixed IP reservations, DNS name overrides, and predictable interface suffixes."
+		title="Static Hosts"
+		description="Devices with a fixed name and address."
 		icon={BookmarkIcon}
 	/>
 

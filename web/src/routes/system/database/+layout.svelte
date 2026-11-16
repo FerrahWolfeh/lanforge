@@ -1,12 +1,10 @@
 <script lang="ts">
 	import { onMount } from "svelte";
 	import { createPolling } from "$lib/utils/polling";
-	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import HelpPopover from "$lib/components/HelpPopover.svelte";
 	import DatabaseIcon from "@lucide/svelte/icons/database";
-	import AlertTriangleIcon from "@lucide/svelte/icons/triangle-alert";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import LayersIcon from "@lucide/svelte/icons/layers";
 	import WrenchIcon from "@lucide/svelte/icons/wrench";
@@ -34,9 +32,7 @@
 
 	onMount(() => {
 		dbState.loadAll();
-		const stopPolling = createPolling(() => {
-			dbState.loadAll(true);
-		}, 10000);
+		const stopPolling = createPolling(() => dbState.loadAll(true), 10000);
 		return () => {
 			stopPolling();
 		};
@@ -44,14 +40,14 @@
 </script>
 
 <svelte:head>
-	<title>Database & Persistence — Lanforge</title>
+	<title>Database — Lanforge</title>
 </svelte:head>
 
 <div class="flex flex-col gap-6 w-full">
 	<!-- Page Header -->
 	<PageHeader
-		title="Database & Persistence"
-		description="Storage engine health, persistent inventory, background flushes, and configuration management."
+		title="Database"
+		description="Where lanforge keeps devices, leases, users and statistics. Configuration lives in lanforge.toml."
 		icon={DatabaseIcon}
 	>
 		{#snippet badge()}
@@ -106,10 +102,8 @@
 	<DbStatsCards
 		systemStatus={dbState.systemStatus}
 		metrics={dbState.metrics}
-		totalStoredEntities={dbState.totalStoredEntities}
 		loading={dbState.loading}
 		isInMemory={dbState.isInMemory}
-		engineLabel={dbState.engineLabel}
 		isHealthy={dbState.isHealthy}
 		{formatBytes}
 		{formatTimeAgo}

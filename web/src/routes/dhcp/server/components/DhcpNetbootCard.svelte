@@ -17,11 +17,11 @@
 	} = $props();
 </script>
 
-<Card.Root class="border-border/80 shadow-sm overflow-hidden">
+<Card.Root class="border-border/80 overflow-hidden">
 	<Card.Header class="bg-muted/20 border-b pb-4">
 		<div class="flex items-center justify-between">
 			<div class="flex items-center gap-2.5">
-				<HardDriveIcon class="size-5 text-amber-500" />
+				<HardDriveIcon class="size-5 text-muted-foreground" />
 				<div>
 					<Card.Title class="text-base font-bold">Network Boot &amp; TFTP Parameters</Card.Title>
 					<Card.Description class="text-xs">
@@ -53,7 +53,7 @@
 					placeholder="e.g. 10.0.0.1"
 					class="font-mono text-xs"
 				/>
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					TFTP server IP advertised to PXE netboot clients.
 				</p>
 			</div>
@@ -68,7 +68,7 @@
 					placeholder="ipxe.efi, pxelinux.0"
 					class="font-mono text-xs"
 				/>
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					Initial Network Bootstrap Program (NBP) file.
 				</p>
 			</div>
@@ -83,7 +83,7 @@
 					placeholder="tftp://[fd00::1]/ipxe.efi"
 					class="font-mono text-xs"
 				/>
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					DHCPv6 network bootloader URL.
 				</p>
 			</div>

@@ -6,22 +6,23 @@
 	import ListFilterIcon from "@lucide/svelte/icons/list-filter";
 	import HistoryIcon from "@lucide/svelte/icons/history";
 	import RadioIcon from "@lucide/svelte/icons/radio";
+	import XIcon from "@lucide/svelte/icons/x";
 	import { toast } from "svelte-sonner";
 	import { onMount, onDestroy } from "svelte";
 	import { page } from "$app/state";
-	import { dnsQueryLog, dnsLogSseUrl, dnsStats } from "$lib/api/client";
-	import type { DnsQueryLogEntry, DnsStatsResponse } from "$lib/api/types";
+	import { replaceState } from "$app/navigation";
+	import { dnsQueryLog, dnsLogSseUrl, openEventStream, type EventStream } from "$lib/api/client";
+	import type { DnsQueryLogEntry } from "$lib/api/types";
 	import PageHeader from "$lib/components/PageHeader.svelte";
+	import { createSequence } from "$lib/utils";
 
 	// Child components
-	import DnsLogStatsCards from "./components/DnsLogStatsCards.svelte";
 	import DnsLogTable from "./components/DnsLogTable.svelte";
 	import DnsLogLiveTail from "./components/DnsLogLiveTail.svelte";
 	import DnsLogDetailDialog from "./components/DnsLogDetailDialog.svelte";
 	import DnsRewriteDialog from "../rewrites/components/DnsRewriteDialog.svelte";
 
 	let activeTab = $state<"history" | "live">("history");
-	let stats = $state<DnsStatsResponse | null>(null);
 
 	// --- Tab 1: Query History State ---
 	let historyLoading = $state(true);
@@ -30,16 +31,21 @@
 	let searchQuery = $state("");
 	let selectedType = $state("");
 	let selectedResult = $state("");
+	/** Set from `?client=` (a device's MAC link); empty means all clients. */
+	let selectedClient = $state("");
+	/** Set from `?domain=` (a domain page link): prefills the search and shows a chip. */
+	let selectedDomain = $state("");
 	let limit = $state(50);
 	let offset = $state(0);
 	let searchDebounce: ReturnType<typeof setTimeout> | null = null;
 
 	// --- Tab 2: Live Stream State ---
 	let liveEntries = $state<DnsQueryLogEntry[]>([]);
+	let liveSeq = 0;
 	let isLivePaused = $state(false);
 	let isLiveConnected = $state(false);
 	let bufferLimit = $state(200);
-	let eventSource: EventSource | null = null;
+	let eventSource: EventStream | null = null;
 
 	// --- Shared Dialog States ---
 	let inspectRecord = $state<DnsQueryLogEntry | null>(null);
@@ -47,39 +53,45 @@
 	let rewriteDialogOpen = $state(false);
 	let rewritePrefill = $state<{ domain: string; answer: string } | null>(null);
 
-	async function loadDaemonStats() {
-		try {
-			const s = await dnsStats();
-			if (s) stats = s;
-		} catch {
-			// silent fallback
-		}
-	}
+	const historySeq = createSequence();
 
 	async function loadHistoricalLogs() {
+		const seq = historySeq.next();
 		historyLoading = true;
 		try {
-			await loadDaemonStats();
 			const res = await dnsQueryLog({
+				client: selectedClient || undefined,
 				domain: searchQuery.trim() || undefined,
 				qtype: selectedType || undefined,
 				result: selectedResult || undefined,
 				limit,
 				offset,
 			});
+			if (!historySeq.isCurrent(seq)) return;
 			if (res) {
 				historyEntries = res.entries;
 				historyTotal = res.total;
 			}
 		} catch {
+			if (!historySeq.isCurrent(seq)) return;
 			toast.error("Failed to load historical DNS query logs");
-		} finally {
-			historyLoading = false;
 		}
+		historyLoading = false;
+	}
+
+	function dropParam(name: string) {
+		const url = new URL(page.url);
+		url.searchParams.delete(name);
+		replaceState(url, page.state);
 	}
 
 	function handleSearchInput(q: string) {
 		searchQuery = q;
+		// Typing something else replaces the domain filter.
+		if (selectedDomain && q !== selectedDomain) {
+			selectedDomain = "";
+			dropParam("domain");
+		}
 		offset = 0;
 		if (searchDebounce) clearTimeout(searchDebounce);
 		searchDebounce = setTimeout(() => {
@@ -104,15 +116,43 @@
 		loadHistoricalLogs();
 	}
 
+	/** Filters both tabs by one client; the live stream restarts with the new filter. */
+	function clearClient() {
+		selectedClient = "";
+		// Drop the param too, so a reload or a shared link does not bring the filter back.
+		const url = new URL(page.url);
+		url.searchParams.delete("client");
+		replaceState(url, page.state);
+		offset = 0;
+		loadHistoricalLogs();
+		if (eventSource) {
+			liveEntries = [];
+			startLiveStream();
+		}
+	}
+
+	function clearDomain() {
+		selectedDomain = "";
+		searchQuery = "";
+		dropParam("domain");
+		offset = 0;
+		loadHistoricalLogs();
+	}
+
 	// --- Live SSE Stream Life-cycle ---
 	function startLiveStream() {
 		stopLiveStream();
 		try {
-			const url = dnsLogSseUrl();
-			eventSource = new EventSource(url);
-			isLiveConnected = true;
-
-			eventSource.onmessage = (event) => {
+			const url = dnsLogSseUrl({ client: selectedClient || undefined });
+			eventSource = openEventStream(url, {
+				onopen: () => {
+					isLiveConnected = true;
+				},
+				onerror: () => {
+					isLiveConnected = false;
+				},
+				onmessage: (event) => {
+				isLiveConnected = true;
 				if (isLivePaused) return;
 				try {
 					const parsed = JSON.parse(event.data);
@@ -148,6 +188,7 @@
 										? parsed.coalesce_id
 										: null,
 							repeats: typeof dnsEv.repeats === "number" ? dnsEv.repeats : 1,
+							_seq: ++liveSeq,
 						};
 
 						liveEntries = [newEntry, ...liveEntries.slice(0, bufferLimit - 1)];
@@ -155,11 +196,8 @@
 				} catch {
 					// Ignore invalid frame
 				}
-			};
-
-			eventSource.onerror = () => {
-				isLiveConnected = false;
-			};
+				},
+			});
 		} catch {
 			isLiveConnected = false;
 		}
@@ -193,6 +231,8 @@
 			if (!eventSource) {
 				startLiveStream();
 			}
+		} else {
+			stopLiveStream();
 		}
 	});
 
@@ -211,10 +251,14 @@
 		if (resultParam) {
 			selectedResult = resultParam;
 		}
+		selectedClient = page.url.searchParams.get("client") ?? "";
+		selectedDomain = page.url.searchParams.get("domain") ?? "";
+		if (selectedDomain) searchQuery = selectedDomain;
 		loadHistoricalLogs();
 	});
 
 	onDestroy(() => {
+		if (searchDebounce) clearTimeout(searchDebounce);
 		stopLiveStream();
 	});
 </script>
@@ -227,7 +271,7 @@
 	<!-- Top Action Bar -->
 	<PageHeader
 		title="DNS Query Log"
-		description="Network resolution telemetry, live packet stream, and client query audit trail."
+		description="Every DNS question your devices asked, newest first."
 		icon={ListFilterIcon}
 	>
 		{#snippet actions()}
@@ -252,19 +296,37 @@
 		{/snippet}
 	</PageHeader>
 
-	<!-- Top Metric Summary Cards -->
-	<DnsLogStatsCards
-		loading={historyLoading}
-		isLive={isLiveConnected && !isLivePaused}
-		entries={activeTab === "live" ? liveEntries : historyEntries}
-		total={historyTotal}
-		{stats}
-		{selectedResult}
-		onSelectResult={(res) => {
-			activeTab = "history";
-			handleResultSelect(res);
-		}}
-	/>
+	{#if selectedClient || selectedDomain}
+		<div class="flex flex-wrap gap-2">
+		{#if selectedClient}
+			<span class="inline-flex items-center gap-1.5 rounded-full bg-selected py-1 pr-1 pl-3 text-xs text-selected-foreground">
+				Client: <span class="font-mono">{selectedClient}</span>
+				<button
+					type="button"
+					class="inline-flex size-5 items-center justify-center rounded-full hover:bg-muted"
+					aria-label="Clear client filter"
+					onclick={clearClient}
+				>
+					<XIcon class="size-3" />
+				</button>
+			</span>
+		{/if}
+		{#if selectedDomain}
+			<span class="inline-flex items-center gap-1.5 rounded-full bg-selected py-1 pr-1 pl-3 text-xs text-selected-foreground">
+				Domain: <span class="font-mono">{selectedDomain}</span>
+				<button
+					type="button"
+					class="inline-flex size-5 items-center justify-center rounded-full hover:bg-muted"
+					aria-label="Clear domain filter"
+					onclick={clearDomain}
+				>
+					<XIcon class="size-3" />
+				</button>
+			</span>
+		{/if}
+		</div>
+	{/if}
+
 
 	<!-- Tabbed Rules View (Consistent with Adblock rules & SQM tabs style) -->
 	<Tabs.Root bind:value={activeTab} class="space-y-4">
@@ -275,7 +337,7 @@
 						<HistoryIcon class="size-3.5 text-primary" />
 						<span>Query History</span>
 						{#if historyTotal > 0}
-							<Badge variant="secondary" class="ml-1 px-1.5 py-0 text-[10px] font-mono">
+							<Badge variant="secondary" class="ml-1 px-1.5 py-0 text-xs font-mono">
 								{historyTotal.toLocaleString()}
 							</Badge>
 						{/if}
@@ -284,12 +346,12 @@
 					<Tabs.Trigger value="live" class="gap-1.5 text-xs shrink-0">
 						<RadioIcon
 							class="size-3.5 {isLiveConnected && !isLivePaused
-								? 'text-emerald-500 animate-pulse'
+								? 'text-success'
 								: 'text-muted-foreground'}"
 						/>
 						<span>Live Stream</span>
 						{#if liveEntries.length > 0}
-							<Badge variant="secondary" class="ml-1 px-1.5 py-0 text-[10px] font-mono">
+							<Badge variant="secondary" class="ml-1 px-1.5 py-0 text-xs font-mono">
 								{liveEntries.length}
 							</Badge>
 						{/if}

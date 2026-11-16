@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { auth } from "$lib/stores/auth.svelte";
+import { formatSubnet, errorMessage } from "$lib/utils";
 	import { Button } from "$lib/components/ui/button";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import * as Field from "$lib/components/ui/field";
@@ -42,16 +43,9 @@
 	import DnsTuningModal from "./components/DnsTuningModal.svelte";
 	import SlidersIcon from "@lucide/svelte/icons/sliders";
 	import GlobeIcon from "@lucide/svelte/icons/globe";
-	import DatabaseIcon from "@lucide/svelte/icons/database";
-	import BookmarkIcon from "@lucide/svelte/icons/bookmark";
-	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import NavTabs from "$lib/components/NavTabs.svelte";
+	import { dnsTabs } from "../tabs";
 	import PageHeader from "$lib/components/PageHeader.svelte";
-
-	const dnsTabs: NavTabItem[] = [
-		{ label: "Resolver & Analytics", href: "/dns/resolver", icon: GlobeIcon },
-		{ label: "Cache Inspection", href: "/dns/cache", icon: DatabaseIcon },
-		{ label: "Custom Rewrites", href: "/dns/rewrites", icon: BookmarkIcon },
-	];
 
 	let statsData = $state<DnsStatsResponse | null>(null);
 	let analyticsData = $state<DnsAnalyticsResponse | null>(null);
@@ -96,9 +90,9 @@
 			} else {
 				toast.error(res.error || "Upstream test failed");
 			}
-		} catch (err: any) {
-			upstreamTestResult = { ok: false, latency_ms: 0, error: err?.message || "Failed to contact upstream" };
-			toast.error(err?.message || "Failed to reach upstream");
+		} catch (err) {
+			upstreamTestResult = { ok: false, latency_ms: 0, error: errorMessage(err, "Failed to contact upstream") };
+			toast.error(errorMessage(err, "Failed to reach upstream"));
 		} finally {
 			testingUpstream = false;
 		}
@@ -119,12 +113,15 @@
 				dnsAnalytics(10),
 			]);
 
+			// A failed call keeps the last good data for its card.
 			if (sRes.status === "fulfilled") statsData = sRes.value;
+			else toast.error("Failed to load DNS statistics");
 			if (uRes.status === "fulfilled") upstreams = uRes.value;
+			else toast.error("Failed to load upstream DNS servers");
 			if (rRes.status === "fulfilled") reverseResolvers = rRes.value;
+			else toast.error("Failed to load PTR resolvers");
 			if (aRes.status === "fulfilled") analyticsData = aRes.value;
-		} catch (err: any) {
-			toast.error("Failed to load DNS resolver data");
+			else toast.error("Failed to load DNS analytics");
 		} finally {
 			loading = false;
 		}
@@ -145,9 +142,9 @@
 			formUpstreamDomain = "";
 			upstreamOpen = false;
 			await loadAllData();
-		} catch (err: any) {
+		} catch (err) {
 			toast.error(
-				`Failed to add upstream: ${err.message || "Invalid address"}`,
+				`Failed to add upstream: ${errorMessage(err, "Invalid address")}`,
 			);
 		} finally {
 			upstreamSubmitting = false;
@@ -156,9 +153,6 @@
 
 	function getUpstreamAddrStr(u: DnsUpstreamEntry): string {
 		if (typeof u.addr === "string") return u.addr;
-		if (u.addr && typeof u.addr === "object" && (u.addr as any).addr) {
-			return (u.addr as any).addr;
-		}
 		if (typeof u.target === "string") return u.target;
 		if (typeof u.url === "string") return u.url;
 		return String(u.target ?? u.addr ?? u.url ?? "");
@@ -194,25 +188,13 @@
 			formResolverUri = "";
 			reverseOpen = false;
 			await loadAllData();
-		} catch (err: any) {
+		} catch (err) {
 			toast.error(
-				`Failed to add PTR resolver: ${err.message || "Invalid CIDR/URI"}`,
+				`Failed to add PTR resolver: ${errorMessage(err, "Invalid CIDR/URI")}`,
 			);
 		} finally {
 			reverseSubmitting = false;
 		}
-	}
-
-	function formatSubnet(subnet: any): string {
-		if (typeof subnet === "string") return subnet;
-		if (subnet && typeof subnet === "object") {
-			if (subnet.net && subnet.prefix !== undefined) {
-				return `${subnet.net}/${subnet.prefix}`;
-			}
-			if (subnet.cidr) return subnet.cidr;
-			if (subnet.ip && subnet.mask) return `${subnet.ip}/${subnet.mask}`;
-		}
-		return String(subnet ?? "");
 	}
 
 	async function handleRemoveReverse(item: ReverseResolverEntry) {
@@ -241,8 +223,8 @@
 	<div class="flex flex-col gap-6">
 		<!-- Page Header -->
 		<PageHeader
-			title="DNS Resolver & Analytics"
-			description="Recursive DNS resolver, query cache, and upstream forwarders"
+			title="DNS Resolver"
+			description="How the router answers DNS: upstream servers, cache and the most asked names."
 			icon={GlobeIcon}
 		>
 			{#snippet actions()}
@@ -251,9 +233,9 @@
 					variant="outline"
 					size="sm"
 					onclick={() => (tuningOpen = true)}
-					class="text-xs gap-1.5 h-8 border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300 hover:bg-sky-500/20 transition-colors font-medium shadow-xs"
+					class="text-xs gap-1.5 h-8 border-border bg-muted text-muted-foreground hover:bg-muted transition-colors font-medium"
 				>
-					<SlidersIcon class="size-3.5 text-sky-600 dark:text-sky-400" />
+					<SlidersIcon class="size-3.5 text-muted-foreground" />
 					<span>Tuning & Cache</span>
 				</Button>
 				{/if}
@@ -280,10 +262,10 @@
 		<!-- 1. Top Summary Metric Cards -->
 		<DnsResolverTopCards {loading} {statsData} {analyticsData} {upstreams} />
 
-		<!-- 2. Time-Series Activity Chart & Query Types Breakdown (Pi-hole Style) -->
+		<!-- 2. Time-Series Activity Chart & Query Types Breakdown  -->
 		<div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
 			<div class="lg:col-span-2">
-				<DnsResolverActivityChart {loading} {analyticsData} {statsData} />
+				<DnsResolverActivityChart {loading} {analyticsData} />
 			</div>
 			<div class="lg:col-span-1">
 				<DnsQueryTypesCard {loading} {analyticsData} />
@@ -333,7 +315,7 @@
 	<Dialog.Content class="sm:max-w-md">
 		<Dialog.Header>
 			<Dialog.Title class="flex items-center gap-2">
-				<PlusIcon class="size-5 text-indigo-400" />
+				<PlusIcon class="size-5 text-muted-foreground" />
 				<span>Add Upstream DNS Server</span>
 			</Dialog.Title>
 		</Dialog.Header>
@@ -391,13 +373,13 @@
 
 				{#if upstreamTestResult}
 					{#if upstreamTestResult.ok}
-						<div class="flex items-center gap-2 p-2 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs">
-							<CheckCircle2Icon class="size-4 shrink-0 text-emerald-500" />
+						<div class="flex items-center gap-2 p-2 rounded-md bg-success/10 border border-success/20 text-success text-xs">
+							<CheckCircle2Icon class="size-4 shrink-0 text-success" />
 							<span>Validated reachable: responds in <strong class="font-mono">{upstreamTestResult.latency_ms} ms</strong></span>
 						</div>
 					{:else}
-						<div class="flex items-center gap-2 p-2 rounded-md bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 text-xs">
-							<AlertCircleIcon class="size-4 shrink-0 text-rose-500" />
+						<div class="flex items-center gap-2 p-2 rounded-md bg-danger/10 border border-danger/20 text-danger text-xs">
+							<AlertCircleIcon class="size-4 shrink-0 text-danger" />
 							<span>{upstreamTestResult.error || "Upstream server unreachable or timed out."}</span>
 						</div>
 					{/if}
@@ -418,7 +400,7 @@
 							></span>
 							<span>Testing...</span>
 						{:else}
-							<ZapIcon class="size-3.5 text-amber-500" />
+							<ZapIcon class="size-3.5 text-warning" />
 							<span>Test Upstream</span>
 						{/if}
 					</Button>
@@ -456,7 +438,7 @@
 	<Dialog.Content class="sm:max-w-md">
 		<Dialog.Header>
 			<Dialog.Title class="flex items-center gap-2">
-				<PlusIcon class="size-5 text-purple-400" />
+				<PlusIcon class="size-5 text-muted-foreground" />
 				<span>Add Reverse PTR Resolver</span>
 			</Dialog.Title>
 		</Dialog.Header>

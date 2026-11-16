@@ -28,7 +28,7 @@ impl DbArgs {
             return printer.print_json(&resp);
         }
 
-        printer.success(&format!("Database {action_desc}: {}", resp.message));
+        printer.success_detail(&format!("Database {action_desc}"), &resp.message);
         Ok(())
     }
 }

@@ -87,16 +87,32 @@ export interface UserInfo {
 	created_at: number;
 	updated_at: number;
 	last_login: number | null;
-	/** Only from `/auth/me`: what the server grants this session. */
-	permissions?: Permission[];
 }
 
+/** `/auth/me`: the caller and what the server grants this session (role for a password session,
+ * scopes for an API token). */
+export interface SessionUser {
+	username: string;
+	role: UserRole;
+	scopes: string[];
+	permissions: Permission[];
+}
+
+/** A key as `/auth/tokens` lists it (`AuthTokenEntry`). */
 export interface AuthToken {
-	id: number | string;
-	token?: string; // present only on generate
+	id: number;
 	name: string;
 	created_at: number;
 	last_used: number | null;
+	scopes: string[];
+	expires_at: number | null;
+}
+
+/** A key just generated or renewed (`AuthTokenResponse`): carries the secret once. */
+export interface GeneratedToken {
+	id: number;
+	token: string;
+	name: string;
 	scopes: string[];
 	expires_at: number | null;
 }
@@ -126,10 +142,8 @@ export interface DbStatus {
 }
 
 export interface ResourceUsage {
-	memory_rss_bytes?: number;
-	memory_vms_bytes?: number;
-	rss_bytes?: number;
-	vms_bytes?: number;
+	memory_rss_bytes: number;
+	memory_vms_bytes: number;
 }
 
 export interface TransportSnapshot {
@@ -209,6 +223,16 @@ export interface StatusResponse {
 	capabilities?: CapabilitiesInfo | ServerCapabilities;
 	server_caps: ServerCapabilities;
 	service_banners?: ServiceBanner[];
+	devices?: DevicesStats;
+}
+
+/** Device counts from the status call (lanforge-api `DevicesStats`). */
+export interface DevicesStats {
+	total: number;
+	online: number;
+	static_toml: number;
+	managed_cli: number;
+	dynamic: number;
 }
 
 export function normalizeServices(status?: StatusResponse | null): ServiceBanner[] {
@@ -599,7 +623,8 @@ export function formatEventPayload(
 
 export interface LeaseInfo {
 	ip: string;
-	expires: string;
+	/** Unix seconds; 0 = does not expire (a reservation, or an address only seen on the network). */
+	expires: number;
 	reserved: boolean;
 }
 
@@ -630,10 +655,80 @@ export interface DeviceEntry {
 	linked_addresses?: string[];
 }
 
+/** One hour of a device's DNS activity. */
+export interface DeviceDnsBucket {
+	timestamp: number;
+	total: number;
+	blocked: number;
+}
+
+/** A device's DNS activity over the last day, all its addresses (linked ones included) together. */
+export interface DeviceDnsResponse {
+	since: number;
+	bucket_secs: number;
+	total: number;
+	blocked: number;
+	rate: DeviceDnsBucket[];
+	top_domains: TopDomainEntry[];
+	top_blocked_domains: TopDomainEntry[];
+	/** The device's queries are not logged, so there is nothing to count. */
+	logging_off: boolean;
+}
+
+/** One client that asked for a domain over the last day. */
+export interface DnsDomainClient {
+	/** The device's MAC when known. */
+	mac: string | null;
+	name: string | null;
+	/** Busiest first. */
+	addresses: string[];
+	total: number;
+	blocked: number;
+	/** Unix seconds. */
+	last_seen: number;
+}
+
+/** One domain's DNS activity over the last day (`/dns/domains/{domain}`). */
+export interface DnsDomainResponse {
+	/** Normalized: lowercase, no trailing dot. */
+	domain: string;
+	since: number;
+	bucket_secs: number;
+	total: number;
+	blocked: number;
+	/** Unix seconds. */
+	last_seen: number | null;
+	rate: DeviceDnsBucket[];
+	/** Busiest first, at most 25. */
+	clients: DnsDomainClient[];
+}
+
+/** A port forward that reaches a device, as the daemon resolves it. */
+export interface DevicePortForward {
+	/** Position in the firewall's `port_forwards`. */
+	index: number;
+	rule: PortForwardRule;
+	/** Targets the device by `dev:` reference, not a fixed address. */
+	by_device: boolean;
+}
+
+/** What the daemon resolves to one device (`/devices/{mac}/rules`). */
+export interface DeviceRulesResponse {
+	/** Where IPv4 forwards land now: the lease or reservation. */
+	forward_v4: string | null;
+	/** Where IPv6 pinholes land now: only predictable GUAs (DHCPv6 lease, reserved suffix). */
+	forward_v6: string[];
+	port_forwards: DevicePortForward[];
+	rewrites: RewriteRule[];
+	/** Names `dev:` rules bound to this device (lowercase). */
+	bound_names: string[];
+	/** A name the device announced but another device holds. */
+	refused_name: { name: string; owner: string } | null;
+}
+
 export interface DevicesMeta {
 	total: number;
 	online: number;
-	last_scan_secs_ago: number;
 }
 
 export interface DevicesResponse {
@@ -643,18 +738,6 @@ export interface DevicesResponse {
 
 export interface WhoisResponse {
 	entry: DeviceEntry;
-}
-
-export interface TransientHostEntry {
-	ip: string;
-	hostname: string;
-	origin: string;
-	resolved_at: number;
-	last_seen: number;
-}
-
-export interface TransientHostsResponse {
-	hosts: TransientHostEntry[];
 }
 
 export interface HostConfigEntry {
@@ -684,6 +767,8 @@ export interface LeaseEntry {
 	kind: LeaseKind;
 	expires: number;
 	remaining_secs: number;
+	/** IA_NA/IA_PD identifier; null for DHCPv4. */
+	iaid?: number | null;
 }
 
 export type DhcpLease = LeaseEntry;
@@ -828,6 +913,8 @@ export interface TopClientEntry {
 	blocked_count?: number;
 	/** Every address counted in this row: one device's LAN and linked addresses. */
 	addresses?: string[];
+	/** The device's MAC when the row is a known device. */
+	mac?: string | null;
 }
 
 export interface QueryTypeEntry {
@@ -892,6 +979,8 @@ export interface DnsQueryLogEntry {
 	repeats: number;
 	/** The upstream that answered, as configured (`tls://dns.google`); null when none was asked. */
 	upstream?: string | null;
+	/** UI only, never sent by the API: arrival order of a live entry, used as its list key. */
+	_seq?: number;
 }
 
 export interface DnsUpstreamEntry {
@@ -916,8 +1005,8 @@ export interface DnsUpstreamsResponse {
 
 export interface ReverseResolverEntry {
 	subnet: string | { addr: string; prefix_len: number };
-	resolver?: string | { addr?: string; protocol?: string };
-	resolver_uri?: string;
+	/** The upstream as its URI (`UpstreamTarget` serializes to a string). */
+	resolver: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1333,7 +1422,7 @@ export interface PppoeStatusResponse {
 // ---------------------------------------------------------------------------
 
 export type RouterPriority = 'low' | 'medium' | 'high';
-export type PrefixSource = 'static' | 'ula' | 'auto_gua';
+export type PrefixSource = 'static' | 'ula' | 'auto_ula' | 'auto_gua';
 
 export interface RaPrefix {
 	source: PrefixSource;

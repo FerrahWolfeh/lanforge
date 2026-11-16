@@ -1,9 +1,11 @@
 //! Storage data types for persistence, analytics, and telemetry.
 
+use crate::identifiers::MacAddr;
 use crate::network::dns::{QueryLogEntry, QueryResult};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::net::IpAddr;
 
 /// Detailed bucket metrics for DNS query activity.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -67,6 +69,42 @@ impl DnsQueryRateBucket {
             map.insert(key.to_owned(), n);
         }
     }
+}
+
+/// One client's DNS activity over a window of the query log.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DnsClientActivity {
+    pub total: u64,
+    pub blocked: u64,
+    /// `(bucket start, queries, blocked)` for every bucket of the window, oldest first.
+    pub rate: Vec<(u64, u64, u64)>,
+    /// Answered (not blocked) domains, busiest first.
+    pub top_domains: Vec<(String, u64)>,
+    /// Blocked domains, busiest first.
+    pub top_blocked_domains: Vec<(String, u64)>,
+}
+
+/// One domain's DNS activity over a window of the query log.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DnsDomainActivity {
+    pub total: u64,
+    pub blocked: u64,
+    /// Unix seconds of the latest query, `None` when the window has none.
+    pub last_seen: Option<u64>,
+    /// `(bucket start, queries, blocked)` for every bucket of the window, oldest first.
+    pub rate: Vec<(u64, u64, u64)>,
+    /// One row per `(source address, source MAC)` pair that asked for the domain.
+    pub clients: Vec<DnsDomainClientCount>,
+}
+
+/// What one `(source address, source MAC)` pair asked of a domain.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DnsDomainClientCount {
+    pub ip: IpAddr,
+    pub mac: Option<MacAddr>,
+    pub total: u64,
+    pub blocked: u64,
+    pub last_seen: u64,
 }
 
 /// Consolidated DNS analytics snapshot returned by the storage layer.

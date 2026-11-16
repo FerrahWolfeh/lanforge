@@ -33,15 +33,15 @@
 	<div class="flex items-center gap-3 min-w-0">
 		{#if Icon}
 			<div
-				class="flex size-10 shrink-0 items-center justify-center rounded-xl border border-primary/20 bg-primary/10 text-primary shadow-xs"
+				class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-selected text-selected-foreground"
 			>
-				<Icon class="size-5" />
+				<Icon class="size-[18px]" />
 			</div>
 		{/if}
 
 		<div class="flex flex-col min-w-0">
 			<div class="flex items-center gap-2 flex-wrap">
-				<h1 class="text-foreground text-xl sm:text-2xl font-bold tracking-tight truncate">
+				<h1 class="text-foreground text-xl font-semibold tracking-tight truncate">
 					{title}
 				</h1>
 
@@ -51,7 +51,7 @@
 					>
 						<StatusDot state={status.state} size="sm" />
 						{#if status.label}
-							<span class="text-[11px] font-medium">{status.label}</span>
+							<span class="text-xs font-medium">{status.label}</span>
 						{/if}
 					</div>
 				{/if}
@@ -62,7 +62,7 @@
 			</div>
 
 			{#if description}
-				<p class="text-muted-foreground text-xs sm:text-sm mt-0.5 leading-normal">
+				<p class="text-muted-foreground text-sm mt-0.5 leading-normal">
 					{description}
 				</p>
 			{/if}

@@ -1879,10 +1879,10 @@ async fn add_adblock_block(
     if printer.json {
         return printer.print_json(&resp);
     }
-    printer.success(&format!(
-        "Domain '{domain}' added to the blocklist{at}: {}",
-        resp.message
-    ));
+    printer.success_detail(
+        &format!("Domain '{domain}' added to the blocklist{at}"),
+        &resp.message,
+    );
     Ok(())
 }
 
@@ -1902,10 +1902,10 @@ async fn add_adblock_allow(
     if printer.json {
         return printer.print_json(&resp);
     }
-    printer.success(&format!(
-        "Domain '{domain}' added to the allowlist{at}: {}",
-        resp.message
-    ));
+    printer.success_detail(
+        &format!("Domain '{domain}' added to the allowlist{at}"),
+        &resp.message,
+    );
     Ok(())
 }
 

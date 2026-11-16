@@ -29,6 +29,67 @@ export function formatUptime(secs: number | null | undefined): string {
 }
 
 /**
+ * An epoch timestamp in milliseconds, whether the daemon sent seconds or milliseconds.
+ */
+export function toMillis(ts: number): number {
+	return ts < 1e11 ? ts * 1000 : ts;
+}
+
+/**
+ * Formats an epoch timestamp as a short date and time (e.g. "Nov 16, 2026, 09:30"), "—" when unset.
+ */
+export function formatDateTime(ts: number | null | undefined): string {
+	if (!ts) return "—";
+	return new Date(toMillis(ts)).toLocaleDateString(undefined, {
+		year: "numeric",
+		month: "short",
+		day: "2-digit",
+		hour: "2-digit",
+		minute: "2-digit"
+	});
+}
+
+/**
+ * Formats an epoch timestamp as a 24-hour clock time with seconds (optionally with milliseconds), "—" when unset.
+ */
+export function formatClockTime(ts: number | null | undefined, millis = false): string {
+	if (!ts) return "—";
+	return new Date(toMillis(ts)).toLocaleTimeString(undefined, {
+		hour12: false,
+		hour: "2-digit",
+		minute: "2-digit",
+		second: "2-digit",
+		fractionalSecondDigits: millis ? 3 : undefined
+	});
+}
+
+/**
+ * Formats an epoch timestamp as a numeric 24-hour date and time with seconds (optionally with milliseconds), "—" when unset.
+ */
+export function formatFullDate(ts: number | null | undefined, millis = false): string {
+	if (!ts) return "—";
+	return new Date(toMillis(ts)).toLocaleString(undefined, {
+		year: "numeric",
+		month: "2-digit",
+		day: "2-digit",
+		hour: "2-digit",
+		minute: "2-digit",
+		second: "2-digit",
+		fractionalSecondDigits: millis ? 3 : undefined,
+		hour12: false
+	});
+}
+
+/**
+ * Formats a latency in microseconds (e.g. "0 ms", "850 µs", "12.3 ms").
+ */
+export function formatLatency(us: number): string {
+	if (us === 0) return "0 ms";
+	if (us < 1000) return `${us} µs`;
+	return `${(us / 1000).toFixed(1)} ms`;
+}
+
+/**
  * Formats an epoch timestamp or ISO date string into a relative elapsed time string
  * (e.g. "Just now", "45s ago", "12m ago", "3h ago", "2d ago").
  */
@@ -36,8 +97,7 @@ export function formatTimeAgo(ts: number | string | Date | null | undefined): st
 	if (!ts) return "—";
 	let ms: number;
 	if (typeof ts === "number") {
-		// Detect seconds vs milliseconds
-		ms = ts < 10_000_000_000 ? ts * 1000 : ts;
+		ms = toMillis(ts);
 	} else if (typeof ts === "string") {
 		ms = Date.parse(ts);
 	} else if (ts instanceof Date) {
@@ -61,7 +121,7 @@ export function formatTimeAgo(ts: number | string | Date | null | undefined): st
 }
 
 /**
- * Copies a string to the clipboard and shows an optional toast notification.
+ * Copies a string to the clipboard and toasts the outcome. Returns whether the copy succeeded.
  */
 export async function copyToClipboard(text: string, label?: string): Promise<boolean> {
 	if (!navigator?.clipboard) {
@@ -72,8 +132,8 @@ export async function copyToClipboard(text: string, label?: string): Promise<boo
 		await navigator.clipboard.writeText(text);
 		toast.success(label ? `Copied ${label}` : "Copied to clipboard");
 		return true;
-	} catch (err: any) {
-		toast.error(err?.message || "Failed to copy to clipboard");
+	} catch (err) {
+		toast.error(errorMessage(err, "Failed to copy to clipboard"));
 		return false;
 	}
 }
@@ -133,15 +193,17 @@ export function formatIpv6Prefix(ip?: string | null, prefixLen = 64): string {
 }
 
 /**
- * A lanforge build token (`0.40.0+74ea33b0e126.1793720666[.dirty]`) as
- * `v0.40.0 · 74ea33b0e126` (`· local changes` for a dirty build).
+ * A lanforge build token (`0.63.0+c40879dc27e8.1762160000.0.1.0[.dirty]`) as
+ * `v0.63.0 · web v0.1.0 · c40879dc27e8` (`· local changes` for a dirty build).
  */
 export function formatBuild(token: string | null | undefined): string {
 	if (!token) return "";
 	const [version, meta] = token.split("+", 2);
 	if (!meta) return `v${version}`;
-	const [hash, , dirty] = meta.split(".");
-	return `v${version} · ${hash}${dirty === "dirty" ? " · local changes" : ""}`;
+	const dirty = meta.endsWith(".dirty");
+	const [hash, , ...webui] = (dirty ? meta.slice(0, -".dirty".length) : meta).split(".");
+	const webPart = webui.length ? ` · web v${webui.join(".")}` : "";
+	return `v${version}${webPart} · ${hash}${dirty ? " · local changes" : ""}`;
 }
 
 /**
@@ -157,4 +219,24 @@ export function adblockClientNames(devices: { mac: string; name: string }[]): st
 /** The MAC addresses behind an adblock client selector, for a tooltip. */
 export function adblockClientMacs(devices: { mac: string; name: string }[]): string {
 	return devices.map((d) => `${d.name}: ${d.mac}`).join("\n");
+}
+
+/**
+ * A reverse-resolver subnet (`{ addr, prefix_len }`, as the daemon sends it) as CIDR text.
+ * A string is already CIDR and passes through.
+ */
+export function formatSubnet(subnet: string | { addr: string; prefix_len: number }): string {
+	return typeof subnet === "string" ? subnet : `${subnet.addr}/${subnet.prefix_len}`;
+}
+
+/**
+ * The message of a thrown value (ApiError, Error, string), or `fallback`.
+ */
+export function errorMessage(err: unknown, fallback: string): string {
+	if (typeof err === "string") return err !== "" ? err : fallback;
+	if (typeof err === "object" && err !== null) {
+		const message = (err as { message?: unknown }).message;
+		if (typeof message === "string" && message !== "") return message;
+	}
+	return fallback;
 }

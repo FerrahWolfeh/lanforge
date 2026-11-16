@@ -93,7 +93,7 @@
 					required
 					rows={10}
 					spellcheck="false"
-					class="w-full rounded-md border border-input bg-transparent px-3 py-2 text-xs font-mono shadow-xs focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+					class="w-full rounded-md border border-input bg-transparent px-3 py-2 text-xs font-mono focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
 				></textarea>
 			</div>
 
@@ -101,7 +101,7 @@
 				<div class="flex flex-col gap-1.5 rounded-md border border-border/60 bg-muted/30 p-3 text-xs">
 					<p class="font-medium">{summary(report)}</p>
 					{#if report.rejected.length > 0}
-						<ul class="max-h-40 overflow-y-auto font-mono text-[11px] text-muted-foreground">
+						<ul class="max-h-40 overflow-y-auto font-mono text-xs text-muted-foreground">
 							{#each report.rejected as r (r.line)}
 								<li class="truncate" title={r.reason}>
 									<span class="text-destructive">line {r.line}:</span>

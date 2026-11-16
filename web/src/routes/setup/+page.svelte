@@ -8,6 +8,7 @@
 	import { onMount } from "svelte";
 	import { toast } from "svelte-sonner";
 	import { markSetupCompleted } from "$lib/stores/setup.svelte";
+	import { ipv4Schema, ipv6Schema, passwordError } from "$lib/utils/validation";
 
 	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 	import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
@@ -148,12 +149,13 @@
 
 	function handleNextStep1() {
 		errorMsg = "";
-		if (admin_password.length < 8) {
-			errorMsg = "Password must be at least 8 characters long.";
+		if (!admin_username.trim()) {
+			errorMsg = "Admin username cannot be empty.";
 			return;
 		}
-		if (admin_password !== confirm_password) {
-			errorMsg = "Passwords do not match.";
+		const passwordProblem = passwordError(admin_password, confirm_password);
+		if (passwordProblem) {
+			errorMsg = passwordProblem;
 			return;
 		}
 		step = 2;
@@ -166,8 +168,17 @@
 				errorMsg = "Please select a WAN interface.";
 				return;
 			}
+			if (wan_iface === lan_iface) {
+				errorMsg = "The WAN interface cannot be the same as the LAN interface.";
+				return;
+			}
 			if (!pppoe_username.trim()) {
 				errorMsg = "PPPoE username cannot be empty.";
+				return;
+			}
+			const vlan = pppoe_vlan.trim();
+			if (vlan && (!/^\d+$/.test(vlan) || Number(vlan) < 1 || Number(vlan) > 4094)) {
+				errorMsg = "VLAN tag must be a whole number from 1 to 4094, or empty for none.";
 				return;
 			}
 		} else {
@@ -179,6 +190,37 @@
 		step = 3;
 	}
 
+	function ipv4ToInt(ip: string): number | null {
+		if (!ipv4Schema.safeParse(ip).success) return null;
+		return ip.trim().split(".").reduce((acc, part) => ((acc << 8) | Number(part)) >>> 0, 0);
+	}
+
+	// Checks that the LAN address, DHCP gateway and pool are valid and share one subnet.
+	function lanSubnetError(): string | null {
+		const ip = ipv4ToInt(lan_ip);
+		const mask = ipv4ToInt(subnet_mask);
+		if (ip === null) return "LAN IP is not a valid IPv4 address.";
+		if (mask === null) return "Subnet mask is not a valid IPv4 mask.";
+		if (!dhcp_enabled) return null;
+		const network = (ip & mask) >>> 0;
+		const fields: Array<[string, string]> = [
+			["DHCP pool start", dhcp_pool_start],
+			["DHCP pool end", dhcp_pool_end],
+		];
+		if (dhcp_router.trim()) fields.push(["DHCP gateway", dhcp_router]);
+		const values: Record<string, number> = {};
+		for (const [label, value] of fields) {
+			const n = ipv4ToInt(value);
+			if (n === null) return `${label} is not a valid IPv4 address.`;
+			if (((n & mask) >>> 0) !== network) return `${label} is outside the LAN subnet.`;
+			values[label] = n;
+		}
+		if (values["DHCP pool start"] > values["DHCP pool end"]) {
+			return "DHCP pool start must not be after the pool end.";
+		}
+		return null;
+	}
+
 	function handleNextStep3() {
 		errorMsg = "";
 		if (!lan_iface) {
@@ -188,6 +230,31 @@
 		if (!lan_ip.trim()) {
 			errorMsg = "LAN IP cannot be empty.";
 			return;
+		}
+		if (wan_mode === "pppoe" && wan_iface === lan_iface) {
+			errorMsg = "The LAN interface cannot be the same as the PPPoE WAN interface.";
+			return;
+		}
+		const subnetError = lanSubnetError();
+		if (subnetError) {
+			errorMsg = subnetError;
+			return;
+		}
+		if (ra_enabled && ra_custom_ula && !ra_ula_prefix.trim()) {
+			errorMsg = "Enter the custom ULA prefix, or turn the custom ULA option off.";
+			return;
+		}
+		if (dns_preset === "custom") {
+			const servers = getUpstreamDnsList();
+			if (servers.length === 0) {
+				errorMsg = "Enter at least one custom DNS server, or pick a preset.";
+				return;
+			}
+			const bad = servers.find((s) => !ipv4Schema.safeParse(s).success && !ipv6Schema.safeParse(s).success);
+			if (bad) {
+				errorMsg = `Invalid DNS server address: ${bad}`;
+				return;
+			}
 		}
 		step = 4;
 	}
@@ -224,7 +291,7 @@
 				interface: wan_iface,
 				username: pppoe_username,
 				password: pppoe_password,
-				vlan_id: pppoe_vlan ? Number.parseInt(pppoe_vlan, 10) : null,
+				vlan_id: pppoe_vlan.trim() ? Number(pppoe_vlan.trim()) : null,
 				mtu: pppoe_mtu || 1492,
 				nftables: {
 					flow_offload: firewall_flow_offload,
@@ -307,14 +374,14 @@
 <div class="relative flex min-h-screen w-full items-center justify-center bg-background p-4 sm:p-8">
 	<!-- Background glow / pattern -->
 	<div class="pointer-events-none absolute inset-0 overflow-hidden opacity-25">
-		<div class="absolute -top-[25%] -left-[10%] h-[500px] w-[500px] rounded-full bg-cyan-500/20 blur-[120px]"></div>
-		<div class="absolute -bottom-[20%] -right-[10%] h-[500px] w-[500px] rounded-full bg-blue-600/20 blur-[120px]"></div>
+		<div class="absolute -top-[25%] -left-[10%] h-[500px] w-[500px] rounded-full bg-primary/20 blur-[120px]"></div>
+		<div class="absolute -bottom-[20%] -right-[10%] h-[500px] w-[500px] rounded-full bg-primary/10 blur-[120px]"></div>
 	</div>
 
 	<div class="relative w-full max-w-2xl">
 		<!-- Header / Logo -->
 		<div class="mb-8 text-center">
-			<div class="inline-flex items-center gap-2 rounded-full border border-cyan-500/20 bg-cyan-500/10 px-3 py-1 text-xs font-medium text-cyan-400">
+			<div class="inline-flex items-center gap-2 rounded-full border border-border bg-muted px-3 py-1 text-xs font-medium text-muted-foreground">
 				<SparklesIcon class="h-3.5 w-3.5" />
 				First-Run Onboarding Wizard
 			</div>
@@ -324,8 +391,8 @@
 
 		{#if setupStatus && (!setupStatus.first_run || setupStatus.is_provisioned)}
 			<!-- Already Provisioned Locked Card -->
-			<Card.Root class="border-border/60 bg-card/80 backdrop-blur-sm shadow-xl text-center p-8">
-				<div class="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-400 mb-4">
+			<Card.Root class="border-border bg-card text-center p-8">
+				<div class="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-success/10 text-success mb-4">
 					<ShieldCheckIcon class="h-8 w-8" />
 				</div>
 				<h2 class="text-2xl font-bold text-foreground">Lanforge is Operational</h2>
@@ -346,40 +413,40 @@
 					<div class="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-all {step >= 1 ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}">
 						{#if step > 1}<CheckIcon class="h-4 w-4" />{:else}1{/if}
 					</div>
-					<span class="text-[11px] sm:text-xs font-medium {step >= 1 ? 'text-foreground' : 'text-muted-foreground'}">Admin</span>
+					<span class="text-xs sm:text-xs font-medium {step >= 1 ? 'text-foreground' : 'text-muted-foreground'}">Admin</span>
 				</div>
 				<div class="h-0.5 flex-1 mx-1.5 sm:mx-2 transition-all {step >= 2 ? 'bg-primary' : 'bg-muted'}"></div>
 				<div class="flex flex-col items-center gap-1">
 					<div class="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-all {step >= 2 ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}">
 						{#if step > 2}<CheckIcon class="h-4 w-4" />{:else}2{/if}
 					</div>
-					<span class="text-[11px] sm:text-xs font-medium {step >= 2 ? 'text-foreground' : 'text-muted-foreground'}">Uplink</span>
+					<span class="text-xs sm:text-xs font-medium {step >= 2 ? 'text-foreground' : 'text-muted-foreground'}">Uplink</span>
 				</div>
 				<div class="h-0.5 flex-1 mx-1.5 sm:mx-2 transition-all {step >= 3 ? 'bg-primary' : 'bg-muted'}"></div>
 				<div class="flex flex-col items-center gap-1">
 					<div class="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-all {step >= 3 ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}">
 						{#if step > 3}<CheckIcon class="h-4 w-4" />{:else}3{/if}
 					</div>
-					<span class="text-[11px] sm:text-xs font-medium {step >= 3 ? 'text-foreground' : 'text-muted-foreground'}">LAN</span>
+					<span class="text-xs sm:text-xs font-medium {step >= 3 ? 'text-foreground' : 'text-muted-foreground'}">LAN</span>
 				</div>
 				<div class="h-0.5 flex-1 mx-1.5 sm:mx-2 transition-all {step >= 4 ? 'bg-primary' : 'bg-muted'}"></div>
 				<div class="flex flex-col items-center gap-1">
 					<div class="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-all {step >= 4 ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}">
 						{#if step > 4}<CheckIcon class="h-4 w-4" />{:else}4{/if}
 					</div>
-					<span class="text-[11px] sm:text-xs font-medium {step >= 4 ? 'text-foreground' : 'text-muted-foreground'}">Firewall</span>
+					<span class="text-xs sm:text-xs font-medium {step >= 4 ? 'text-foreground' : 'text-muted-foreground'}">Firewall</span>
 				</div>
 				<div class="h-0.5 flex-1 mx-1.5 sm:mx-2 transition-all {step >= 5 ? 'bg-primary' : 'bg-muted'}"></div>
 				<div class="flex flex-col items-center gap-1">
 					<div class="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-all {step >= 5 ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}">
 						5
 					</div>
-					<span class="text-[11px] sm:text-xs font-medium {step >= 5 ? 'text-foreground' : 'text-muted-foreground'}">Launch</span>
+					<span class="text-xs sm:text-xs font-medium {step >= 5 ? 'text-foreground' : 'text-muted-foreground'}">Launch</span>
 				</div>
 			</div>
 
 			<!-- Card Content -->
-			<Card.Root class="border-border/60 bg-card/80 backdrop-blur-sm shadow-xl">
+			<Card.Root class="border-border bg-card">
 				{#if errorMsg}
 					<div class="m-6 mb-0 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
 						{errorMsg}

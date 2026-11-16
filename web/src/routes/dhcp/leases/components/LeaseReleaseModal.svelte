@@ -1,10 +1,12 @@
 <script lang="ts">
+import { errorMessage } from "$lib/utils";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import { Button } from "$lib/components/ui/button";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import { toast } from "svelte-sonner";
 	import { leaseRelease } from "$lib/api/client";
-	import type { LeaseEntry, LeaseTarget } from "$lib/api/types";
+	import type { LeaseEntry } from "$lib/api/types";
+	import { leaseTarget } from "../lease-target";
 
 	let {
 		open = $bindable(false),
@@ -22,13 +24,12 @@
 		if (!lease) return;
 		releasing = true;
 		try {
-			const target: LeaseTarget = lease.kind === "v4" ? "V4" : { V6: { iaid: 0 } };
-			await leaseRelease(lease.mac, target);
+			await leaseRelease(lease.mac, leaseTarget(lease));
 			toast.success(`Released DHCP lease for ${lease.address}`);
 			open = false;
 			await onReleased();
-		} catch (err: any) {
-			toast.error(err?.message || "Failed to release lease");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to release lease"));
 		} finally {
 			releasing = false;
 		}
@@ -38,7 +39,7 @@
 <Dialog.Root bind:open>
 	<Dialog.Content class="w-[95vw] sm:max-w-md">
 		<Dialog.Header>
-			<Dialog.Title class="flex items-center gap-2 text-rose-500">
+			<Dialog.Title class="flex items-center gap-2 text-danger">
 				<Trash2Icon class="size-5" />
 				<span>Confirm Lease Release</span>
 			</Dialog.Title>
@@ -55,7 +56,7 @@
 				</div>
 				<div class="flex justify-between">
 					<span class="text-muted-foreground font-sans">IP Address:</span>
-					<span class="text-emerald-400 font-medium">{lease.address}</span>
+					<span class="text-foreground font-medium">{lease.address}</span>
 				</div>
 				<div class="flex justify-between">
 					<span class="text-muted-foreground font-sans">MAC Address:</span>

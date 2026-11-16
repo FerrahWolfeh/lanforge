@@ -1,7 +1,7 @@
 <script lang="ts">
+	import { createTimers, errorMessage } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
-	import { onMount } from "svelte";
-	import { Badge } from "$lib/components/ui/badge";
+	import { onDestroy, onMount } from "svelte";
 	import { Button } from "$lib/components/ui/button";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import SaveIcon from "@lucide/svelte/icons/save";
@@ -44,6 +44,12 @@
 	let systemStatus = $state<StatusResponse | null>(null);
 	let tftpBanner = $state<ServiceBanner | null>(null);
 
+	function findTftpBanner(banners: ServiceBanner[]): ServiceBanner | null {
+		return (
+			banners.find((b) => b.id?.toLowerCase() === "tftp" || b.name.toLowerCase().includes("tftp")) ?? null
+		);
+	}
+
 	// TFTP Server form fields
 	let enabled = $state(false);
 	let listenAddr = $state("0.0.0.0:69");
@@ -65,11 +71,23 @@
 			enabled,
 			listen_addr: listenAddr.trim() || "0.0.0.0:69",
 			root_dir: rootDir.trim() || "/var/lib/lanforge/tftp",
-			block_size: Number(blockSize) || 512,
-			timeout: Number(timeoutSecs) || 5,
-			max_retries: Number(maxRetries) || 3,
+			block_size: Number(blockSize),
+			timeout: Number(timeoutSecs),
+			max_retries: Number(maxRetries),
 		};
 	}
+
+	function intIssue(value: number, min: number, max: number) {
+		const n = Number(value);
+		return Number.isInteger(n) && n >= min && n <= max ? null : `Enter a whole number from ${min} to ${max}`;
+	}
+
+	// RFC 2348 limits block size to 8..65464; timeout and retries follow the server limits.
+	const tftpIssues = $derived({
+		blockSize: intIssue(blockSize, 8, 65464),
+		timeoutSecs: intIssue(timeoutSecs, 1, 60),
+		maxRetries: intIssue(maxRetries, 1, 10),
+	});
 
 	function currentDhcpPxePayload() {
 		return {
@@ -95,6 +113,16 @@
 				serviceBanners(),
 			]);
 
+			if (optsRes.status === "rejected") {
+				toast.error(`Failed to load TFTP settings: ${errorMessage(optsRes.reason, "unknown error")}`);
+			}
+			if (sysRes.status === "rejected") {
+				toast.error(`Failed to load system status: ${errorMessage(sysRes.reason, "unknown error")}`);
+			}
+			if (bannersRes.status === "rejected") {
+				toast.error(`Failed to load service status: ${errorMessage(bannersRes.reason, "unknown error")}`);
+			}
+
 			if (optsRes.status === "fulfilled") {
 				fullOptions = optsRes.value;
 				const tftp = optsRes.value.tftp ?? {
@@ -109,9 +137,9 @@
 				enabled = tftp.enabled ?? false;
 				listenAddr = tftp.listen_addr || "0.0.0.0:69";
 				rootDir = tftp.root_dir || "/var/lib/lanforge/tftp";
-				blockSize = tftp.block_size || 512;
-				timeoutSecs = tftp.timeout || 5;
-				maxRetries = tftp.max_retries || 3;
+				blockSize = tftp.block_size ?? 512;
+				timeoutSecs = tftp.timeout ?? 5;
+				maxRetries = tftp.max_retries ?? 3;
 
 				dhcpV4TftpServer = optsRes.value.v4?.tftp_server || "";
 				dhcpV4BootFile = optsRes.value.v4?.boot_file || "";
@@ -126,10 +154,7 @@
 			}
 
 			if (bannersRes.status === "fulfilled") {
-				const list = bannersRes.value;
-				tftpBanner = list.find(
-					(b) => b.id?.toLowerCase() === "tftp" || b.name.toLowerCase().includes("tftp"),
-				) ?? null;
+				tftpBanner = findTftpBanner(bannersRes.value);
 			}
 		} catch (err: unknown) {
 			const msg = err instanceof Error ? err.message : "Failed to load TFTP data.";
@@ -159,22 +184,32 @@
 	}
 
 	async function saveAll() {
-		if (!fullOptions) return;
+		if (!fullOptions) {
+			toast.error("Settings have not loaded yet: refresh the page before saving");
+			return;
+		}
+		const issue = tftpIssues.blockSize ?? tftpIssues.timeoutSecs ?? tftpIssues.maxRetries;
+		if (issue) {
+			toast.error("Fix the highlighted TFTP transmission settings before saving");
+			return;
+		}
 		saving = true;
 		try {
+			// Merge into the current server state: DHCP options may have changed since page load.
+			const base = await dhcpOptionsGet();
 			const tftp = currentTftpPayload();
 			const dhcp = currentDhcpPxePayload();
 
 			const mergedPayload: DhcpOptionsConfig = {
-				...fullOptions,
+				...base,
 				tftp,
 				v4: {
-					...fullOptions.v4,
+					...base.v4,
 					tftp_server: dhcp.tftp_server,
 					boot_file: dhcp.v4_boot_file,
 				},
 				v6: {
-					...fullOptions.v6,
+					...base.v6,
 					boot_file: dhcp.v6_boot_file,
 				},
 			};
@@ -187,12 +222,9 @@
 			toast.success("TFTP and PXE server settings saved successfully");
 
 			// Refresh banners to sync state
-			setTimeout(async () => {
+			later(async () => {
 				try {
-					const banners = await serviceBanners();
-					tftpBanner = banners.find(
-						(b) => b.id?.toLowerCase() === "tftp" || b.name.toLowerCase().includes("tftp"),
-					) ?? null;
+					tftpBanner = findTftpBanner(await serviceBanners());
 				} catch {
 					// non-critical
 				}
@@ -204,6 +236,10 @@
 			saving = false;
 		}
 	}
+
+	// Pending banner refreshes, cleared on unmount.
+	const { later, clear: clearTimers } = createTimers();
+	onDestroy(clearTimers);
 
 	async function handleServiceControl(action: "Start" | "Stop" | "Restart") {
 		if (action === "Stop") {
@@ -218,12 +254,14 @@
 		try {
 			await controlService("tftp", action);
 			toast.success(`TFTP service received ${action.toLowerCase()} command`);
-			setTimeout(async () => {
-				const banners = await serviceBanners();
-				tftpBanner = banners.find(
-					(b) => b.id?.toLowerCase() === "tftp" || b.name.toLowerCase().includes("tftp"),
-				) ?? null;
-				serviceActionLoading = null;
+			later(async () => {
+				try {
+					tftpBanner = findTftpBanner(await serviceBanners());
+				} catch {
+					// non-critical
+				} finally {
+					serviceActionLoading = null;
+				}
 			}, 750);
 		} catch (err: unknown) {
 			serviceActionLoading = null;
@@ -249,14 +287,14 @@
 </script>
 
 <svelte:head>
-	<title>TFTP Server & Netboot — Lanforge</title>
+	<title>TFTP Server — Lanforge</title>
 </svelte:head>
 
 <div class="flex flex-col gap-6">
 	<!-- Page Header -->
 	<PageHeader
-		title="TFTP Server & Netboot"
-		description="TFTP file server for PXE network boot and operating system provisioning."
+		title="TFTP Server"
+		description="Serves boot files to devices that start from the network (PXE)."
 		icon={HardDriveDownloadIcon}
 	>
 		{#snippet badge()}
@@ -357,6 +395,7 @@
 			bind:blockSize
 			bind:timeoutSecs
 			bind:maxRetries
+			issues={tftpIssues}
 		/>
 
 		<TftpNetbootCard

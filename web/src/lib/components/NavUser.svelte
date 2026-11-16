@@ -1,7 +1,9 @@
 <script lang="ts">
+import { errorMessage } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import { sidebarState } from "$lib/stores/sidebar.svelte";
-	import { logout, changePassword } from "$lib/api/client";
+	import { changePassword } from "$lib/api/client";
+	import { passwordError } from "$lib/utils/validation";
 	import { goto } from "$app/navigation";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
@@ -31,12 +33,7 @@
 	const initials = $derived((user?.username ?? "AD").slice(0, 2).toUpperCase());
 
 	async function handleLogout() {
-		try {
-			await logout();
-		} catch {
-			// daemon may be unreachable
-		}
-		auth.clear();
+		await auth.signOut();
 		onNavigate?.();
 		goto("/login");
 	}
@@ -47,18 +44,23 @@
 	let confirmPassword = $state("");
 	let changingPassword = $state(false);
 
+	$effect(() => {
+		if (!isPasswdOpen) {
+			currentPassword = "";
+			newPassword = "";
+			confirmPassword = "";
+		}
+	});
+
 	async function handleChangePassword(e: SubmitEvent) {
 		e.preventDefault();
 		if (!currentPassword) {
 			toast.error("Please enter your current password");
 			return;
 		}
-		if (newPassword.length < 8) {
-			toast.error("New password must be at least 8 characters");
-			return;
-		}
-		if (newPassword !== confirmPassword) {
-			toast.error("New passwords do not match");
+		const problem = passwordError(newPassword, confirmPassword);
+		if (problem) {
+			toast.error(problem);
 			return;
 		}
 		changingPassword = true;
@@ -69,8 +71,8 @@
 			newPassword = "";
 			confirmPassword = "";
 			isPasswdOpen = false;
-		} catch (err: any) {
-			toast.error(err?.message || "Failed to change password");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to change password"));
 		} finally {
 			changingPassword = false;
 		}
@@ -79,7 +81,7 @@
 
 <DropdownMenu.Root>
 	<DropdownMenu.Trigger
-		class="flex items-center h-10 w-full rounded-xl text-left text-sm transition-[background-color,color] duration-150 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring overflow-hidden cursor-pointer"
+		class="flex items-center h-10 w-full rounded-md text-left text-sm transition-[background-color,color] duration-150 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring overflow-hidden cursor-pointer"
 		title={sidebarState.isCollapsed ? `${username} (${role})` : undefined}
 	>
 		<div class="size-10 shrink-0 flex items-center justify-center">
@@ -96,7 +98,7 @@
 				: 'opacity-100 max-w-[140px] translate-x-0'}"
 		>
 			<span class="truncate font-semibold tracking-tight text-foreground">{username}</span>
-			<span class="truncate text-[10px] text-muted-foreground uppercase font-mono">{role}</span>
+			<span class="truncate text-xs text-muted-foreground">{role}</span>
 		</div>
 
 		<div
@@ -108,7 +110,7 @@
 		</div>
 	</DropdownMenu.Trigger>
 
-	<DropdownMenu.Content class="w-56 rounded-xl shadow-lg border border-border/80" side="right" align="end" sideOffset={8}>
+	<DropdownMenu.Content class="w-56 rounded-md shadow-lg border border-border/80" side="right" align="end" sideOffset={8}>
 		<DropdownMenu.Label class="p-0 font-normal">
 			<div class="flex items-center gap-2 px-2.5 py-2 text-left text-sm">
 				<div
@@ -119,7 +121,7 @@
 				<div class="grid flex-1 text-left text-sm leading-tight">
 					<span class="truncate font-semibold text-foreground">{username}</span>
 					<div class="flex items-center gap-1.5 mt-0.5">
-						<Badge variant="secondary" class="text-[10px] px-1.5 py-0 font-mono">
+						<Badge variant="secondary" class="text-xs px-1.5 py-0 font-mono">
 							{role}
 						</Badge>
 					</div>

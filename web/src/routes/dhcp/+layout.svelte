@@ -21,7 +21,7 @@
 	<div class="flex flex-col gap-4 border-b pb-4">
 		<PageHeader
 			title="DHCP Server"
-			description="Dynamic IPv4 & IPv6 address allocation, pool scopes, and network boot parameters."
+			description="Hands out IPv4 and IPv6 addresses to devices on the LAN."
 			icon={ServerIcon}
 		/>
 

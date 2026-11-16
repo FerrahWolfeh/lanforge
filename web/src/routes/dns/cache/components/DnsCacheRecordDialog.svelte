@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { cleanAnswer } from "$lib/components/dns/dnsLog";
+	import { copyToClipboard, errorMessage } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import { Button } from "$lib/components/ui/button";
@@ -34,26 +36,12 @@
 		return raw.trim().replace(/\.$/, "");
 	}
 
-	function cleanData(raw: string): string {
-		if (!raw) return "—";
-		return raw
-			.replace(/^"|"$/g, "")
-			.replace(/^(A|AAAA|CNAME|PTR|NS)\((.*)\)$/, "$2")
-			.trim()
-			.replace(/\.$/, "");
-	}
-
-	async function copyToClipboard(text: string, field: string) {
-		try {
-			await navigator.clipboard.writeText(text);
-			copiedField = field;
-			toast.success(`Copied ${field} to clipboard`);
-			setTimeout(() => {
-				copiedField = null;
-			}, 2000);
-		} catch {
-			toast.error("Failed to copy");
-		}
+	async function copyItem(text: string, field: string) {
+		if (!(await copyToClipboard(text, field))) return;
+		copiedField = field;
+		setTimeout(() => {
+			copiedField = null;
+		}, 2000);
 	}
 
 	async function handleTestQuery() {
@@ -64,8 +52,8 @@
 			const res = await dnsQuery(cleanName(entry.name), entry.kind);
 			testQueryResult = JSON.stringify(res, null, 2);
 			toast.success("Query test executed successfully");
-		} catch (err: any) {
-			testQueryResult = `Error: ${err?.message ?? "Query failed"}`;
+		} catch (err) {
+			testQueryResult = `Error: ${errorMessage(err, "Query failed")}`;
 			toast.error("Query test failed");
 		} finally {
 			testingQuery = false;
@@ -80,8 +68,8 @@
 			toast.success(
 				`Added ${cleanName(entry.name)} to adblock black list`,
 			);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to block domain");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to block domain"));
 		} finally {
 			actionLoading = false;
 		}
@@ -93,8 +81,8 @@
 		try {
 			await dnsAllow(cleanName(entry.name));
 			toast.success(`Added ${cleanName(entry.name)} to allowlist`);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to allow domain");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to allow domain"));
 		} finally {
 			actionLoading = false;
 		}
@@ -103,7 +91,7 @@
 	function handleCreateRewrite() {
 		if (!entry) return;
 		const domain = cleanName(entry.name);
-		const target = cleanData(entry.data);
+		const target = cleanAnswer(entry.data);
 		onAddRewrite(
 			domain,
 			target !== "no-data" && target !== "wire-error" ? target : "",
@@ -112,7 +100,7 @@
 	}
 
 	const formattedName = $derived(entry ? cleanName(entry.name) : "");
-	const formattedData = $derived(entry ? cleanData(entry.data) : "");
+	const formattedData = $derived(entry ? cleanAnswer(entry.data) : "");
 </script>
 
 <Dialog.Root bind:open>
@@ -143,7 +131,7 @@
 					<!-- Domain -->
 					<div>
 						<span
-							class="text-xs text-muted-foreground font-medium uppercase tracking-wider"
+							class="text-xs text-muted-foreground font-medium"
 						>
 							Domain Name
 						</span>
@@ -158,14 +146,14 @@
 								size="icon"
 								class="h-6 w-6 shrink-0"
 								onclick={() =>
-									copyToClipboard(
+									copyItem(
 										formattedName,
 										"Domain Name",
 									)}
 							>
 								{#if copiedField === "Domain Name"}
 									<CheckIcon
-										class="h-3 w-3 text-emerald-500"
+										class="h-3 w-3 text-success"
 									/>
 								{:else}
 									<CopyIcon
@@ -179,7 +167,7 @@
 					<!-- Resolved Value -->
 					<div>
 						<span
-							class="text-xs text-muted-foreground font-medium uppercase tracking-wider"
+							class="text-xs text-muted-foreground font-medium"
 						>
 							Resolved Target / Answer
 						</span>
@@ -194,14 +182,14 @@
 								size="icon"
 								class="h-6 w-6 shrink-0"
 								onclick={() =>
-									copyToClipboard(
+									copyItem(
 										formattedData,
 										"Answer Data",
 									)}
 							>
 								{#if copiedField === "Answer Data"}
 									<CheckIcon
-										class="h-3 w-3 text-emerald-500"
+										class="h-3 w-3 text-success"
 									/>
 								{:else}
 									<CopyIcon
@@ -231,7 +219,7 @@
 				<!-- Quick Action Toolbar -->
 				<div>
 					<span
-						class="text-xs font-medium text-muted-foreground uppercase tracking-wider block mb-2"
+						class="text-xs font-medium text-muted-foreground block mb-2"
 					>
 						Quick Actions
 					</span>
@@ -243,7 +231,7 @@
 							disabled={testingQuery}
 							onclick={handleTestQuery}
 						>
-							<SearchIcon class="h-3.5 w-3.5 text-blue-500" />
+							<SearchIcon class="h-3.5 w-3.5 text-muted-foreground" />
 							<span>Test Query</span>
 						</Button>
 
@@ -256,7 +244,7 @@
 							onclick={handleBlockDomain}
 						>
 							<ShieldAlertIcon
-								class="h-3.5 w-3.5 text-rose-500"
+								class="h-3.5 w-3.5 text-danger"
 							/>
 							<span>Block</span>
 						</Button>
@@ -269,7 +257,7 @@
 							onclick={handleAllowDomain}
 						>
 							<ShieldCheckIcon
-								class="h-3.5 w-3.5 text-emerald-500"
+								class="h-3.5 w-3.5 text-success"
 							/>
 							<span>Allow</span>
 						</Button>
@@ -281,7 +269,7 @@
 							onclick={handleCreateRewrite}
 						>
 							<ArrowRightLeftIcon
-								class="h-3.5 w-3.5 text-amber-500"
+								class="h-3.5 w-3.5 text-warning"
 							/>
 							<span>Rewrite</span>
 						</Button>

@@ -3,8 +3,9 @@
 	import { onMount } from "svelte";
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import { toast } from "svelte-sonner";
+	import { toastReconcileResult } from "../reconcile";
 	import { dhcpOptionsGet, dhcpOptionsUpdate, dhcpReconcile } from "$lib/api/client";
-	import { parseCsvList as parseList } from "$lib/utils";
+	import { errorMessage, parseCsvList as parseList } from "$lib/utils";
 	import type { DhcpOptionsConfig, TftpOptions } from "$lib/api/types";
 
 	import DhcpServerHeader from "./components/DhcpServerHeader.svelte";
@@ -55,17 +56,17 @@
 	function currentPayload(): DhcpOptionsConfig {
 		const v4RawMap: Record<number, string> = {};
 		for (const opt of v4RawOptions) {
-			if (opt.code && opt.value) v4RawMap[opt.code] = opt.value;
+			if (opt.code) v4RawMap[opt.code] = opt.value;
 		}
 		const v6RawMap: Record<number, string> = {};
 		for (const opt of v6RawOptions) {
-			if (opt.code && opt.value) v6RawMap[opt.code] = opt.value;
+			if (opt.code) v6RawMap[opt.code] = opt.value;
 		}
 
 		return {
 			v4: {
 				enabled: v4Enabled,
-				lease_time: Number(v4LeaseTime) || 86400,
+				lease_time: Number(v4LeaseTime),
 				router: v4Router.trim() || null,
 				subnet_mask: v4SubnetMask.trim() || null,
 				dns_servers: parseList(v4DnsStr),
@@ -78,7 +79,7 @@
 			},
 			v6: {
 				enabled: v6Enabled,
-				lease_time: Number(v6LeaseTime) || 86400,
+				lease_time: Number(v6LeaseTime),
 				dns_servers: parseList(v6DnsStr),
 				search_domains: parseList(v6SearchDomainsStr),
 				ntp_servers: parseList(v6NtpStr),
@@ -136,7 +137,7 @@
 
 	const humanLeaseDuration = $derived.by(() => {
 		const secs = Number(v4LeaseTime) || 0;
-		if (secs <= 0) return "Indefinite / Unspecified";
+		if (secs <= 0) return "invalid (needs at least 1 second)";
 		const d = Math.floor(secs / 86400);
 		const h = Math.floor((secs % 86400) / 3600);
 		const m = Math.floor((secs % 3600) / 60);
@@ -189,22 +190,35 @@
 			}
 
 			pristineJson = JSON.stringify(currentPayload());
-		} catch (err: any) {
-			toast.error(`Failed to load DHCP server options: ${err.message}`);
+		} catch (err) {
+			toast.error(`Failed to load DHCP server options: ${errorMessage(err, String(err))}`);
 		} finally {
 			loading = false;
 		}
 	}
 
+	// DHCP lease times are 32-bit seconds (RFC 2131 section 3.3); 0 is not a usable lease.
+	function validLease(secs: number) {
+		return Number.isInteger(secs) && secs >= 1 && secs <= 0xffffffff;
+	}
+
 	async function saveOptions() {
+		if (!validLease(Number(v4LeaseTime))) {
+			toast.error("IPv4 lease duration must be a whole number of seconds, at least 1");
+			return;
+		}
+		if (!validLease(Number(v6LeaseTime))) {
+			toast.error("IPv6 lease duration must be a whole number of seconds, at least 1");
+			return;
+		}
 		saving = true;
 		try {
 			const payload = currentPayload();
 			await dhcpOptionsUpdate(payload);
 			pristineJson = JSON.stringify(payload);
 			toast.success("DHCP server options saved and propagated successfully");
-		} catch (err: any) {
-			toast.error(`Failed to save options: ${err.message}`);
+		} catch (err) {
+			toast.error(`Failed to save options: ${errorMessage(err, String(err))}`);
 		} finally {
 			saving = false;
 		}
@@ -219,26 +233,9 @@
 		reconciling = true;
 		try {
 			const res = await dhcpReconcile();
-			if (res.invalidated_v4_leases.length === 0) {
-				toast.success(
-					`DHCP Sanity Check: All dynamic leases are valid (${res.valid_v4_leases} active, ${res.preserved_static_leases} static preserved)`,
-				);
-			} else {
-				toast.warning(
-					`Sanity Check: Invalidated ${res.invalidated_v4_leases.length} out-of-range dynamic lease(s). ForceRenew sent.`,
-					{
-						description:
-							res.invalidated_v4_leases
-								.map((l) => `${l.mac} (${l.ip})`)
-								.slice(0, 3)
-								.join(", ") +
-							(res.invalidated_v4_leases.length > 3 ? "..." : ""),
-						duration: 8000,
-					},
-				);
-			}
-		} catch (err: any) {
-			toast.error(`Failed to reconcile leases: ${err.message}`);
+			toastReconcileResult(res);
+		} catch (err) {
+			toast.error(`Failed to reconcile leases: ${errorMessage(err, String(err))}`);
 		} finally {
 			reconciling = false;
 		}
@@ -264,8 +261,8 @@
 
 	{#if loading}
 		<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-			<Skeleton class="h-96 rounded-xl" />
-			<Skeleton class="h-96 rounded-xl" />
+			<Skeleton class="h-96 rounded-lg" />
+			<Skeleton class="h-96 rounded-lg" />
 		</div>
 	{:else}
 		<fieldset disabled={!canEdit} class="contents">

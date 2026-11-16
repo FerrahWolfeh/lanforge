@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { leaseTarget } from "./lease-target";
 	import { auth } from "$lib/stores/auth.svelte";
 	import { Button } from "$lib/components/ui/button";
 	import { toast } from "svelte-sonner";
@@ -8,13 +9,13 @@
 		leaseRenew,
 		wol,
 		eventsUrl,
+		openEventStream,
+		type EventStream,
 	} from "$lib/api/client";
-	import type { LeaseEntry, LeaseTarget } from "$lib/api/types";
-	import { createDebounce } from "$lib/utils";
+	import type { LeaseEntry } from "$lib/api/types";
+	import { createDebounce, errorMessage } from "$lib/utils";
 
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
-
-	import LeaseStatsCards from "./components/LeaseStatsCards.svelte";
 	import LeaseTable from "./components/LeaseTable.svelte";
 	import LeasePromoteModal from "./components/LeasePromoteModal.svelte";
 	import LeaseReleaseModal from "./components/LeaseReleaseModal.svelte";
@@ -30,16 +31,16 @@
 	let releaseOpen = $state(false);
 	let selectedLeaseForRelease = $state<LeaseEntry | null>(null);
 
-	// Real-time EventSource
-	let eventSource: EventSource | null = null;
+	// Real-time event stream
+	let eventSource: EventStream | null = null;
 
 	async function loadLeasesData(showSpinner = true) {
 		if (showSpinner) loading = true;
 		else isRefreshing = true;
 		try {
 			allLeases = await leases();
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to load DHCP leases");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to load DHCP leases"));
 		} finally {
 			loading = false;
 			isRefreshing = false;
@@ -48,12 +49,11 @@
 
 	async function handleRenew(lease: LeaseEntry) {
 		try {
-			const target: LeaseTarget = lease.kind === "v4" ? "V4" : { V6: { iaid: 0 } };
-			await leaseRenew(lease.mac, target);
+			await leaseRenew(lease.mac, leaseTarget(lease));
 			toast.success(`Sent renewal trigger for ${lease.address}`);
 			await loadLeasesData(false);
-		} catch (err: any) {
-			toast.error(err?.message || "Failed to trigger lease renewal");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to trigger lease renewal"));
 		}
 	}
 
@@ -61,8 +61,8 @@
 		try {
 			await wol(mac);
 			toast.success(`Wake-on-LAN packet sent to ${mac}`);
-		} catch (err: any) {
-			toast.error(err?.message || "Failed to send WoL packet");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to send WoL packet"));
 		}
 	}
 
@@ -85,9 +85,8 @@
 
 		try {
 			const url = eventsUrl({ filter: "Dhcp" });
-			eventSource = new EventSource(url);
-
-			eventSource.onmessage = (e) => {
+			eventSource = openEventStream(url, {
+				onmessage: (e) => {
 				try {
 					const data = JSON.parse(e.data);
 					const kindStr = typeof data?.kind === "string" ? data.kind : "";
@@ -112,7 +111,8 @@
 				} catch {
 					// silent parse error
 				}
-			};
+				},
+			});
 		} catch {
 			// SSE unsupported
 		}
@@ -126,17 +126,6 @@
 		}
 	});
 
-	// Derived statistics
-	const totalCount = $derived(allLeases.length);
-	const v4Count = $derived(allLeases.filter((l) => l.kind === "v4").length);
-	const v6Count = $derived(
-		allLeases.filter((l) => l.kind === "v6" || l.kind === "v6_prefix").length,
-	);
-	const expiringSoonCount = $derived(
-		allLeases.filter((l) => l.remaining_secs > 0 && l.remaining_secs < 3600).length,
-	);
-
-	// Filtered leases
 </script>
 
 <svelte:head>
@@ -163,14 +152,6 @@
 		</div>
 	</div>
 
-	<!-- Stats KPI Cards -->
-	<LeaseStatsCards
-		{loading}
-		{totalCount}
-		{v4Count}
-		{v6Count}
-		{expiringSoonCount}
-	/>
 
 	<!-- Main Leases Table -->
 	<LeaseTable

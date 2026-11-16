@@ -14,6 +14,7 @@ function getInitialDebugMode(): boolean {
 
 class CapabilitiesState {
 	serverCaps = $state<ServerCapabilities | null>(null);
+	version = $state<string | null>(null);
 	isLoaded = $state<boolean>(false);
 	debugMode = $state<boolean>(getInitialDebugMode());
 
@@ -109,6 +110,7 @@ class CapabilitiesState {
 	 */
 	updateFromStatus(status?: StatusResponse | null) {
 		if (!status) return;
+		if (status.version) this.version = status.version;
 		const caps =
 			status.server_caps ??
 			(status.capabilities && "compiled" in status.capabilities

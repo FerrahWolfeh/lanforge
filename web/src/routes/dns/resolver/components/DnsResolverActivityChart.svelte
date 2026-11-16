@@ -1,8 +1,7 @@
 <script lang="ts">
+	import { toMillis } from "$lib/utils";
 	import * as Card from "$lib/components/ui/card";
 	import { Skeleton } from "$lib/components/ui/skeleton";
-	import { Badge } from "$lib/components/ui/badge";
-	import { Button } from "$lib/components/ui/button";
 	import * as Chart from "$lib/components/ui/chart/index.js";
 	import { AreaChart, BarChart } from "layerchart";
 	import ChartAreaIcon from "@lucide/svelte/icons/chart-area";
@@ -10,52 +9,62 @@
 	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import type {
 		DnsAnalyticsResponse,
-		DnsStatsResponse,
 	} from "$lib/api/types";
 
 	let {
 		loading = true,
 		analyticsData = null,
-		statsData = null,
 	}: {
 		loading?: boolean;
 		analyticsData?: DnsAnalyticsResponse | null;
-		statsData?: DnsStatsResponse | null;
 	} = $props();
 
 	let chartMode = $state<"area" | "bar">("area");
-	let showForwarded = $state(true);
-	let showLocal = $state(true);
-	let showCached = $state(true);
-	let showRewritten = $state(true);
-	let showBlocked = $state(true);
-
 	const chartConfig = {
 		forwarded: {
 			label: "Forwarded",
-			color: "#38bdf8",
-		},
-		local: {
-			label: "Local",
-			color: "#2dd4bf",
+			color: "var(--chart-1)",
 		},
 		cached: {
 			label: "Cached",
-			color: "#34d399",
+			color: "var(--chart-2)",
+		},
+		local: {
+			label: "Local",
+			color: "var(--chart-3)",
 		},
 		rewritten: {
 			label: "Rewritten",
-			color: "#c084fc",
+			color: "var(--chart-4)",
 		},
 		blocked: {
 			label: "Blocked",
-			color: "#f43f5e",
+			color: "var(--danger)",
 		},
 	} satisfies Chart.ChartConfig;
 
+	type SeriesKey = keyof typeof chartConfig;
+	const SERIES_KEYS = Object.keys(chartConfig) as SeriesKey[];
+	const NEUTRAL_ON = "border-border bg-muted text-muted-foreground font-medium";
+	const ON_CLASS: Record<SeriesKey, string> = {
+		forwarded: NEUTRAL_ON,
+		cached: "border-success/40 bg-success/15 text-success font-medium",
+		local: NEUTRAL_ON,
+		rewritten: NEUTRAL_ON,
+		blocked: "border-danger/40 bg-danger/15 text-danger font-medium",
+	};
+
+	/** Which series the legend pills show as on; a series is drawn when on. */
+	let shown = $state<Record<SeriesKey, boolean>>({
+		forwarded: true,
+		cached: true,
+		local: true,
+		rewritten: true,
+		blocked: true,
+	});
+
 	const chartPoints = $derived.by(() => {
 		const rates = analyticsData?.query_rate ?? [];
-		const blocked = analyticsData?.blocked_query_rate ?? [];
 
 		const now = Date.now();
 		const BUCKET_MS = 15 * 60 * 1000; // 15-minute intervals matching backend aggregation
@@ -65,16 +74,9 @@
 		// Index incoming query rates by 15-minute rounded timestamp
 		const ratesMap = new Map<number, (typeof rates)[0]>();
 		for (const r of rates) {
-			const ms = r.timestamp < 10_000_000_000 ? r.timestamp * 1000 : r.timestamp;
+			const ms = toMillis(r.timestamp);
 			const bucketKey = Math.floor(ms / BUCKET_MS) * BUCKET_MS;
 			ratesMap.set(bucketKey, r);
-		}
-
-		const blockedMap = new Map<number, number>();
-		for (const b of blocked) {
-			const ms = b.timestamp < 10_000_000_000 ? b.timestamp * 1000 : b.timestamp;
-			const bucketKey = Math.floor(ms / BUCKET_MS) * BUCKET_MS;
-			blockedMap.set(bucketKey, b.count);
 		}
 
 		return Array.from({ length: BUCKET_COUNT }, (_, i) => {
@@ -98,19 +100,11 @@
 			}
 
 			const total = r.count;
-			const blkCount = r.blocked ?? blockedMap.get(bucketMs) ?? 0;
+			const blkCount = r.blocked ?? 0;
 			const rwCount = r.rewritten ?? 0;
 			const locCount = r.local ?? 0;
-			const cacheCount =
-				r.cached ??
-				(statsData && statsData.total_requests > 0
-					? Math.round(
-							(statsData.cache_hits / statsData.total_requests) *
-								Math.max(0, total - blkCount - rwCount - locCount),
-						)
-					: Math.floor(Math.max(0, total - blkCount - rwCount - locCount) * 0.4));
-			const fwdCount =
-				r.forwarded ?? Math.max(0, total - cacheCount - blkCount - rwCount - locCount);
+			const cacheCount = r.cached ?? 0;
+			const fwdCount = r.forwarded ?? 0;
 
 			return {
 				date,
@@ -150,9 +144,14 @@
 		};
 	});
 
+	/** Legend pills; "Rewritten" only appears once a rewrite was answered in the window. */
+	const legendKeys = $derived(
+		SERIES_KEYS.filter((key) => key !== "rewritten" || chartSummary.rewritten > 0),
+	);
+
 	const activeSeries = $derived.by(() => {
 		const list = [];
-		if (showForwarded) {
+		if (shown.forwarded) {
 			list.push({
 				key: "forwarded",
 				label: "Forwarded",
@@ -160,7 +159,7 @@
 				color: chartConfig.forwarded.color,
 			});
 		}
-		if (showCached) {
+		if (shown.cached) {
 			list.push({
 				key: "cached",
 				label: "Cached",
@@ -168,7 +167,7 @@
 				color: chartConfig.cached.color,
 			});
 		}
-		if (showLocal) {
+		if (shown.local) {
 			list.push({
 				key: "local",
 				label: "Local",
@@ -176,7 +175,7 @@
 				color: chartConfig.local.color,
 			});
 		}
-		if (showRewritten && chartSummary.rewritten > 0) {
+		if (shown.rewritten && chartSummary.rewritten > 0) {
 			list.push({
 				key: "rewritten",
 				label: "Rewritten",
@@ -184,7 +183,7 @@
 				color: chartConfig.rewritten.color,
 			});
 		}
-		if (showBlocked) {
+		if (shown.blocked) {
 			list.push({
 				key: "blocked",
 				label: "Blocked",
@@ -200,11 +199,11 @@
 	<Card.Header class="pb-3 border-b border-border/50">
 		<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 			<div class="flex items-center gap-2">
-				<ActivityIcon class="size-4 text-sky-400" />
+				<ActivityIcon class="size-4 text-muted-foreground" />
 				<div>
 					<Card.Title class="text-base">DNS Query Activity (24h Window)</Card.Title>
 					<p class="text-muted-foreground text-xs mt-0.5">
-						Interactive Pi-hole style timeline categorized by resolution destination
+						Queries per hour, by how they were answered
 					</p>
 				</div>
 			</div>
@@ -217,7 +216,7 @@
 						class={[
 							"inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium transition-colors",
 							chartMode === "area"
-								? "bg-background text-foreground shadow-xs"
+								? "bg-background text-foreground"
 								: "text-muted-foreground hover:text-foreground",
 						].join(" ")}
 						onclick={() => (chartMode = "area")}
@@ -231,7 +230,7 @@
 						class={[
 							"inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium transition-colors",
 							chartMode === "bar"
-								? "bg-background text-foreground shadow-xs"
+								? "bg-background text-foreground"
 								: "text-muted-foreground hover:text-foreground",
 						].join(" ")}
 						onclick={() => (chartMode = "bar")}
@@ -246,82 +245,22 @@
 
 		<!-- Interactive Series Filter Legend Pills -->
 		<div class="flex flex-wrap items-center gap-2 pt-2 text-xs">
-			<button
-				type="button"
-				class={[
-					"flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition-all cursor-pointer select-none",
-					showForwarded
-						? "border-sky-500/40 bg-sky-500/15 text-sky-400 font-medium"
-						: "border-border/40 bg-muted/20 text-muted-foreground line-through opacity-60 hover:opacity-100",
-				].join(" ")}
-				onclick={() => (showForwarded = !showForwarded)}
-			>
-				<span class="size-2 rounded-full bg-sky-400"></span>
-				<span>Forwarded</span>
-				<span class="font-mono text-[11px] opacity-80">({chartSummary.forwardedPct}%)</span>
-			</button>
-
-			<button
-				type="button"
-				class={[
-					"flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition-all cursor-pointer select-none",
-					showCached
-						? "border-emerald-500/40 bg-emerald-500/15 text-emerald-400 font-medium"
-						: "border-border/40 bg-muted/20 text-muted-foreground line-through opacity-60 hover:opacity-100",
-				].join(" ")}
-				onclick={() => (showCached = !showCached)}
-			>
-				<span class="size-2 rounded-full bg-emerald-400"></span>
-				<span>Cached</span>
-				<span class="font-mono text-[11px] opacity-80">({chartSummary.cachedPct}%)</span>
-			</button>
-
-			<button
-				type="button"
-				class={[
-					"flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition-all cursor-pointer select-none",
-					showLocal
-						? "border-teal-500/40 bg-teal-500/15 text-teal-400 font-medium"
-						: "border-border/40 bg-muted/20 text-muted-foreground line-through opacity-60 hover:opacity-100",
-				].join(" ")}
-				onclick={() => (showLocal = !showLocal)}
-			>
-				<span class="size-2 rounded-full bg-teal-400"></span>
-				<span>Local</span>
-				<span class="font-mono text-[11px] opacity-80">({chartSummary.localPct}%)</span>
-			</button>
-
-			{#if chartSummary.rewritten > 0}
+			{#each legendKeys as key (key)}
 				<button
 					type="button"
 					class={[
 						"flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition-all cursor-pointer select-none",
-						showRewritten
-							? "border-purple-500/40 bg-purple-500/15 text-purple-400 font-medium"
+						shown[key]
+							? ON_CLASS[key]
 							: "border-border/40 bg-muted/20 text-muted-foreground line-through opacity-60 hover:opacity-100",
 					].join(" ")}
-					onclick={() => (showRewritten = !showRewritten)}
+					onclick={() => (shown[key] = !shown[key])}
 				>
-					<span class="size-2 rounded-full bg-purple-400"></span>
-					<span>Rewritten</span>
-					<span class="font-mono text-[11px] opacity-80">({chartSummary.rewrittenPct}%)</span>
+					<span class="size-2 rounded-full" style="background: {chartConfig[key].color}"></span>
+					<span>{chartConfig[key].label}</span>
+					<span class="font-mono text-xs opacity-80">({chartSummary[`${key}Pct` as const]}%)</span>
 				</button>
-			{/if}
-
-			<button
-				type="button"
-				class={[
-					"flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition-all cursor-pointer select-none",
-					showBlocked
-						? "border-rose-500/40 bg-rose-500/15 text-rose-400 font-medium"
-						: "border-border/40 bg-muted/20 text-muted-foreground line-through opacity-60 hover:opacity-100",
-				].join(" ")}
-				onclick={() => (showBlocked = !showBlocked)}
-			>
-				<span class="size-2 rounded-full bg-rose-400"></span>
-				<span>Blocked</span>
-				<span class="font-mono text-[11px] opacity-80">({chartSummary.blockedPct}%)</span>
-			</button>
+			{/each}
 		</div>
 	</Card.Header>
 
@@ -396,24 +335,24 @@
 	<Card.Footer class="border-t border-border/50 bg-muted/15 px-6 py-3">
 		<div class="grid grid-cols-2 gap-4 sm:grid-cols-4 w-full text-xs font-mono">
 			<div class="flex flex-col gap-0.5">
-				<span class="text-muted-foreground text-[10px] uppercase font-sans font-semibold tracking-wider">24h Queries</span>
+				<span class="text-muted-foreground text-xs font-medium">24h Queries</span>
 				<span class="text-foreground font-bold tabular-nums text-sm">{chartSummary.total.toLocaleString()}</span>
 			</div>
 			<div class="flex flex-col gap-0.5">
-				<span class="text-muted-foreground text-[10px] uppercase font-sans font-semibold tracking-wider">Cache Hits</span>
-				<span class="text-emerald-400 font-bold tabular-nums text-sm">
+				<span class="text-muted-foreground text-xs font-medium">Cache Hits</span>
+				<span class="text-foreground font-bold tabular-nums text-sm">
 					{chartSummary.cached.toLocaleString()} <span class="text-xs font-normal text-muted-foreground">({chartSummary.cachedPct}%)</span>
 				</span>
 			</div>
 			<div class="flex flex-col gap-0.5">
-				<span class="text-muted-foreground text-[10px] uppercase font-sans font-semibold tracking-wider">Forwarded</span>
-				<span class="text-sky-400 font-bold tabular-nums text-sm">
+				<span class="text-muted-foreground text-xs font-medium">Forwarded</span>
+				<span class="text-foreground font-bold tabular-nums text-sm">
 					{chartSummary.forwarded.toLocaleString()} <span class="text-xs font-normal text-muted-foreground">({chartSummary.forwardedPct}%)</span>
 				</span>
 			</div>
 			<div class="flex flex-col gap-0.5">
-				<span class="text-muted-foreground text-[10px] uppercase font-sans font-semibold tracking-wider">Blocked (Adblock)</span>
-				<span class="text-rose-400 font-bold tabular-nums text-sm">
+				<span class="text-muted-foreground text-xs font-medium">Blocked (Adblock)</span>
+				<span class="text-danger font-bold tabular-nums text-sm">
 					{chartSummary.blocked.toLocaleString()} <span class="text-xs font-normal text-muted-foreground">({chartSummary.blockedPct}%)</span>
 				</span>
 			</div>

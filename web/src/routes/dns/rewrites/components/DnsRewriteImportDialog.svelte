@@ -1,4 +1,5 @@
 <script lang="ts">
+import { errorMessage } from "$lib/utils";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import { Button } from "$lib/components/ui/button";
 	import { Label } from "$lib/components/ui/label";
@@ -58,8 +59,8 @@
 			toast.success(`Successfully imported ${rulesList.length} DNS rewrite rules`);
 			open = false;
 			onImportSuccess();
-		} catch (err: any) {
-			toast.error(err?.message ?? "JSON parse or import failed");
+		} catch (err) {
+			toast.error(errorMessage(err, "JSON parse or import failed"));
 		} finally {
 			importing = false;
 		}
@@ -67,7 +68,7 @@
 </script>
 
 <Dialog.Root bind:open>
-	<Dialog.Content class="w-[95vw] max-w-lg sm:max-w-lg overflow-hidden border shadow-lg">
+	<Dialog.Content class="w-[95vw] max-w-lg sm:max-w-lg border">
 		<Dialog.Header class="space-y-1">
 			<Dialog.Title class="text-base font-semibold flex items-center gap-2">
 				<FileUpIcon class="h-5 w-5 text-primary" />

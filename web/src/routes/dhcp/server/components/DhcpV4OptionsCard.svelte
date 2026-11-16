@@ -33,11 +33,11 @@
 	} = $props();
 </script>
 
-<Card.Root class="border-border/80 shadow-sm overflow-hidden">
+<Card.Root class="border-border/80 overflow-hidden">
 	<Card.Header class="bg-muted/20 border-b pb-4">
 		<div class="flex items-center justify-between">
 			<div class="flex items-center gap-2.5">
-				<NetworkIcon class="size-5 text-blue-500" />
+				<NetworkIcon class="size-5 text-muted-foreground" />
 				<div>
 					<Card.Title class="text-base font-bold">IPv4 Network Parameters</Card.Title>
 					<Card.Description class="text-xs">
@@ -55,18 +55,18 @@
 
 	<Card.Content class={["p-4 sm:p-6 flex flex-col gap-6", !v4Enabled && "opacity-50 pointer-events-none"].filter(Boolean).join(" ")}>
 		<!-- Highlighted: Default Gateway (Option 3) -->
-		<div class="p-4 rounded-xl border border-primary/20 bg-primary/[0.03] flex flex-col gap-3">
+		<div class="p-4 rounded-lg border border-primary/20 bg-primary/[0.03] flex flex-col gap-3">
 			<div class="flex items-center justify-between">
 				<div class="flex items-center gap-2">
 					<Label for="v4-router" class="text-sm font-bold text-foreground">
 						Default Gateway (Option 3 — Router)
 					</Label>
 					{#if v4Router.trim()}
-						<Badge variant="outline" class="text-[10px] text-emerald-500 border-emerald-500/30 bg-emerald-500/10 font-mono">
+						<Badge variant="outline" class="text-xs text-success border-success/30 bg-success/10 font-mono">
 							Active Gateway
 						</Badge>
 					{:else}
-						<Badge variant="outline" class="text-[10px] text-amber-500 border-amber-500/30 bg-amber-500/10 font-mono">
+						<Badge variant="outline" class="text-xs text-warning border-warning/30 bg-warning/10 font-mono">
 							Not Advertised
 						</Badge>
 					{/if}
@@ -162,7 +162,7 @@
 					placeholder="192.168.0.1, 1.1.1.1"
 					class="font-mono text-xs"
 				/>
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					Comma-separated list of IPv4 DNS servers.
 				</p>
 			</div>
@@ -175,7 +175,7 @@
 					placeholder="lan, home.arpa"
 					class="font-mono text-xs"
 				/>
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					Appended to unqualified hostnames on the link.
 				</p>
 			</div>
@@ -188,7 +188,7 @@
 					placeholder="lan, internal.corp"
 					class="font-mono text-xs"
 				/>
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					Comma-separated list of search domain suffixes.
 				</p>
 			</div>
@@ -201,7 +201,7 @@
 					placeholder="162.159.200.1, 216.239.35.0"
 					class="font-mono text-xs"
 				/>
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					NTP time synchronization IPs for network clients.
 				</p>
 			</div>
@@ -213,7 +213,7 @@
 		<div class="flex flex-col gap-2.5">
 			<div class="flex items-center justify-between">
 				<Label for="v4-lease-time" class="text-xs font-semibold">Default Lease Duration (Seconds)</Label>
-				<span class="text-xs font-medium text-emerald-500 font-mono">
+				<span class="text-xs font-medium text-foreground font-mono">
 					≈ {humanLeaseDuration}
 				</span>
 			</div>

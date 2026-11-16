@@ -1,8 +1,10 @@
 <script lang="ts">
+	import { RECORD_TYPES, cleanDomain, cleanAnswer, getResultBadge, quickDnsRule, recordTypeClass } from "$lib/components/dns/dnsLog";
+	import { copyToClipboard, formatClockTime, formatLatency } from "$lib/utils";
+	import { goto } from "$app/navigation";
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Table from "$lib/components/ui/table";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
-	import { Button } from "$lib/components/ui/button";
 	import { Badge } from "$lib/components/ui/badge";
 	import * as Select from "$lib/components/ui/select";
 	import CopyIcon from "@lucide/svelte/icons/copy";
@@ -14,9 +16,8 @@
 	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 	import ArrowRightLeftIcon from "@lucide/svelte/icons/arrow-right-left";
 	import LaptopIcon from "@lucide/svelte/icons/laptop";
-	import { toast } from "svelte-sonner";
-	import { dnsBlock, dnsAllow } from "$lib/api/client";
-	import type { DnsQueryLogEntry, DnsRecordType, FilterMatch } from "$lib/api/types";
+	import GlobeIcon from "@lucide/svelte/icons/globe";
+	import type { DnsQueryLogEntry } from "$lib/api/types";
 	import DnsLogDetailDialog from "./DnsLogDetailDialog.svelte";
 	import DataTableCard from "$lib/components/DataTableCard.svelte";
 
@@ -68,20 +69,6 @@
 		return counts;
 	});
 
-	const RECORD_TYPES: DnsRecordType[] = [
-		"A",
-		"AAAA",
-		"CNAME",
-		"PTR",
-		"TXT",
-		"MX",
-		"NS",
-		"SOA",
-		"SRV",
-		"HTTPS",
-		"SVCB",
-	];
-
 	const RESULT_FILTERS = [
 		{ value: "", label: "All Outcomes" },
 		{ value: "blocked", label: "Blocked" },
@@ -95,63 +82,12 @@
 		{ value: "error", label: "Error" },
 	];
 
-	const typeVariants: Record<string, string> = {
-		A: "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20",
-		AAAA: "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20",
-		CNAME: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
-		PTR: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
-		TXT: "bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20",
-		MX: "bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20",
-		NS: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border-cyan-500/20",
-		SOA: "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/20",
-		SRV: "bg-teal-500/10 text-teal-600 dark:text-teal-400 border-teal-500/20",
-		HTTPS: "bg-violet-500/10 text-violet-600 dark:text-violet-400 border-violet-500/20",
-		SVCB: "bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-400 border-fuchsia-500/20",
-	};
-
-	function cleanDomain(raw: string): string {
-		if (!raw) return "";
-		return raw.trim().replace(/\.$/, "");
-	}
-
-	function cleanAnswer(raw?: string | null): string {
-		if (!raw) return "—";
-		return raw
-			.replace(/^"|"$/g, "")
-			.replace(/^(A|AAAA|CNAME|PTR|NS)\((.*)\)$/, "$2")
-			.trim()
-			.replace(/\.$/, "");
-	}
-
-	function formatTime(ts: number): string {
-		if (!ts) return "—";
-		const ms = ts < 1e11 ? ts * 1000 : ts;
-		const d = new Date(ms);
-		return d.toLocaleTimeString(undefined, {
-			hour12: false,
-			hour: "2-digit",
-			minute: "2-digit",
-			second: "2-digit",
-		});
-	}
-
-	function formatLatency(us: number): string {
-		if (us === 0) return "0 ms";
-		if (us < 1000) return `${us} µs`;
-		return `${(us / 1000).toFixed(1)} ms`;
-	}
-
-	async function copyToClipboard(text: string, label: string) {
-		try {
-			await navigator.clipboard.writeText(text);
-			copiedItem = text;
-			toast.success(`Copied ${label} to clipboard`);
-			setTimeout(() => {
-				copiedItem = null;
-			}, 2000);
-		} catch {
-			toast.error("Failed to copy to clipboard");
-		}
+	async function copyItem(text: string, label: string) {
+		if (!(await copyToClipboard(text, label))) return;
+		copiedItem = text;
+		setTimeout(() => {
+			copiedItem = null;
+		}, 2000);
 	}
 
 	function inspectRecord(entry: DnsQueryLogEntry) {
@@ -159,93 +95,104 @@
 		dialogOpen = true;
 	}
 
-	async function handleQuickBlock(domain: string) {
-		const target = cleanDomain(domain);
-		try {
-			await dnsBlock(target);
-			toast.success(`Added ${target} to adblock black list`);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to block domain");
-		}
-	}
-
-	async function handleQuickAllow(domain: string) {
-		const target = cleanDomain(domain);
-		try {
-			await dnsAllow(target);
-			toast.success(`Added ${target} to allowlist`);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to allow domain");
-		}
-	}
-
-	function getResultBadge(result: string, cached: boolean, filter?: FilterMatch | null) {
-		if (filter?.action === "allow") {
-			return {
-				label: "Allowed (@@)",
-				class: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
-			};
-		}
-		const lower = (result || "").toLowerCase();
-		if (
-			lower === "cachedblock" ||
-			lower === "cached_block" ||
-			(lower.includes("block") && cached)
-		) {
-			return {
-				label: "Cached Block",
-				class: "bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/20",
-			};
-		}
-		if (lower.includes("block") || lower.includes("deny")) {
-			return {
-				label: "Blocked",
-				class: "bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20",
-			};
-		}
-		if (lower === "rewritten" || lower.includes("rewrite")) {
-			return {
-				label: "Rewritten",
-				class: "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20",
-			};
-		}
-		if (lower === "local") {
-			return {
-				label: "Local",
-				class: "bg-teal-500/10 text-teal-600 dark:text-teal-400 border-teal-500/20",
-			};
-		}
-		if (lower === "nxdomain") {
-			return {
-				label: "NXDomain",
-				class: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
-			};
-		}
-		if (lower === "error") {
-			return {
-				label: "Error",
-				class: "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20",
-			};
-		}
-		if (cached || lower === "cached") {
-			return {
-				label: "Cached",
-				class: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
-			};
-		}
-		if (lower === "coalesced") {
-			return {
-				label: "Coalesced",
-				class: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border-cyan-500/20",
-			};
-		}
-		return {
-			label: "Forwarded",
-			class: "bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/20",
-		};
-	}
-
 </script>
+
+{#snippet actionsMenu(entry: DnsQueryLogEntry, domainClean: string, answerClean: string)}
+<DropdownMenu.Root>
+	<DropdownMenu.Trigger
+		class="h-7 w-7 max-md:size-9 shrink-0 inline-flex items-center justify-center rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+	>
+		<MoreHorizontalIcon class="h-4 w-4" />
+	</DropdownMenu.Trigger>
+	<DropdownMenu.Content
+		align="end"
+		class="w-44 text-xs"
+	>
+		<DropdownMenu.Item
+			onclick={() => inspectRecord(entry)}
+			class="gap-2"
+		>
+			<EyeIcon
+				class="h-3.5 w-3.5 text-primary"
+			/>
+			Inspect Log
+		</DropdownMenu.Item>
+		<DropdownMenu.Item
+			onclick={() => goto(`/dns/domains/${encodeURIComponent(domainClean)}`)}
+			class="gap-2"
+		>
+			<GlobeIcon
+				class="h-3.5 w-3.5 text-muted-foreground"
+			/>
+			Open domain stats
+		</DropdownMenu.Item>
+		<DropdownMenu.Item
+			onclick={() =>
+				copyItem(
+					domainClean,
+					"domain name",
+				)}
+			class="gap-2"
+		>
+			<CopyIcon
+				class="h-3.5 w-3.5 text-muted-foreground"
+			/>
+			Copy Domain
+		</DropdownMenu.Item>
+		<DropdownMenu.Item
+			onclick={() =>
+				copyItem(
+					entry.src_ip,
+					"client IP",
+				)}
+			class="gap-2"
+		>
+			<CopyIcon
+				class="h-3.5 w-3.5 text-muted-foreground"
+			/>
+			Copy Client IP
+		</DropdownMenu.Item>
+		{#if canDnsWrite}
+		<DropdownMenu.Separator />
+		<DropdownMenu.Item
+			onclick={() =>
+				quickDnsRule("block", domainClean)}
+			class="gap-2 text-danger"
+		>
+			<ShieldAlertIcon
+				class="h-3.5 w-3.5"
+			/>
+			Block Domain
+		</DropdownMenu.Item>
+		<DropdownMenu.Item
+			onclick={() =>
+				quickDnsRule("allow", domainClean)}
+			class="gap-2 text-success"
+		>
+			<ShieldCheckIcon
+				class="h-3.5 w-3.5"
+			/>
+			Allow Domain
+		</DropdownMenu.Item>
+		<DropdownMenu.Item
+			onclick={() =>
+				onAddRewrite(
+					domainClean,
+					answerClean !== "—"
+						? answerClean
+						: "",
+				)}
+			class="gap-2"
+		>
+			<ArrowRightLeftIcon
+				class="h-3.5 w-3.5 text-warning"
+			/>
+			Create Rewrite
+		</DropdownMenu.Item>
+		{/if}
+	</DropdownMenu.Content>
+</DropdownMenu.Root>
+{/snippet}
 
 <DataTableCard
 	title="DNS Query Log Entries"
@@ -304,6 +251,67 @@
 		</Select.Root>
 	{/snippet}
 
+	{#snippet mobile()}
+		{#each entries as entry, i (`${entry.timestamp}-${entry.src_ip}-${entry.domain}-${entry.qtype}-${i}`)}
+			{@const domainClean = cleanDomain(entry.domain)}
+			{@const answerClean = cleanAnswer(entry.answer)}
+			{@const style = recordTypeClass(entry.qtype)}
+			{@const badgeInfo = getResultBadge(entry.result, entry.cached, entry.filter)}
+			<div
+				class="flex items-start gap-2 px-4 py-3 {entry.coalesce_id != null ? 'border-l-4 border-l-info/70' : ''}"
+			>
+				<button
+					class="flex flex-1 min-w-0 flex-col gap-1 text-left cursor-pointer"
+					onclick={() => inspectRecord(entry)}
+				>
+					<span class="flex items-baseline justify-between gap-2">
+						<span class="flex items-center gap-1.5 min-w-0">
+							{#if entry.result === "coalesced"}
+								<span class="shrink-0 font-mono text-xs text-info">↳</span>
+							{/if}
+							<a
+								href={`/dns/domains/${encodeURIComponent(domainClean)}`}
+								class="truncate font-mono text-xs font-medium text-foreground hover:underline"
+								onclick={(e) => e.stopPropagation()}>{domainClean}</a
+							>
+							{#if entry.repeats > 1}
+								<span class="shrink-0 rounded border border-border bg-muted px-1 font-mono text-xs text-muted-foreground">
+									×{entry.repeats}
+								</span>
+							{/if}
+						</span>
+						<span class="shrink-0 font-mono text-xs text-muted-foreground">
+							{formatClockTime(entry.timestamp)}
+						</span>
+					</span>
+					<span class="flex items-center gap-1.5 flex-wrap text-xs text-muted-foreground">
+						{#if entry.src_mac}
+							<a
+								href={`/network/devices/${encodeURIComponent(entry.src_mac)}`}
+								class="truncate max-w-[45%] hover:underline {entry.src_hostname ? 'text-foreground' : 'font-mono'}"
+								onclick={(e) => e.stopPropagation()}
+							>
+								{entry.src_hostname || entry.src_ip}
+							</a>
+						{:else}
+							<span class="truncate max-w-[45%] {entry.src_hostname ? 'text-foreground' : 'font-mono'}">
+								{entry.src_hostname || entry.src_ip}
+							</span>
+						{/if}
+						<Badge variant="outline" class="px-1.5 py-0 text-xs font-mono border font-semibold {style}">
+							{entry.qtype}
+						</Badge>
+						<Badge variant="outline" class="px-1.5 py-0 text-xs font-mono border font-semibold {badgeInfo.class}">
+							{badgeInfo.label}
+						</Badge>
+						<span class="font-mono">{formatLatency(entry.upstream_us)}</span>
+					</span>
+				</button>
+				{@render actionsMenu(entry, domainClean, answerClean)}
+			</div>
+		{/each}
+	{/snippet}
+
 	{#snippet header()}
 		<Table.Head class="w-[100px]">Time</Table.Head>
 		<Table.Head class="w-[180px]">Client</Table.Head>
@@ -317,9 +325,7 @@
 	{#each entries as entry, i (`${entry.timestamp}-${entry.src_ip}-${entry.domain}-${entry.qtype}-${i}`)}
 						{@const domainClean = cleanDomain(entry.domain)}
 						{@const answerClean = cleanAnswer(entry.answer)}
-						{@const style =
-							typeVariants[entry.qtype] ||
-							"bg-secondary text-secondary-foreground border-border"}
+						{@const style = recordTypeClass(entry.qtype)}
 						{@const badgeInfo = getResultBadge(
 							entry.result,
 							entry.cached,
@@ -330,7 +336,7 @@
 						{@const isBatchHovered = entry.coalesce_id != null && hoveredCoalesceId === entry.coalesce_id}
 						{@const batchSize = entry.coalesce_id != null ? (batchCounts.get(entry.coalesce_id) ?? 1) : 0}
 						<Table.Row
-							class="transition-colors cursor-pointer group {entry.coalesce_id != null ? 'border-l-4 border-l-cyan-500/70' : ''} {isBatchHovered ? 'bg-cyan-500/[0.08] dark:bg-cyan-500/[0.12]' : 'hover:bg-muted/50'}"
+							class="transition-colors cursor-pointer group {entry.coalesce_id != null ? 'border-l-4 border-l-info/70' : ''} {isBatchHovered ? 'bg-info/[0.08]' : 'hover:bg-muted/50'}"
 							onclick={() => inspectRecord(entry)}
 							onmouseenter={() => {
 								if (entry.coalesce_id != null) hoveredCoalesceId = entry.coalesce_id;
@@ -343,7 +349,7 @@
 							<Table.Cell
 								class="font-mono text-xs text-muted-foreground"
 							>
-								{formatTime(entry.timestamp)}
+								{formatClockTime(entry.timestamp)}
 							</Table.Cell>
 
 							<!-- Client -->
@@ -357,14 +363,24 @@
 											<LaptopIcon
 												class="h-3.5 w-3.5 text-primary shrink-0"
 											/>
-											<span
-												class="truncate max-w-[150px] font-medium text-foreground text-xs"
-											>
-												{entry.src_hostname}
-											</span>
+											{#if entry.src_mac}
+												<a
+													href={`/network/devices/${encodeURIComponent(entry.src_mac)}`}
+													class="truncate max-w-[150px] font-medium text-foreground text-xs hover:underline"
+													onclick={(e) => e.stopPropagation()}
+												>
+													{entry.src_hostname}
+												</a>
+											{:else}
+												<span
+													class="truncate max-w-[150px] font-medium text-foreground text-xs"
+												>
+													{entry.src_hostname}
+												</span>
+											{/if}
 										</div>
 										<span
-											class="text-[10px] font-mono text-muted-foreground truncate pl-5"
+											class="text-xs font-mono text-muted-foreground truncate pl-5"
 										>
 											{entry.src_ip}
 										</span>
@@ -377,11 +393,21 @@
 										<LaptopIcon
 											class="h-3.5 w-3.5 text-muted-foreground shrink-0"
 										/>
-										<span
-											class="truncate max-w-[150px] font-mono text-foreground text-xs"
-										>
-											{entry.src_ip}
-										</span>
+										{#if entry.src_mac}
+											<a
+												href={`/network/devices/${encodeURIComponent(entry.src_mac)}`}
+												class="truncate max-w-[150px] font-mono text-foreground text-xs hover:underline"
+												onclick={(e) => e.stopPropagation()}
+											>
+												{entry.src_ip}
+											</a>
+										{:else}
+											<span
+												class="truncate max-w-[150px] font-mono text-foreground text-xs"
+											>
+												{entry.src_ip}
+											</span>
+										{/if}
 									</div>
 								{/if}
 							</Table.Cell>
@@ -390,17 +416,19 @@
 							<Table.Cell class="font-medium text-xs">
 								<div class="flex items-center gap-1.5 {isCoalesced ? 'pl-3' : ''}">
 									{#if isCoalesced}
-										<span class="text-cyan-600 dark:text-cyan-400 font-mono text-[11px] shrink-0" title="Coalesced into in-flight query">↳</span>
+										<span class="text-info font-mono text-xs shrink-0" title="Coalesced into in-flight query">↳</span>
 									{/if}
-									<span
-										class="truncate max-w-[220px] font-mono text-foreground font-medium"
+									<a
+										href={`/dns/domains/${encodeURIComponent(domainClean)}`}
+										class="truncate max-w-[220px] font-mono text-foreground font-medium hover:underline"
 										title={domainClean}
+										onclick={(e) => e.stopPropagation()}
 									>
 										{domainClean}
-									</span>
+									</a>
 									{#if entry.repeats > 1}
 										<span
-											class="shrink-0 rounded border border-border bg-muted px-1 font-mono text-[10px] text-muted-foreground"
+											class="shrink-0 rounded border border-border bg-muted px-1 font-mono text-xs text-muted-foreground"
 											title={`${entry.repeats} identical queries from this client, folded into one line`}
 										>
 											×{entry.repeats}
@@ -410,7 +438,7 @@
 										type="button"
 										onclick={(e) => {
 											e.stopPropagation();
-											copyToClipboard(
+											copyItem(
 												domainClean,
 												"domain name",
 											);
@@ -420,7 +448,7 @@
 									>
 										{#if copiedItem === domainClean}
 											<CheckIcon
-												class="h-3.5 w-3.5 text-emerald-500"
+												class="h-3.5 w-3.5 text-success"
 											/>
 										{:else}
 											<CopyIcon
@@ -435,7 +463,7 @@
 							<Table.Cell>
 								<Badge
 									variant="outline"
-									class="px-2 py-0.5 text-[11px] font-mono border font-semibold {style}"
+									class="px-2 py-0.5 text-xs font-mono border font-semibold {style}"
 								>
 									{entry.qtype}
 								</Badge>
@@ -446,21 +474,21 @@
 								<div class="flex items-center gap-1.5 flex-wrap">
 									<Badge
 										variant="outline"
-										class="px-2 py-0.5 text-[11px] font-mono border font-semibold {badgeInfo.class}"
+										class="px-2 py-0.5 text-xs font-mono border font-semibold {badgeInfo.class}"
 										title={entry.filter?.rule ? `Rule: ${entry.filter.rule}` : undefined}
 									>
 										{badgeInfo.label}
 									</Badge>
 									{#if isLeader && batchSize > 1}
 										<span
-											class="inline-flex items-center px-1.5 py-0.5 text-[10px] rounded font-mono font-medium bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border border-cyan-500/20"
+											class="inline-flex items-center px-1.5 py-0.5 text-xs rounded font-mono font-medium bg-info/10 text-info border border-info/20"
 											title={`Leader of batch #${entry.coalesce_id} with ${batchSize} concurrent queries`}
 										>
 											Leader ({batchSize}x)
 										</span>
 									{:else if isCoalesced}
 										<span
-											class="text-[10px] text-cyan-600 dark:text-cyan-400 font-mono"
+											class="text-xs text-info font-mono"
 											title={`In-flight multiplexed from batch #${entry.coalesce_id}`}
 										>
 											multiplex
@@ -481,91 +509,7 @@
 								class="text-right"
 								onclick={(e) => e.stopPropagation()}
 							>
-								<DropdownMenu.Root>
-									<DropdownMenu.Trigger
-										class="h-7 w-7 inline-flex items-center justify-center rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-									>
-										<MoreHorizontalIcon class="h-4 w-4" />
-									</DropdownMenu.Trigger>
-									<DropdownMenu.Content
-										align="end"
-										class="w-44 text-xs"
-									>
-										<DropdownMenu.Item
-											onclick={() => inspectRecord(entry)}
-											class="gap-2"
-										>
-											<EyeIcon
-												class="h-3.5 w-3.5 text-primary"
-											/>
-											Inspect Log
-										</DropdownMenu.Item>
-										<DropdownMenu.Item
-											onclick={() =>
-												copyToClipboard(
-													domainClean,
-													"domain name",
-												)}
-											class="gap-2"
-										>
-											<CopyIcon
-												class="h-3.5 w-3.5 text-muted-foreground"
-											/>
-											Copy Domain
-										</DropdownMenu.Item>
-										<DropdownMenu.Item
-											onclick={() =>
-												copyToClipboard(
-													entry.src_ip,
-													"client IP",
-												)}
-											class="gap-2"
-										>
-											<CopyIcon
-												class="h-3.5 w-3.5 text-muted-foreground"
-											/>
-											Copy Client IP
-										</DropdownMenu.Item>
-										{#if canDnsWrite}
-										<DropdownMenu.Separator />
-										<DropdownMenu.Item
-											onclick={() =>
-												handleQuickBlock(domainClean)}
-											class="gap-2 text-rose-500"
-										>
-											<ShieldAlertIcon
-												class="h-3.5 w-3.5"
-											/>
-											Block Domain
-										</DropdownMenu.Item>
-										<DropdownMenu.Item
-											onclick={() =>
-												handleQuickAllow(domainClean)}
-											class="gap-2 text-emerald-500"
-										>
-											<ShieldCheckIcon
-												class="h-3.5 w-3.5"
-											/>
-											Allow Domain
-										</DropdownMenu.Item>
-										<DropdownMenu.Item
-											onclick={() =>
-												onAddRewrite(
-													domainClean,
-													answerClean !== "—"
-														? answerClean
-														: "",
-												)}
-											class="gap-2"
-										>
-											<ArrowRightLeftIcon
-												class="h-3.5 w-3.5 text-amber-500"
-											/>
-											Create Rewrite
-										</DropdownMenu.Item>
-										{/if}
-									</DropdownMenu.Content>
-								</DropdownMenu.Root>
+								{@render actionsMenu(entry, domainClean, answerClean)}
 							</Table.Cell>
 						</Table.Row>
 					{/each}

@@ -76,23 +76,23 @@
 									<Table.Cell class="font-medium">
 										{#if pref.source === "auto_gua"}
 											<div class="flex items-center gap-1.5">
-												<span class="text-emerald-400">
+												<span class="text-foreground">
 													{status?.active_gua_prefix
 														? formatIpv6Prefix(status.active_gua_prefix, pref.prefix_len || 64)
 														: "auto_gua"}
 												</span>
-												<Badge variant="secondary" class="text-[9px] px-1 py-0 font-normal">GUA</Badge>
-												<Badge variant="outline" class="text-[9px] px-1 py-0 font-normal text-emerald-400 border-emerald-500/30">Auto</Badge>
+												<Badge variant="secondary" class="text-xs px-1 py-0 font-normal">GUA</Badge>
+												<Badge variant="outline" class="text-xs px-1 py-0 font-normal text-muted-foreground border-border">Auto</Badge>
 											</div>
-										{:else if pref.source === "ula" && !pref.address}
+										{:else if pref.source === "auto_ula" || (pref.source === "ula" && !pref.address)}
 											<div class="flex items-center gap-1.5">
-												<span class="text-sky-400">
+												<span class="text-foreground">
 													{status?.active_ula_prefix
 														? formatIpv6Prefix(status.active_ula_prefix, pref.prefix_len || 64)
 														: "auto_ula"}
 												</span>
-												<Badge variant="secondary" class="text-[9px] px-1 py-0 font-normal">ULA</Badge>
-												<Badge variant="outline" class="text-[9px] px-1 py-0 font-normal text-sky-400 border-sky-500/30">Auto</Badge>
+												<Badge variant="secondary" class="text-xs px-1 py-0 font-normal">ULA</Badge>
+												<Badge variant="outline" class="text-xs px-1 py-0 font-normal text-muted-foreground border-border">Auto</Badge>
 											</div>
 										{:else}
 											{@const isUla = (pref.address || "").toLowerCase().startsWith("fd") || (pref.address || "").toLowerCase().startsWith("fc")}
@@ -102,7 +102,7 @@
 														? `${pref.address}/${pref.prefix_len || 64}`
 														: `${pref.source} (/${pref.prefix_len || 64})`}
 												</span>
-												<Badge variant="secondary" class="text-[9px] px-1 py-0 font-normal">
+												<Badge variant="secondary" class="text-xs px-1 py-0 font-normal">
 													{isUla ? "ULA" : "GUA"}
 												</Badge>
 											</div>
@@ -111,7 +111,7 @@
 
 									<Table.Cell class="font-sans">
 										{#if pref.autonomous ?? true}
-											<Badge variant="outline" class="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 text-xs">
+											<Badge variant="outline" class="text-foreground border-border text-xs">
 												Enabled (A=1)
 											</Badge>
 										{:else}
@@ -121,7 +121,7 @@
 
 									<Table.Cell class="font-sans">
 										{#if pref.on_link ?? true}
-											<Badge variant="outline" class="bg-blue-500/10 text-blue-600 border-blue-500/20 text-xs">
+											<Badge variant="outline" class="text-foreground border-border text-xs">
 												On-Link (L=1)
 											</Badge>
 										{:else}
@@ -144,17 +144,17 @@
 			{/if}
 
 			{#if (status?.deprecated_prefixes ?? []).length > 0}
-				<div class="m-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 flex flex-col gap-1.5">
-					<div class="flex items-center gap-2 text-amber-600 font-semibold text-xs">
+				<div class="m-4 p-3 rounded-lg bg-warning/10 border border-warning/20 flex flex-col gap-1.5">
+					<div class="flex items-center gap-2 text-warning font-semibold text-xs">
 						<AlertCircleIcon class="size-4" />
 						<span>Deprecated Prefixes (RFC 9096 Graceful Invalidation)</span>
 					</div>
-					<p class="text-[11px] text-amber-700 dark:text-amber-400">
+					<p class="text-xs text-warning">
 						Obsolete prefixes broadcast with Preferred Lifetime = 0 to rapidly revoke them from client routing tables:
 					</p>
 					<div class="flex flex-wrap gap-1.5 pt-1">
 						{#each status?.deprecated_prefixes ?? [] as [pfx, remaining], i (`deprecated-${i}-${pfx}`)}
-							<Badge variant="outline" class="font-mono text-[11px] border-amber-500/30 text-amber-600 bg-background">
+							<Badge variant="outline" class="font-mono text-xs border-warning/30 text-warning bg-background">
 								{pfx} ({remaining}s remaining)
 							</Badge>
 						{/each}
@@ -180,7 +180,7 @@
 
 			<Card.Content class="p-4 flex flex-col gap-4">
 				<div class="flex flex-col gap-2">
-					<Label class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+					<Label class="text-xs font-medium text-muted-foreground">
 						RDNSS Servers
 					</Label>
 					{#if (status?.rdnss ?? []).flatMap((r) => r.servers || []).length === 0}
@@ -201,7 +201,7 @@
 				<Separator />
 
 				<div class="flex flex-col gap-2">
-					<Label class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+					<Label class="text-xs font-medium text-muted-foreground">
 						DNSSL Search Domains
 					</Label>
 					{#if (status?.dnssl ?? []).flatMap((d) => d.domains || []).length === 0}

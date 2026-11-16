@@ -1,7 +1,7 @@
 <script lang="ts">
+import { errorMessage } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Tabs from "$lib/components/ui/tabs";
-	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import {
 		pppoeStatus,
@@ -19,16 +19,11 @@
 	} from "$lib/api/types";
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
-	import { fly } from "svelte/transition";
-	import { cubicOut } from "svelte/easing";
 	import { createPolling } from "$lib/utils/polling";
 
 	import PlugZapIcon from "@lucide/svelte/icons/plug-zap";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import PlayIcon from "@lucide/svelte/icons/play";
-	import KeyIcon from "@lucide/svelte/icons/key";
-	import SaveIcon from "@lucide/svelte/icons/save";
-	import RotateCcwIcon from "@lucide/svelte/icons/rotate-ccw";
 	import XCircleIcon from "@lucide/svelte/icons/x-circle";
 
 	import PppoeStatsCards from "./components/PppoeStatsCards.svelte";
@@ -158,13 +153,17 @@
 		formProbeMaxWaitSecs = tp?.max_wait_secs ?? 10;
 	}
 
-	async function loadAll(silent = false) {
+	// Status is polled; the config (and its form re-sync) refreshes at most this often.
+	const CONFIG_REFRESH_MS = 30_000;
+	let configLoadedAt = 0;
+
+	async function loadAll(silent = false, withConfig = true) {
 		if (!silent) loading = true;
 		try {
 			const fetchSetup = !silent || availableInterfaces.length === 0;
 			const [s, c, setupRes] = await Promise.all([
 				pppoeStatus().catch(() => null),
-				canEdit ? pppoeConfig().catch(() => null) : Promise.resolve(null),
+				canEdit && withConfig ? pppoeConfig().catch(() => null) : Promise.resolve(null),
 				fetchSetup ? getSetupStatus().catch(() => null) : Promise.resolve(null),
 			]);
 			status = s;
@@ -174,6 +173,7 @@
 			}
 
 			if (c) {
+				configLoadedAt = Date.now();
 				if (!config || !isDirty) {
 					config = c;
 					syncFormFromConfig(c);
@@ -249,8 +249,8 @@
 			await pppoeUpdateConfig(payload);
 			toast.success("PPPoE configuration saved and reloaded");
 			await loadAll(true);
-		} catch (err: any) {
-			toast.error(err?.message || "Failed to save PPPoE configuration");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to save PPPoE configuration"));
 		} finally {
 			saving = false;
 		}
@@ -294,7 +294,10 @@
 
 	onMount(() => {
 		loadAll();
-		const stopPolling = createPolling(() => loadAll(true), 4000);
+		const stopPolling = createPolling(
+			() => loadAll(true, Date.now() - configLoadedAt >= CONFIG_REFRESH_MS),
+			4000
+		);
 		return () => {
 			stopPolling();
 		};
@@ -304,8 +307,8 @@
 <div class="flex flex-col gap-6 w-full">
 	<!-- Page Header -->
 	<PageHeader
-		title="PPPoE WAN Concentrator"
-		description="Carrier broadband link orchestration, credentials, and MSS clamping."
+		title="PPPoE WAN"
+		description="The internet connection: login, session and link settings."
 		icon={PlugZapIcon}
 	>
 		{#snippet badge()}
@@ -377,7 +380,7 @@
 				size="sm"
 				onclick={handleConnectOrReconnect}
 				disabled={reconnecting || loading}
-				class="h-8 text-xs gap-1.5 transition-transform duration-150 active:scale-95 transform-gpu shadow-sm"
+				class="h-8 text-xs gap-1.5 transition-transform duration-150 active:scale-95 transform-gpu"
 			>
 				{#if reconnecting}
 					<RefreshCwIcon class="animate-spin size-3.5" data-icon="inline-start" />

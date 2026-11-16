@@ -7,10 +7,12 @@ use lanforge_types::device::Device;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::{DnsLifetimeStats, DnsRecordType};
 use lanforge_types::network::{QueryLogEntry, QueryResult, TrafficHistorySample};
+use lanforge_types::storage::{DnsClientActivity, DnsDomainActivity};
 use std::env;
 use std::ffi::CString;
 use std::io::Error as IoError;
 use std::mem::MaybeUninit;
+use std::net::IpAddr;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -246,6 +248,29 @@ impl LogStore for LogDb {
 
     fn get_dns_blocked_query_rate(&self, since_secs: u64) -> Result<Vec<(u64, u64)>, DbError> {
         self.inner.get_dns_blocked_query_rate(since_secs)
+    }
+
+    fn get_dns_client_activity(
+        &self,
+        since_secs: u64,
+        now_secs: u64,
+        bucket_secs: u64,
+        limit: usize,
+        is_client: &mut dyn FnMut(IpAddr, Option<MacAddr>) -> bool,
+    ) -> Result<DnsClientActivity, DbError> {
+        self.inner
+            .get_dns_client_activity(since_secs, now_secs, bucket_secs, limit, is_client)
+    }
+
+    fn get_dns_domain_activity(
+        &self,
+        since_secs: u64,
+        now_secs: u64,
+        bucket_secs: u64,
+        domain: &str,
+    ) -> Result<DnsDomainActivity, DbError> {
+        self.inner
+            .get_dns_domain_activity(since_secs, now_secs, bucket_secs, domain)
     }
 
     fn load_dns_lifetime_stats(&self) -> Result<DnsLifetimeStats, DbError> {

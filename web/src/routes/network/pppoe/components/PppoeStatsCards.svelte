@@ -6,12 +6,9 @@
 	import RadioIcon from "@lucide/svelte/icons/radio";
 	import GlobeIcon from "@lucide/svelte/icons/globe";
 	import ServerIcon from "@lucide/svelte/icons/server";
-	import CpuIcon from "@lucide/svelte/icons/cpu";
-	import ZapIcon from "@lucide/svelte/icons/zap";
 	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
 	import StatCard from "$lib/components/StatCard.svelte";
 	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
-	import StatusBadge from "$lib/components/StatusBadge.svelte";
 	import type { PppoeStatusResponse, PppoeAuthMethod, PppoeConfig } from "$lib/api/types";
 
 	let {
@@ -32,7 +29,7 @@
 		if (status?.state === "connected" && (!seconds || seconds <= 0)) {
 			return "< 1m";
 		}
-		if (!seconds || seconds <= 0) return "Disconnected";
+		if (!seconds || seconds <= 0) return "—";
 		const d = Math.floor(seconds / 86400);
 		const h = Math.floor((seconds % 86400) / 3600);
 		const m = Math.floor((seconds % 3600) / 60);
@@ -43,13 +40,18 @@
 		return `${s}s`;
 	}
 
+	// Only these states mean the client is actually negotiating; disabled or disconnected is not "waiting".
+	const sessionStarting = $derived(
+		status?.state === "discovering" || status?.state === "authenticating" || status?.state === "reconnecting"
+	);
+
 	function formatAuthMethod(auth?: string): string {
 		switch (auth) {
-			case "chap_md5": return "CHAP (MD5)";
+			case "chap_md5": return "CHAP-MD5";
 			case "pap": return "PAP (Plaintext)";
 			case "mschap_v2": return "MS-CHAPv2";
 			case "none": return "None";
-			default: return auth || "CHAP (MD5)";
+			default: return auth || "CHAP-MD5";
 		}
 	}
 </script>
@@ -57,10 +59,10 @@
 <StatCardGrid cols={3}>
 	<!-- Card 1: Session State -->
 	<StatCard
-		label="Session State"
+		label="Session"
 		popover={{
-			title: "PPPoE Session Lifecycle",
-			description: "Point-to-Point Protocol over Ethernet session state negotiated with carrier access concentrator.",
+			title: "PPPoE session",
+			description: "The login session with your ISP. While it is down there is no internet.",
 		}}
 		badge={{
 			text: status?.state ? status.state.replace(/_/g, " ") : "Offline",
@@ -72,85 +74,80 @@
 		{#snippet valueExtra()}
 			<div class="flex items-center gap-2 pt-0.5">
 				{#if status?.state === "connected"}
-					<CheckCircleIcon class="size-5 text-emerald-500 shrink-0" />
-					<span class="text-base font-bold text-emerald-400">Connected</span>
+					<CheckCircleIcon class="size-5 text-muted-foreground shrink-0" />
+					<span class="text-base font-bold text-success">Connected</span>
 				{:else if status?.state === "reconnecting"}
-					<RefreshCwIcon class="size-5 text-amber-500 shrink-0 animate-spin" />
-					<span class="text-base text-amber-400 font-bold">Reconnecting...</span>
+					<RefreshCwIcon class="size-5 text-muted-foreground shrink-0 animate-spin" />
+					<span class="text-base text-warning font-bold">Reconnecting...</span>
 				{:else if status?.state === "authenticating"}
-					<RefreshCwIcon class="size-5 text-amber-500 shrink-0 animate-spin" />
-					<span class="text-base text-amber-400 font-bold">Authenticating...</span>
+					<RefreshCwIcon class="size-5 text-muted-foreground shrink-0 animate-spin" />
+					<span class="text-base text-warning font-bold">Authenticating...</span>
 				{:else if status?.state === "discovering"}
-					<RadioIcon class="size-5 text-cyan-500 shrink-0 animate-pulse" />
-					<span class="text-base text-cyan-400 font-bold">Discovering BNG...</span>
+					<RadioIcon class="size-5 text-info shrink-0" />
+					<span class="text-base text-info font-bold">Looking for the ISP…</span>
 				{:else if status?.state === "waiting_for_carrier"}
-					<AlertCircleIcon class="size-5 text-amber-500 shrink-0" />
-					<span class="text-base text-amber-400 font-bold">Waiting for Carrier</span>
+					<AlertCircleIcon class="size-5 text-muted-foreground shrink-0" />
+					<span class="text-base text-warning font-bold">Waiting for Carrier</span>
 				{:else if status?.state === "waiting_for_terminal"}
-					<RefreshCwIcon class="size-5 text-amber-500 shrink-0 animate-spin" />
-					<span class="text-base text-amber-400 font-bold">Waiting for ONT...</span>
+					<RefreshCwIcon class="size-5 text-muted-foreground shrink-0 animate-spin" />
+					<span class="text-base text-warning font-bold">Waiting for the ONT…</span>
 				{:else}
 					<XCircleIcon class="size-5 text-muted-foreground shrink-0" />
-					<span class="text-base text-muted-foreground font-normal">Offline / Idle</span>
+					<span class="text-base text-muted-foreground font-normal">{status && !status.enabled ? "Disabled" : "Disconnected"}</span>
 				{/if}
 			</div>
 		{/snippet}
 
 		{#snippet footer()}
-			<StatCardFooterItem label="Uptime" value={formatUptime(status?.uptime_secs)} color={status?.state === "connected" ? "text-emerald-400" : "text-muted-foreground"} />
+			<StatCardFooterItem label="Uptime" value={formatUptime(status?.uptime_secs)} color={status?.state === "connected" ? "text-foreground" : "text-muted-foreground"} />
 		{/snippet}
 	</StatCard>
 
 	<!-- Card 2: Assigned WAN IP Lease -->
 	<StatCard
-		label="Assigned IP Lease"
+		label="Public Address"
 		icon={GlobeIcon}
-		color="emerald"
 		popover={{
-			title: "IPCP Network Layer",
-			description: "Public IPv4 address and peer gateway allocated by broadband ISP.",
+			title: "Public address",
+			description: "The IPv4 address the ISP gave this session, and its gateway.",
 		}}
-		badge={{
-			text: status?.local_ip ? "IPCP Active" : "Waiting",
-			variant: status?.local_ip ? "online" : "dormant",
-		}}
+		badge={status?.local_ip ? { text: "IPCP Active", variant: "online" } : undefined}
 	>
 		{#snippet valueExtra()}
 			<div class="pt-0.5">
 				{#if status?.local_ip}
-					<span class="text-lg sm:text-xl font-bold font-mono text-emerald-400 truncate block">
+					<span class="text-lg sm:text-xl font-bold font-mono text-foreground truncate block">
 						{status.local_ip}
 					</span>
 				{:else}
-					<span class="text-sm text-muted-foreground font-normal">Waiting for IPCP…</span>
+					<span class="text-sm text-muted-foreground font-normal">{sessionStarting ? "Waiting for IPCP…" : "—"}</span>
 				{/if}
 			</div>
 		{/snippet}
 
 		{#snippet footer()}
 			<StatCardFooterItem label="Gateway Peer" value={status?.peer_ip ?? "—"} />
-			<StatCardFooterItem label="Negotiated MRU" value={status?.mru ? `${status.mru} B` : "1492 B"} />
+			<StatCardFooterItem label="Negotiated MRU" value={status?.mru ? `${status.mru} B` : "—"} />
 		{/snippet}
 	</StatCard>
 
 	<!-- Card 3: Access Concentrator -->
 	<StatCard
-		label="Access Concentrator"
+		label="ISP Server"
 		icon={ServerIcon}
-		color="indigo"
 		popover={{
-			title: "Carrier Access Concentrator",
-			description: "Remote ISP broadband terminal responding to PPPoE discovery (PADI/PADO) packets.",
+			title: "ISP server (access concentrator)",
+			description: "The ISP box that answered this router's PPPoE discovery.",
 		}}
 		badge={{
 			text: formatAuthMethod(status?.auth ?? config?.auth ?? formAuth),
-			variant: "indigo",
+			variant: "dormant",
 		}}
 	>
 		{#snippet valueExtra()}
 			<div class="pt-0.5">
 				<span class="text-base sm:text-lg font-bold text-foreground truncate block" title={status?.ac_name ?? "None"}>
-					{status?.ac_name || (status?.state === "connected" ? "ISP Concentrator" : "Searching…")}
+					{status?.ac_name || (status?.state === "discovering" ? "Searching…" : "—")}
 				</span>
 			</div>
 		{/snippet}

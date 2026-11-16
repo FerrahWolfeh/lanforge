@@ -2,16 +2,12 @@
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Tabs from "$lib/components/ui/tabs";
 	import * as Card from "$lib/components/ui/card";
-	import * as Alert from "$lib/components/ui/alert";
 	import { Button } from "$lib/components/ui/button";
-	import { Switch } from "$lib/components/ui/switch";
-	import { Badge } from "$lib/components/ui/badge";
-	import { Separator } from "$lib/components/ui/separator";
 	import { Spinner } from "$lib/components/ui/spinner";
 	import { toast } from "svelte-sonner";
 	import { onMount, onDestroy } from "svelte";
-	import { fly } from "svelte/transition";
-	import { cubicOut } from "svelte/easing";
+	import { page } from "$app/state";
+	import { replaceState } from "$app/navigation";
 
 	import ShieldIcon from "@lucide/svelte/icons/shield";
 	import ShieldOffIcon from "@lucide/svelte/icons/shield-off";
@@ -76,6 +72,7 @@
 	let committing = $state(false);
 
 	let activeTab = $state("zones");
+	let pendingForward = $state<{ target: string; name?: string } | null>(null);
 	let highlightedZone = $state<string | null>(null);
 
 	// 3-way handshake state
@@ -129,9 +126,11 @@
 				availableInterfaces = setupRes.interfaces;
 			}
 			if (c) {
+				// Capture before replacing serverConfig: the check compares against it
+				const wasDirty = isDirty;
 				serverConfig = c;
 				// Only reset draft if user hasn't made local changes
-				if (!isDirty) {
+				if (!wasDirty) {
 					draft = structuredClone(c);
 				}
 			}
@@ -271,7 +270,24 @@
 	// Lifecycle
 	// ---------------------------------------------------------------------------
 
+	// The prefill dialog lives in the full-mode Port Forward tab: if that tab is never
+	// shown (other modes, read-only user), drop the request instead of popping it later.
+	$effect(() => {
+		if (pendingForward && draft !== null && (draft.mode !== "full" || !canEdit)) {
+			pendingForward = null;
+		}
+	});
+
 	onMount(() => {
+		const forwardTo = page.url.searchParams.get("forward_to");
+		if (forwardTo) {
+			pendingForward = { target: forwardTo, name: page.url.searchParams.get("forward_name") ?? undefined };
+			activeTab = "portforward";
+			const url = new URL(page.url);
+			url.searchParams.delete("forward_to");
+			url.searchParams.delete("forward_name");
+			replaceState(url, page.state);
+		}
 		loadAll();
 		const stopPolling = createPolling(() => loadAll(true), 10_000);
 		return () => {
@@ -287,8 +303,8 @@
 <div class="flex flex-col gap-6 w-full pb-16">
 	<!-- Page Header -->
 	<PageHeader
-		title="Firewall & Security"
-		description="Configure zone policies, inter-zone routing, port forwarding, and kernel acceleration."
+		title="Firewall"
+		description="Zones, port forwards and host rules for traffic in and out of the router."
 		icon={ShieldIcon}
 	>
 		{#snippet badge()}
@@ -362,7 +378,6 @@
 	<!-- Live Status Cards Grid -->
 	<FirewallStatsCards
 		status={fwStatus}
-		{loading}
 		{activeTxId}
 		{rollbackSecsLeft}
 		onAbort={handleAbort}
@@ -404,14 +419,14 @@
 	<!-- Main Content / Mode-Specific Views -->
 	{#if loading && draft === null}
 		<div class="flex flex-col gap-4">
-			<div class="h-10 w-72 bg-muted rounded-xl animate-pulse"></div>
-			<div class="h-64 w-full bg-muted rounded-2xl animate-pulse"></div>
+			<div class="h-10 w-72 bg-muted rounded-lg animate-pulse"></div>
+			<div class="h-64 w-full bg-muted rounded-lg animate-pulse"></div>
 		</div>
 	{:else if draft !== null}
 		{#if draft.mode === "full"}
 			<!-- Full Standalone Router: 5 Tabs -->
 			<Tabs.Root bind:value={activeTab} class="w-full">
-				<Tabs.List class="flex w-full overflow-x-auto justify-start sm:inline-flex sm:w-auto p-1 mb-4 no-scrollbar bg-muted/60 border border-border/50 rounded-xl gap-1">
+				<Tabs.List class="flex w-full overflow-x-auto justify-start sm:inline-flex sm:w-auto p-1 mb-4 no-scrollbar bg-muted/60 border border-border/50 rounded-lg gap-1">
 					<Tabs.Trigger value="zones" class="flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg">
 						<LayersIcon class="size-3.5" />
 						<span>Zones</span>
@@ -462,6 +477,8 @@
 					<PortForwardTab
 						rules={draft.port_forwards}
 						zones={draft.zones}
+						prefill={pendingForward}
+						onPrefillUsed={() => (pendingForward = null)}
 						onUpdate={(port_forwards) => { if (draft) draft = { ...draft, port_forwards }; }}
 					/>
 					</fieldset>
@@ -490,7 +507,7 @@
 		{:else if draft.mode === "minimal"}
 			<!-- Minimal Helper Mode: Notice + Tuning Card -->
 			<div class="flex flex-col gap-4">
-				<div class="rounded-xl border border-primary/30 bg-primary/5 p-4 flex items-start justify-between gap-3 text-foreground">
+				<div class="rounded-lg border border-primary/30 bg-primary/5 p-4 flex items-start justify-between gap-3 text-foreground">
 					<div class="flex items-start gap-2.5">
 						<InfoIcon class="size-4 text-primary mt-0.5 shrink-0" />
 						<div class="flex flex-col gap-1">
@@ -520,7 +537,7 @@
 		{:else}
 			<!-- Disabled Mode -->
 			<Card.Root class="p-8 text-center flex flex-col items-center justify-center gap-3">
-				<div class="flex size-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
+				<div class="flex size-12 items-center justify-center rounded-lg bg-muted text-muted-foreground">
 					<ShieldOffIcon class="size-6" />
 				</div>
 				<div class="flex flex-col gap-1 max-w-md">

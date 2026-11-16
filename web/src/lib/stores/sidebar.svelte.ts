@@ -1,34 +1,43 @@
+const STORAGE_KEY = "lanforge:sidebar:collapsed";
+
+function loadCollapsed(): boolean {
+	try {
+		return localStorage.getItem(STORAGE_KEY) === "true";
+	} catch {
+		// storage blocked: start expanded
+		return false;
+	}
+}
+
 class SidebarState {
 	isCollapsed = $state<boolean>(false);
 
 	constructor() {
 		if (typeof window !== "undefined") {
-			const saved = localStorage.getItem("lanforge:sidebar:collapsed");
-			if (saved !== null) {
-				this.isCollapsed = saved === "true";
-			}
+			this.isCollapsed = loadCollapsed();
+		}
+	}
+
+	private set(collapsed: boolean) {
+		this.isCollapsed = collapsed;
+		if (typeof window === "undefined") return;
+		try {
+			localStorage.setItem(STORAGE_KEY, String(collapsed));
+		} catch {
+			// storage blocked: the choice lasts for this page load
 		}
 	}
 
 	toggle() {
-		this.isCollapsed = !this.isCollapsed;
-		if (typeof window !== "undefined") {
-			localStorage.setItem("lanforge:sidebar:collapsed", String(this.isCollapsed));
-		}
+		this.set(!this.isCollapsed);
 	}
 
 	expand() {
-		this.isCollapsed = false;
-		if (typeof window !== "undefined") {
-			localStorage.setItem("lanforge:sidebar:collapsed", "false");
-		}
+		this.set(false);
 	}
 
 	collapse() {
-		this.isCollapsed = true;
-		if (typeof window !== "undefined") {
-			localStorage.setItem("lanforge:sidebar:collapsed", "true");
-		}
+		this.set(true);
 	}
 }
 

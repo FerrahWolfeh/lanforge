@@ -1,6 +1,5 @@
 <script lang="ts">
   import * as Dialog from "$lib/components/ui/dialog";
-  import * as Card from "$lib/components/ui/card";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Badge } from "$lib/components/ui/badge";
@@ -13,11 +12,12 @@
 
   interface Props {
     open: boolean;
+    zones: FirewallZone[];
     onAdd: (zone: FirewallZone) => void;
     onClose: () => void;
   }
 
-  let { open = $bindable(), onAdd, onClose }: Props = $props();
+  let { open = $bindable(), zones, onAdd, onClose }: Props = $props();
 
   // ── Template definitions ───────────────────────────────────────────────
   interface ZoneTemplate {
@@ -92,6 +92,10 @@
     }
     if (/\s/.test(trimmed)) {
       nameError = "Zone name cannot contain spaces.";
+      return false;
+    }
+    if (zones.some((zone) => zone.name === trimmed.toLowerCase())) {
+      nameError = "A zone with this name already exists.";
       return false;
     }
     nameError = null;
@@ -201,18 +205,18 @@
               <div class="mt-2 flex flex-wrap gap-1">
                 <Badge
                   variant={tpl.input_policy === "Accept" ? "default" : "secondary"}
-                  class="text-[10px]"
+                  class="text-xs"
                 >
                   in: {tpl.input_policy}
                 </Badge>
                 <Badge
                   variant={tpl.forward_policy === "Accept" ? "default" : "secondary"}
-                  class="text-[10px]"
+                  class="text-xs"
                 >
                   fwd: {tpl.forward_policy}
                 </Badge>
                 {#if tpl.mtu_fix}
-                  <Badge variant="outline" class="text-[10px]">MTU fix</Badge>
+                  <Badge variant="outline" class="text-xs">MTU fix</Badge>
                 {/if}
               </div>
             </button>

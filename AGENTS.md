@@ -265,6 +265,9 @@ it holds maintainer- and machine-specific rules and takes precedence over this f
 - A merge into `main` is a release: `git merge --no-ff`, preceded by a `chore: release X.Y.Z` bump commit, tagged
   `vX.Y.Z` on main. Patch = fixes/internal only; minor = a user-visible change, or one that requires swapping CLI
   and daemon together or reinstalling the systemd unit. Stay on `0.x`.
+- **WebUI-only merges** (only `web/` changed) do not bump the workspace: they bump `version` in `web/package.json`
+  (`chore(webui): release X.Y.Z`) and are tagged `lanforge-web-vX.Y.Z` on main. The binary still tells builds
+  apart by commit hash.
 - Merges and version numbers are the maintainer's call: propose the version with the reason, then ask.
 
 ## Running instances

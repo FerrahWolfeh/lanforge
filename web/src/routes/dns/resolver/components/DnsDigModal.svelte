@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { copyToClipboard, errorMessage } from "$lib/utils";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import * as Field from "$lib/components/ui/field";
 	import { Input } from "$lib/components/ui/input";
@@ -47,17 +48,17 @@
 	function getRecordTypeClass(kind: string): string {
 		switch (kind.toUpperCase()) {
 			case "A":
-				return "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30";
+				return "bg-success/10 text-success border-success/30";
 			case "AAAA":
-				return "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/30";
+				return "bg-muted text-muted-foreground border-border";
 			case "CNAME":
-				return "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30";
+				return "bg-warning/10 text-warning border-warning/30";
 			case "MX":
-				return "bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/30";
+				return "bg-warning/10 text-warning border-warning/30";
 			case "TXT":
-				return "bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/30";
+				return "bg-muted text-muted-foreground border-border";
 			case "PTR":
-				return "bg-teal-500/10 text-teal-600 dark:text-teal-400 border-teal-500/30";
+				return "bg-muted text-muted-foreground border-border";
 			default:
 				return "bg-muted text-muted-foreground border-border";
 		}
@@ -73,18 +74,17 @@
 			const res = await dnsQuery(digDomain.trim(), digRecordType);
 			digResult = res;
 			toast.success(`DNS ${digRecordType} lookup completed`);
-		} catch (err: any) {
-			toast.error(`DNS lookup failed: ${err.message || "Unknown error"}`);
+		} catch (err) {
+			toast.error(`DNS lookup failed: ${errorMessage(err, "Unknown error")}`);
 		} finally {
 			digLoading = false;
 		}
 	}
 
-	function copyResult() {
+	async function copyResult() {
 		if (!digResult) return;
-		navigator.clipboard.writeText(JSON.stringify(digResult, null, 2));
+		if (!(await copyToClipboard(JSON.stringify(digResult, null, 2), "query output"))) return;
 		copied = true;
-		toast.success("Query output copied to clipboard");
 		setTimeout(() => (copied = false), 2000);
 	}
 </script>
@@ -93,7 +93,7 @@
 	<Dialog.Content class="sm:max-w-lg">
 		<Dialog.Header>
 			<Dialog.Title class="flex items-center gap-2">
-				<ZapIcon class="size-5 text-amber-400" />
+				<ZapIcon class="size-5 text-warning" />
 				<span>Interactive DNS Dig Lookup</span>
 			</Dialog.Title>
 		</Dialog.Header>
@@ -129,7 +129,7 @@
 								class={[
 									"rounded border px-2 py-1 font-mono text-xs font-medium transition-colors cursor-pointer",
 									digRecordType === rtype
-										? "bg-primary text-primary-foreground border-primary shadow-xs"
+										? "bg-primary text-primary-foreground border-primary"
 										: "bg-muted/40 border-border text-muted-foreground hover:text-foreground",
 								].join(" ")}
 								onclick={() => (digRecordType = rtype)}
@@ -171,48 +171,48 @@
 				digResult.result?.toLowerCase().includes("block")}
 			{@const records = Array.isArray(digResult.records) ? digResult.records : []}
 
-			<div class="flex flex-col gap-3 rounded-xl border border-border/70 bg-card p-3.5 shadow-sm mt-1">
+			<div class="flex flex-col gap-3 rounded-lg border border-border/70 bg-card p-3.5 mt-1">
 				<!-- Header Status -->
 				<div class="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-2.5">
 					<div class="flex items-center gap-2">
 						{#if isCachedBlock}
-							<div class="flex size-6 items-center justify-center rounded-full bg-orange-500/15 text-orange-500">
+							<div class="flex size-6 items-center justify-center rounded-full bg-warning/15 text-warning">
 								<ShieldAlertIcon class="size-3.5" />
 							</div>
-							<span class="font-semibold text-orange-500 text-xs">Sinkholed (Cached Block)</span>
+							<span class="font-semibold text-warning text-xs">Sinkholed (Cached Block)</span>
 						{:else if isBlocked}
-							<div class="flex size-6 items-center justify-center rounded-full bg-rose-500/15 text-rose-500">
+							<div class="flex size-6 items-center justify-center rounded-full bg-danger/15 text-danger">
 								<ShieldAlertIcon class="size-3.5" />
 							</div>
-							<span class="font-semibold text-rose-500 text-xs">Sinkholed (Blocked)</span>
+							<span class="font-semibold text-danger text-xs">Sinkholed (Blocked)</span>
 						{:else}
-							<div class="flex size-6 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-500">
+							<div class="flex size-6 items-center justify-center rounded-full bg-success/15 text-success">
 								<CheckCircle2Icon class="size-3.5" />
 							</div>
 							<span class="font-semibold text-foreground text-xs">Resolution Successful</span>
 						{/if}
 					</div>
 
-					<div class="flex items-center gap-1.5 font-mono text-[11px]">
-						<Badge variant="outline" class="h-5 px-1.5 font-mono text-[10px] gap-1">
+					<div class="flex items-center gap-1.5 font-mono text-xs">
+						<Badge variant="outline" class="h-5 px-1.5 font-mono text-xs gap-1">
 							<ClockIcon class="size-2.5 text-muted-foreground" />
 							{digResult.latency_ms ?? 0}ms
 						</Badge>
 						<Badge
 							variant="outline"
 							class={digResult.authoritative
-								? "h-5 px-1.5 border-emerald-500/30 text-emerald-500 bg-emerald-500/5 text-[10px]"
-								: "h-5 px-1.5 text-muted-foreground text-[10px]"}
+								? "h-5 px-1.5 border-success/30 text-success bg-success/5 text-xs"
+								: "h-5 px-1.5 text-muted-foreground text-xs"}
 						>
 							{digResult.authoritative ? "Authoritative" : "Non-Authoritative"}
 						</Badge>
 						<Badge
 							variant="secondary"
 							class={isCachedBlock
-								? "h-5 px-1.5 text-[10px] bg-orange-500/10 text-orange-600 dark:text-orange-400 border border-orange-500/20"
+								? "h-5 px-1.5 text-xs bg-warning/10 text-warning border border-warning/20"
 								: isBlocked
-									? "h-5 px-1.5 text-[10px] bg-rose-500/10 text-rose-500 border border-rose-500/20"
-									: "h-5 px-1.5 text-[10px]"}
+									? "h-5 px-1.5 text-xs bg-danger/10 text-danger border border-danger/20"
+									: "h-5 px-1.5 text-xs"}
 						>
 							{digResult.result || "Resolved"}
 						</Badge>
@@ -223,36 +223,36 @@
 				{#if isBlocked}
 					<div
 						class="rounded-lg border p-2.5 text-xs {isCachedBlock
-							? 'border-orange-500/25 bg-orange-500/10 text-orange-600 dark:text-orange-400'
-							: 'border-rose-500/25 bg-rose-500/10 text-rose-600 dark:text-rose-400'}"
+							? 'border-warning/25 bg-warning/10 text-warning'
+							: 'border-danger/25 bg-danger/10 text-danger'}"
 					>
 						<p class="font-medium">
 							{isCachedBlock
 								? "Domain blocked by Lanforge Adblock (served from cache)."
 								: "Domain blocked by Lanforge Adblock."}
 						</p>
-						<p class="text-[11px] opacity-80 mt-0.5">Queries to this domain are intercepted and resolved to 0.0.0.0 or NXDOMAIN by active blocklist rules.</p>
+						<p class="text-xs opacity-80 mt-0.5">Queries to this domain are intercepted and resolved to 0.0.0.0 or NXDOMAIN by active blocklist rules.</p>
 					</div>
 				{/if}
 
 				<!-- Answers List -->
 				{#if records.length > 0}
 					<div class="flex flex-col gap-1.5">
-						<span class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+						<span class="text-xs font-medium text-muted-foreground">
 							Answer Section ({records.length} {records.length === 1 ? "record" : "records"})
 						</span>
 						<div class="flex flex-col divide-y divide-border/40 rounded-lg border bg-muted/20 overflow-hidden">
 							{#each records as record}
 								<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 font-mono text-xs hover:bg-muted/30 transition-colors">
 									<div class="flex items-center gap-2 min-w-0">
-										<Badge variant="outline" class={["text-[10px] font-bold px-1.5 py-0 h-5 shrink-0", getRecordTypeClass(record.kind || digRecordType)].join(" ")}>
+										<Badge variant="outline" class={["text-xs font-bold px-1.5 py-0 h-5 shrink-0", getRecordTypeClass(record.kind || digRecordType)].join(" ")}>
 											{record.kind || digRecordType}
 										</Badge>
 										<span class="text-foreground font-semibold truncate select-all">{record.data}</span>
 									</div>
-									<div class="flex items-center gap-3 text-[11px] text-muted-foreground shrink-0 justify-between sm:justify-end">
+									<div class="flex items-center gap-3 text-xs text-muted-foreground shrink-0 justify-between sm:justify-end">
 										<span class="text-xs text-muted-foreground truncate hidden md:inline">{record.name}</span>
-										<span class="rounded bg-muted px-1.5 py-0.5 text-[10px]">TTL {record.ttl ?? 0}s</span>
+										<span class="rounded bg-muted px-1.5 py-0.5 text-xs">TTL {record.ttl ?? 0}s</span>
 									</div>
 								</div>
 							{/each}
@@ -283,8 +283,8 @@
 						onclick={copyResult}
 					>
 						{#if copied}
-							<CheckIcon class="size-3 text-emerald-400" />
-							<span class="text-emerald-400">Copied</span>
+							<CheckIcon class="size-3 text-success" />
+							<span class="text-success">Copied</span>
 						{:else}
 							<CopyIcon class="size-3" />
 							<span>Copy JSON</span>
@@ -294,7 +294,7 @@
 
 				<!-- Collapsible Raw JSON -->
 				{#if showRawJson}
-					<pre class="rounded-lg bg-muted/60 border p-3 font-mono text-[11px] text-foreground overflow-auto max-h-48 whitespace-pre-wrap break-all leading-relaxed select-all"><code>{JSON.stringify(digResult, null, 2)}</code></pre>
+					<pre class="rounded-lg bg-muted/60 border p-3 font-mono text-xs text-foreground overflow-auto max-h-48 whitespace-pre-wrap break-all leading-relaxed select-all"><code>{JSON.stringify(digResult, null, 2)}</code></pre>
 				{/if}
 			</div>
 		{/if}

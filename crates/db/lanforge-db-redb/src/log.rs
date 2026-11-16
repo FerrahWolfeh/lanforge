@@ -13,6 +13,7 @@ use lanforge_types::network::dns::{
     DnsLifetimeStats, DnsRecordType, FilterMatch, TransportProtocol,
 };
 use lanforge_types::network::{QueryLogEntry, QueryResult, TrafficHistorySample};
+use lanforge_types::storage::{DnsClientActivity, DnsDomainActivity, DnsDomainClientCount};
 use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata};
 use std::cmp::Reverse;
 use std::collections::hash_map::Entry;
@@ -308,6 +309,42 @@ impl RedbDatabase {
             self.prune_logs(cutoff)?;
         }
         Ok(())
+    }
+}
+
+/// Empty `(bucket start, queries, blocked)` slots for every bucket from `since_secs` to
+/// `now_secs`, with the bucket width (at least 1) and the first bucket's start.
+fn rate_buckets(
+    since_secs: u64,
+    now_secs: u64,
+    bucket_secs: u64,
+) -> (u64, u64, Vec<(u64, u64, u64)>) {
+    let bucket_secs = bucket_secs.max(1);
+    let first = since_secs / bucket_secs * bucket_secs;
+    let rate = (first..=now_secs.max(first))
+        .step_by(usize::try_from(bucket_secs).unwrap_or(usize::MAX))
+        .map(|start| (start, 0, 0))
+        .collect();
+    (bucket_secs, first, rate)
+}
+
+/// Adds `n` queries (blocked ones when `is_blocked`) to the slot of `timestamp`.
+fn count_in_bucket(
+    rate: &mut [(u64, u64, u64)],
+    first: u64,
+    bucket_secs: u64,
+    timestamp: u64,
+    n: u64,
+    is_blocked: bool,
+) {
+    let slot = usize::try_from(timestamp.saturating_sub(first) / bucket_secs)
+        .ok()
+        .and_then(|i| rate.get_mut(i));
+    if let Some(slot) = slot {
+        slot.1 += n;
+        if is_blocked {
+            slot.2 += n;
+        }
     }
 }
 
@@ -1127,6 +1164,156 @@ impl LogStore for RedbDatabase {
                 Ok((key.value(), stats.blocked))
             })
             .collect()
+    }
+
+    fn get_dns_client_activity(
+        &self,
+        since_secs: u64,
+        now_secs: u64,
+        bucket_secs: u64,
+        limit: usize,
+        is_client: &mut dyn FnMut(IpAddr, Option<MacAddr>) -> bool,
+    ) -> Result<DnsClientActivity, DbError> {
+        let (bucket_secs, first, mut rate) = rate_buckets(since_secs, now_secs, bucket_secs);
+        let mut activity = DnsClientActivity::default();
+        let mut answered = HashMap::<Arc<str>, u64>::new();
+        let mut blocked = HashMap::<Arc<str>, u64>::new();
+
+        let txn = self
+            .db
+            .begin_read()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
+        match txn.open_table(TABLE_DNS_QUERIES) {
+            Ok(table) => {
+                for item in table
+                    .range((since_secs, 0)..=(now_secs, u64::MAX))
+                    .map_err(|e| DbError::Backend(e.to_string()))?
+                {
+                    let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
+                    let entry = match decode_query(val.value()) {
+                        Ok(entry) => entry,
+                        Err(e) => {
+                            tracing::warn!("Skipping unreadable DNS query log entry: {e}");
+                            continue;
+                        }
+                    };
+                    if !is_client(entry.src_ip, entry.src_mac) {
+                        continue;
+                    }
+                    let n = u64::from(entry.repeats);
+                    let is_blocked = matches!(
+                        entry.result,
+                        QueryResult::Blocked | QueryResult::CachedBlock
+                    );
+                    activity.total += n;
+                    count_in_bucket(
+                        &mut rate,
+                        first,
+                        bucket_secs,
+                        entry.timestamp,
+                        n,
+                        is_blocked,
+                    );
+                    let counts = if is_blocked {
+                        activity.blocked += n;
+                        &mut blocked
+                    } else {
+                        &mut answered
+                    };
+                    *counts.entry(entry.domain).or_default() += n;
+                }
+            }
+            Err(redb::TableError::TableDoesNotExist(_)) => {}
+            Err(e) => return Err(DbError::Backend(e.to_string())),
+        }
+
+        let top = |counts: HashMap<Arc<str>, u64>| {
+            let mut rows: Vec<(String, u64)> = counts
+                .into_iter()
+                .map(|(domain, count)| (domain.to_string(), count))
+                .collect();
+            rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            rows.truncate(limit);
+            rows
+        };
+        activity.rate = rate;
+        activity.top_domains = top(answered);
+        activity.top_blocked_domains = top(blocked);
+        Ok(activity)
+    }
+
+    fn get_dns_domain_activity(
+        &self,
+        since_secs: u64,
+        now_secs: u64,
+        bucket_secs: u64,
+        domain: &str,
+    ) -> Result<DnsDomainActivity, DbError> {
+        let (bucket_secs, first, mut rate) = rate_buckets(since_secs, now_secs, bucket_secs);
+        let mut activity = DnsDomainActivity::default();
+        let mut clients = HashMap::<(IpAddr, Option<MacAddr>), DnsDomainClientCount>::new();
+
+        let txn = self
+            .db
+            .begin_read()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
+        match txn.open_table(TABLE_DNS_QUERIES) {
+            Ok(table) => {
+                for item in table
+                    .range((since_secs, 0)..=(now_secs, u64::MAX))
+                    .map_err(|e| DbError::Backend(e.to_string()))?
+                {
+                    let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
+                    let entry = match decode_query(val.value()) {
+                        Ok(entry) => entry,
+                        Err(e) => {
+                            tracing::warn!("Skipping unreadable DNS query log entry: {e}");
+                            continue;
+                        }
+                    };
+                    if &*entry.domain != domain {
+                        continue;
+                    }
+                    let n = u64::from(entry.repeats);
+                    let is_blocked = matches!(
+                        entry.result,
+                        QueryResult::Blocked | QueryResult::CachedBlock
+                    );
+                    activity.total += n;
+                    if is_blocked {
+                        activity.blocked += n;
+                    }
+                    activity.last_seen = activity.last_seen.max(Some(entry.timestamp));
+                    count_in_bucket(
+                        &mut rate,
+                        first,
+                        bucket_secs,
+                        entry.timestamp,
+                        n,
+                        is_blocked,
+                    );
+                    let row = clients.entry((entry.src_ip, entry.src_mac)).or_insert(
+                        DnsDomainClientCount {
+                            ip: entry.src_ip,
+                            mac: entry.src_mac,
+                            total: 0,
+                            blocked: 0,
+                            last_seen: 0,
+                        },
+                    );
+                    row.total += n;
+                    if is_blocked {
+                        row.blocked += n;
+                    }
+                    row.last_seen = row.last_seen.max(entry.timestamp);
+                }
+            }
+            Err(redb::TableError::TableDoesNotExist(_)) => {}
+            Err(e) => return Err(DbError::Backend(e.to_string())),
+        }
+        activity.rate = rate;
+        activity.clients = clients.into_values().collect();
+        Ok(activity)
     }
 
     fn load_dns_lifetime_stats(&self) -> Result<DnsLifetimeStats, DbError> {

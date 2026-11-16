@@ -2,8 +2,8 @@
 	import { page } from "$app/state";
 	import { sidebarState } from "$lib/stores/sidebar.svelte";
 	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
-	import { auth } from "$lib/stores/auth.svelte";
-	import type { Permission } from "$lib/api/types";
+	import { isNavDebugOnly, isNavVisible, type NavGate } from "$lib/navGate";
+	import { formatBuild } from "$lib/utils";
 	import NavUser from "./NavUser.svelte";
 	import type { Component } from "svelte";
 
@@ -19,18 +19,17 @@
 	import HardDriveDownloadIcon from "@lucide/svelte/icons/hard-drive-download";
 	import DatabaseIcon from "@lucide/svelte/icons/database";
 	import UsersIcon from "@lucide/svelte/icons/users";
+	import ShieldBanIcon from "@lucide/svelte/icons/shield-ban";
+	import CpuIcon from "@lucide/svelte/icons/cpu";
 
 	interface Props {
 		onNavigate?: () => void;
 	}
 
-	interface NavItem {
+	interface NavItem extends NavGate {
 		title: string;
 		href: string;
 		icon: Component<Record<string, unknown>>;
-		cap?: string | string[];
-		/** Hidden from sessions the server would refuse the page's reads to. */
-		perm?: Permission;
 	}
 
 	interface NavGroup {
@@ -42,45 +41,57 @@
 
 	const currentPath = $derived(page.url.pathname as string);
 	const isCollapsed = $derived(onNavigate ? false : sidebarState.isCollapsed);
+	const shortVersion = $derived(capabilitiesState.version?.split("+", 1)[0] ?? null);
+	const subtitle = $derived(
+		[page.url.hostname, shortVersion ? `v${shortVersion}` : null]
+			.filter(Boolean)
+			.join(" · ") || "Router"
+	);
+	const subtitleTitle = $derived(
+		[page.url.hostname, formatBuild(capabilitiesState.version) || null]
+			.filter(Boolean)
+			.join(" · ") || subtitle
+	);
 
+	// Grouped by what the admin is doing, not by daemon module; URLs are unchanged.
 	const navGroups: NavGroup[] = [
 		{
 			header: "OVERVIEW",
 			items: [
 				{ title: "Dashboard", href: "/", icon: LayoutDashboardIcon },
+				{ title: "Devices", href: "/network/devices", icon: MonitorIcon },
 			],
 		},
 		{
-			header: "NETWORK",
+			header: "INTERNET",
 			items: [
-				{ title: "Devices", href: "/network/devices", icon: MonitorIcon },
+				{ title: "PPPoE WAN", href: "/network/pppoe", icon: PlugZapIcon, cap: "pppoe" },
 				{ title: "Firewall", href: "/firewall", icon: ShieldIcon, cap: "firewall" },
 				{ title: "Traffic & SQM", href: "/network/traffic", icon: SlidersHorizontalIcon, cap: "traffic" },
-				{ title: "PPPoE WAN", href: "/network/pppoe", icon: PlugZapIcon, cap: "pppoe" },
+			],
+		},
+		{
+			header: "LAN",
+			items: [
+				{ title: "DHCP", href: "/dhcp/leases", icon: ServerIcon, cap: ["dhcp_v4", "dhcp_v6"] },
 				{ title: "IPv6 RA", href: "/network/ra", icon: WifiIcon, cap: "ra" },
+				{ title: "TFTP", href: "/tftp", icon: HardDriveDownloadIcon, cap: "tftp" },
 			],
 		},
 		{
 			header: "DNS",
 			items: [
-				{ title: "DNS Resolver", href: "/dns/resolver", icon: GlobeIcon, cap: "dns" },
+				{ title: "Resolver", href: "/dns/resolver", icon: GlobeIcon, cap: "dns" },
 				{ title: "Query Log", href: "/dns/log", icon: ActivityIcon, cap: "dns" },
-				{ title: "Adblock", href: "/dns/adblock", icon: ShieldIcon, cap: "adblock" },
-			],
-		},
-		{
-			header: "DHCP & BOOT",
-			items: [
-				{ title: "DHCP Server", href: "/dhcp/leases", icon: ServerIcon, cap: ["dhcp_v4", "dhcp_v6"] },
-				{ title: "TFTP Server", href: "/tftp", icon: HardDriveDownloadIcon, cap: "tftp" },
+				{ title: "Adblock", href: "/dns/adblock", icon: ShieldBanIcon, cap: "adblock" },
 			],
 		},
 		{
 			header: "SYSTEM",
 			items: [
-				{ title: "System Status", href: "/system", icon: ServerIcon },
+				{ title: "Status & Services", href: "/system", icon: CpuIcon },
 				{ title: "Database", href: "/system/database", icon: DatabaseIcon },
-				{ title: "Users & Access", href: "/system/users", icon: UsersIcon, perm: "admin" },
+				{ title: "Users & Tokens", href: "/system/users", icon: UsersIcon, perm: "admin" },
 			],
 		},
 	];
@@ -89,14 +100,7 @@
 		navGroups
 			.map((group) => ({
 				...group,
-				items: group.items.filter((item) => {
-					if (item.perm && !auth.can(item.perm)) return false;
-					if (!item.cap) return true;
-					if (Array.isArray(item.cap)) {
-						return item.cap.some((c) => capabilitiesState.isEnabled(c));
-					}
-					return capabilitiesState.isEnabled(item.cap);
-				}),
+				items: group.items.filter(isNavVisible),
 			}))
 			.filter((group) => group.items.length > 0)
 	);
@@ -121,6 +125,7 @@
 			return (
 				currentPath === "/dns" ||
 				currentPath.startsWith("/dns/resolver") ||
+				currentPath.startsWith("/dns/domains") ||
 				currentPath.startsWith("/dns/cache") ||
 				currentPath.startsWith("/dns/rewrites")
 			);
@@ -143,7 +148,7 @@
 			aria-label="Lanforge Home"
 		>
 			<div class="size-10 shrink-0 flex items-center justify-center">
-				<div class="size-8 rounded-xl bg-primary flex items-center justify-center text-primary-foreground shadow-xs">
+				<div class="size-8 rounded-lg bg-brand-gradient flex items-center justify-center text-white">
 					<WifiIcon class="size-4.5" />
 				</div>
 			</div>
@@ -155,8 +160,8 @@
 				<span class="text-sm font-bold tracking-tight text-foreground flex items-center font-sans">
 					Lanforge
 				</span>
-				<span class="text-[10px] text-muted-foreground font-normal">
-					Network Orchestrator
+				<span class="text-xs text-muted-foreground font-mono truncate" title={subtitleTitle}>
+					{subtitle}
 				</span>
 			</div>
 		</a>
@@ -172,7 +177,7 @@
 						? 'opacity-0 max-h-0 mb-0 pointer-events-none'
 						: 'opacity-100 max-h-8 mb-1.5 px-2'}"
 				>
-					<div class="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase whitespace-nowrap font-mono">
+					<div class="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase whitespace-nowrap">
 						{group.header}
 					</div>
 				</div>
@@ -189,28 +194,21 @@
 					{#each group.items as item}
 						{@const active = isActive(item.href)}
 						{@const Icon = item.icon}
-						{@const isDbgOnly = capabilitiesState.debugMode && item.cap && (
-							Array.isArray(item.cap)
-								? !capabilitiesState.isAnyActualEnabled(item.cap)
-								: !capabilitiesState.isActualEnabled(item.cap)
-						)}
+						{@const isDbgOnly = isNavDebugOnly(item)}
 
 						<a
 							href={item.href}
 							onclick={onNavigate}
 							title={isCollapsed ? (isDbgOnly ? `${item.title} (Debug: Disabled on daemon)` : item.title) : undefined}
-							class="group relative flex items-center h-10 w-full rounded-xl text-xs font-medium overflow-hidden transition-all duration-200 ease-out active:scale-[0.98] transform-gpu {active
-								? 'bg-primary text-primary-foreground font-semibold shadow-xs shadow-primary/20'
+							class="group relative flex items-center h-9 w-full rounded-md text-[13px] font-medium overflow-hidden transition-colors duration-200 ease-out {active
+								? 'bg-selected text-selected-foreground font-semibold'
 								: 'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'}"
 							aria-label={item.title}
 						>
-							{#if active}
-								<span class="absolute left-1 top-2.5 bottom-2.5 w-1 rounded-full bg-primary-foreground/90 transition-all duration-200"></span>
-							{/if}
-							<div class="size-10 shrink-0 flex items-center justify-center">
+							<div class="size-9 shrink-0 flex items-center justify-center">
 								<Icon
-									class="size-4 shrink-0 transition-transform duration-200 ease-out group-hover:scale-110 {active
-										? 'text-primary-foreground'
+									class="size-4 shrink-0 {active
+										? 'text-selected-foreground'
 										: 'text-muted-foreground group-hover:text-sidebar-accent-foreground'}"
 								/>
 							</div>
@@ -223,7 +221,7 @@
 							</span>
 							{#if isDbgOnly && !isCollapsed}
 								<span
-									class="ml-auto mr-2.5 rounded bg-amber-500/15 px-1 py-0.5 text-[9px] font-mono font-medium text-amber-500 border border-amber-500/30 shrink-0"
+									class="ml-auto mr-2.5 rounded bg-warning/15 px-1 py-0.5 text-[10px] font-mono font-medium text-warning border border-warning/30 shrink-0"
 									title="Disabled on daemon, visible due to dev capabilities override"
 								>
 									dbg

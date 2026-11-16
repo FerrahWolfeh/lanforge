@@ -7,6 +7,7 @@
 	import SlidersIcon from "@lucide/svelte/icons/sliders";
 	import PlusIcon from "@lucide/svelte/icons/plus";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
+	import { toast } from "svelte-sonner";
 
 	let {
 		v4RawOptions = $bindable<Array<{ code: number; value: string }>>([]),
@@ -21,8 +22,22 @@
 	let newRawV6Code = $state<number | "">("");
 	let newRawV6Value = $state("");
 
+	// Returns true when the code is a whole number in 1..=max and the payload is not empty.
+	function validRaw(code: number | "", value: string, max: number) {
+		if (typeof code !== "number" || !Number.isInteger(code) || code < 1 || code > max) {
+			toast.error(`Option code must be a whole number from 1 to ${max}`);
+			return false;
+		}
+		if (!value.trim()) {
+			toast.error("Option payload cannot be empty");
+			return false;
+		}
+		return true;
+	}
+
 	function addV4() {
-		if (typeof newRawV4Code === "number" && newRawV4Code > 0 && newRawV4Value.trim()) {
+		// DHCPv4 codes are one octet; 0 (pad) and 255 (end) are reserved (RFC 2132).
+		if (validRaw(newRawV4Code, newRawV4Value, 254) && typeof newRawV4Code === "number") {
 			v4RawOptions = [
 				...v4RawOptions.filter((o) => o.code !== newRawV4Code),
 				{ code: newRawV4Code, value: newRawV4Value.trim() },
@@ -37,7 +52,8 @@
 	}
 
 	function addV6() {
-		if (typeof newRawV6Code === "number" && newRawV6Code > 0 && newRawV6Value.trim()) {
+		// DHCPv6 option codes are 16 bits (RFC 8415).
+		if (validRaw(newRawV6Code, newRawV6Value, 65535) && typeof newRawV6Code === "number") {
 			v6RawOptions = [
 				...v6RawOptions.filter((o) => o.code !== newRawV6Code),
 				{ code: newRawV6Code, value: newRawV6Value.trim() },
@@ -52,10 +68,10 @@
 	}
 </script>
 
-<Card.Root class="border-border/80 shadow-sm overflow-hidden">
+<Card.Root class="border-border/80 overflow-hidden">
 	<Card.Header class="bg-muted/20 border-b pb-4">
 		<div class="flex items-center gap-2.5">
-			<SlidersIcon class="size-5 text-emerald-500" />
+			<SlidersIcon class="size-5 text-muted-foreground" />
 			<div>
 				<Card.Title class="text-base font-bold">Custom Raw DHCP Options</Card.Title>
 				<Card.Description class="text-xs">
@@ -70,7 +86,7 @@
 			<!-- IPv4 Raw Options -->
 			<div class="flex flex-col gap-3">
 				<div class="flex items-center gap-2">
-					<Badge variant="outline" class="font-mono text-[10px] text-blue-500 border-blue-500/30">
+					<Badge variant="outline" class="font-mono text-xs text-muted-foreground border-muted-foreground/30">
 						IPv4
 					</Badge>
 					<span class="text-xs font-bold text-foreground">Raw Option Codes</span>
@@ -131,7 +147,7 @@
 			<!-- IPv6 Raw Options -->
 			<div class="flex flex-col gap-3">
 				<div class="flex items-center gap-2">
-					<Badge variant="outline" class="font-mono text-[10px] text-purple-500 border-purple-500/30">
+					<Badge variant="outline" class="font-mono text-xs text-muted-foreground border-muted-foreground/30">
 						IPv6
 					</Badge>
 					<span class="text-xs font-bold text-foreground">Raw Option Codes</span>

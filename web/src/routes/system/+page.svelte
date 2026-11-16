@@ -6,52 +6,31 @@
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import { Separator } from "$lib/components/ui/separator";
 	import * as AlertDialog from "$lib/components/ui/alert-dialog";
-	import { status, scan, reload, controlService } from "$lib/api/client";
+	import { status, scan, reload } from "$lib/api/client";
 	import { normalizeServices, type StatusResponse } from "$lib/api/types";
-	import { getServiceMeta } from "$lib/services";
+	import { degradedReason, getServiceMeta } from "$lib/services";
 	import { formatBytes, formatBuild, formatUptime, formatIpv6Prefix } from "$lib/utils";
 	import InfoPopover from "$lib/components/InfoPopover.svelte";
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
 	import ZapIcon from "@lucide/svelte/icons/zap";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
-	import RotateCwIcon from "@lucide/svelte/icons/rotate-cw";
-	import PlayIcon from "@lucide/svelte/icons/play";
-	import SquareIcon from "@lucide/svelte/icons/square";
-	import SlidersIcon from "@lucide/svelte/icons/sliders";
 	import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
-	import ExternalLinkIcon from "@lucide/svelte/icons/external-link";
-	import Loader2Icon from "@lucide/svelte/icons/loader-2";
 	import HardDriveIcon from "@lucide/svelte/icons/hard-drive";
 	import NetworkIcon from "@lucide/svelte/icons/network";
 	import CpuIcon from "@lucide/svelte/icons/cpu";
-	import CheckCircleIcon from "@lucide/svelte/icons/check-circle";
-	import XCircleIcon from "@lucide/svelte/icons/x-circle";
-	import LoaderIcon from "@lucide/svelte/icons/loader";
 
 	import ServerIcon from "@lucide/svelte/icons/server";
-	import GlobeIcon from "@lucide/svelte/icons/globe";
-	import RadioIcon from "@lucide/svelte/icons/radio";
-	import FolderIcon from "@lucide/svelte/icons/folder";
-	import ActivityIcon from "@lucide/svelte/icons/activity";
-	import LayersIcon from "@lucide/svelte/icons/layers";
-	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import NavTabs from "$lib/components/NavTabs.svelte";
+	import { systemTabs } from "./tabs";
 	import PageHeader from "$lib/components/PageHeader.svelte";
 	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
 	import type { ServerCapabilities } from "$lib/api/types";
 
-	import StopImpactDialog from "$lib/components/StopImpactDialog.svelte";
 	import LogLevelCard from "./components/LogLevelCard.svelte";
-	let stopDialog = $state<StopImpactDialog>();
 
 	// Scan, reload and service control are admin-only on the server.
 	const isAdmin = $derived(auth.can("admin"));
-
-	const systemTabs: NavTabItem[] = [
-		{ label: "System Status", href: "/system", icon: ServerIcon },
-		{ label: "Services & Daemons", href: "/system/services", icon: LayersIcon },
-		{ label: "Event Stream", href: "/system/events", icon: ActivityIcon },
-	];
 
 	let data = $state<StatusResponse | null>(null);
 	const serverCaps = $derived<ServerCapabilities | null>(
@@ -64,37 +43,15 @@
 	let loading = $state(true);
 	let reloading = $state(false);
 	let scanning = $state(false);
-	let actionLoading = $state<Record<string, string | null>>({});
 
-	async function executeServiceAction(id: string, action: "Start" | "Stop" | "Restart") {
-		if (action === "Stop") {
-			try {
-				if (!(await stopDialog?.confirmStop(id))) return;
-			} catch (err) {
-				toast.error(`Could not check what stopping '${id}' affects: ${err instanceof Error ? err.message : String(err)}`);
-				return;
-			}
-		}
-		actionLoading[id] = action;
-		try {
-			await controlService(id, action);
-			toast.success(`Service '${id}' received ${action.toLowerCase()} command`);
-			setTimeout(async () => {
-				await loadStatus();
-				actionLoading[id] = null;
-			}, 750);
-		} catch (err) {
-			actionLoading[id] = null;
-			toast.error(`Failed to ${action.toLowerCase()} service: ${err instanceof Error ? err.message : String(err)}`);
-		}
-	}
-
-	async function loadStatus() {
+	async function loadStatus(): Promise<boolean> {
 		loading = true;
 		try {
 			data = await status();
+			return true;
 		} catch {
 			toast.error("Could not fetch system status");
+			return false;
 		} finally {
 			loading = false;
 		}
@@ -104,8 +61,7 @@
 		scanning = true;
 		try {
 			await scan();
-			await loadStatus();
-			toast.success("System status refreshed");
+			if (await loadStatus()) toast.success("System status refreshed");
 		} catch {
 			toast.error("Failed to refresh status");
 		} finally {
@@ -129,41 +85,6 @@
 
 	const serviceList = $derived(normalizeServices(data));
 
-	function serviceIcon(name: string, id?: string) {
-		const key = (id || name || "").toLowerCase();
-		if (key.includes("dns") || key.includes("dot") || key.includes("doq")) return GlobeIcon;
-		if (key.includes("dhcp")) return ServerIcon;
-		if (key.includes("ra") || key.includes("router")) return NetworkIcon;
-		if (key.includes("db") || key.includes("database")) return HardDriveIcon;
-		if (key.includes("tftp")) return FolderIcon;
-		if (key.includes("pppoe")) return ZapIcon;
-		if (key.includes("discovery") || key.includes("mdns") || key.includes("ifmon") || key.includes("neighbor")) return RadioIcon;
-		return CpuIcon;
-	}
-
-	function stateIcon(state: string) {
-		const s = (state || "").toLowerCase();
-		if (s === "online" || s === "active") return CheckCircleIcon;
-		if (s === "starting") return LoaderIcon;
-		return XCircleIcon;
-	}
-
-	function stateColor(state: string) {
-		const s = (state || "").toLowerCase();
-		if (s === "online" || s === "active") return "text-emerald-500";
-		if (s === "starting") return "text-amber-500";
-		if (s === "inactive" || s === "offline") return "text-muted-foreground";
-		return "text-destructive";
-	}
-
-	function stateBadgeVariant(state: string): "default" | "secondary" | "outline" | "destructive" {
-		const s = (state || "").toLowerCase();
-		if (s === "online" || s === "active") return "default";
-		if (s === "starting") return "secondary";
-		if (s === "inactive" || s === "offline") return "outline";
-		return "destructive";
-	}
-
 </script>
 
 <svelte:head>
@@ -173,7 +94,7 @@
 <div class="flex flex-col gap-6 w-full pb-12">
 	<PageHeader
 		title="System"
-		description="Daemon status, hardware resources, and service operations."
+		description="Daemon version, uptime, memory and logging."
 		icon={ServerIcon}
 	>
 	{#snippet actions()}
@@ -247,7 +168,7 @@
 	<Card.Root>
 		<Card.Header class="pb-2">
 			<Card.Title class="flex items-center gap-2 text-sm font-medium">
-				<ZapIcon class="text-green-400 size-4" />
+				<ZapIcon class="text-muted-foreground size-4" />
 				Daemon
 			</Card.Title>
 		</Card.Header>
@@ -272,7 +193,7 @@
 	<Card.Root>
 		<Card.Header class="pb-2">
 			<Card.Title class="flex items-center gap-2 text-sm font-medium">
-				<NetworkIcon class="text-blue-400 size-4" />
+				<NetworkIcon class="text-muted-foreground size-4" />
 				Network
 			</Card.Title>
 		</Card.Header>
@@ -327,7 +248,7 @@
 	<Card.Root>
 		<Card.Header class="pb-2">
 			<Card.Title class="flex items-center gap-2 text-sm font-medium">
-				<HardDriveIcon class="text-indigo-400 size-4" />
+				<HardDriveIcon class="text-muted-foreground size-4" />
 				Database
 			</Card.Title>
 		</Card.Header>
@@ -367,7 +288,7 @@
 	<Card.Root>
 		<Card.Header class="pb-2">
 			<Card.Title class="flex items-center gap-2 text-sm font-medium">
-				<CpuIcon class="text-orange-400 size-4" />
+				<CpuIcon class="text-muted-foreground size-4" />
 				Memory & Footprint
 			</Card.Title>
 		</Card.Header>
@@ -386,11 +307,7 @@
 							/>
 						</dt>
 						<dd class="font-mono text-xs font-medium">
-							{formatBytes(
-								data.resources.memory_rss_bytes ??
-									data.resources.rss_bytes ??
-									0,
-							)}
+							{formatBytes(data.resources.memory_rss_bytes)}
 						</dd>
 					</div>
 					<div class="flex justify-between items-center py-0.5">
@@ -402,11 +319,7 @@
 							/>
 						</dt>
 						<dd class="font-mono text-xs font-medium">
-							{formatBytes(
-								data.resources.memory_vms_bytes ??
-									data.resources.vms_bytes ??
-									0,
-							)}
+							{formatBytes(data.resources.memory_vms_bytes)}
 						</dd>
 					</div>
 				</dl>
@@ -416,170 +329,22 @@
 
 	<LogLevelCard />
 
-	<!-- Services -->
-	<Card.Root class="md:col-span-2 xl:col-span-3">
-		<Card.Header class="pb-3">
-			<div class="flex flex-wrap items-center justify-between gap-2">
-				<div>
-					<Card.Title class="text-base font-semibold">Services & Daemons</Card.Title>
-					<Card.Description class="text-xs">
-						Background services, network listeners, and runtime status
-					</Card.Description>
-				</div>
-				<div class="flex items-center gap-2">
-					{#if !loading && serviceList.length > 0}
-						{@const onlineCount = serviceList.filter(s => s.state.toLowerCase() === "online" || s.state.toLowerCase() === "active").length}
-						<Badge variant="outline" class="font-mono text-xs">
-							{onlineCount} / {serviceList.length} Online
-						</Badge>
-					{/if}
-					<Button
-						variant="outline"
-						size="sm"
-						href="/system/services"
-						class="text-xs gap-1.5 h-7 px-2.5 font-medium hover:text-primary"
-					>
-						<span>All Services</span>
-						<ArrowRightIcon class="size-3" />
-					</Button>
-				</div>
-			</div>
-		</Card.Header>
-		<Card.Content class="p-0">
-			{#if loading}
-				<div class="flex flex-col divide-y divide-border">
-					{#each { length: 6 } as _, i (i)}
-						<div class="flex items-center gap-3 px-5 py-3">
-							<Skeleton class="size-5 rounded-full" />
-							<Skeleton class="h-4 w-32" />
-							<Skeleton class="ml-auto h-4 w-24" />
-						</div>
-					{/each}
-				</div>
-			{:else if serviceList.length === 0}
-				<p class="text-muted-foreground px-5 py-6 text-sm">
-					No service data available
-				</p>
-			{:else}
-				<div class="divide-border divide-y">
-					{#each serviceList as svc (svc.name)}
-						{@const meta = getServiceMeta(svc.id, svc.name)}
-						{@const SvcIcon = meta.icon}
-						{@const StatusIcon = stateIcon(svc.state)}
-						{@const svcId = svc.id || svc.name.toLowerCase().replace(/\s+/g, "_")}
-						{@const isBusy = !!actionLoading[svcId]}
-						{@const currentAct = actionLoading[svcId]}
-						{@const isInactive = svc.state.toLowerCase() === "inactive" || svc.state.toLowerCase() === "offline"}
-
-						<div class="flex flex-col gap-2.5 px-5 py-3.5 transition-colors hover:bg-muted/30">
-							<div class="flex flex-wrap items-center justify-between gap-3">
-								<a
-									href={meta.configHref}
-									class="flex items-center gap-2.5 group/svc flex-1 min-w-[200px]"
-								>
-									<div class="bg-muted flex size-8 items-center justify-center rounded-md border group-hover/svc:border-primary/40 transition-colors">
-										<SvcIcon class="size-4 text-foreground group-hover/svc:text-primary transition-colors" />
-									</div>
-									<div class="flex flex-col">
-										<div class="flex items-center gap-2">
-											<span class="text-foreground text-sm font-semibold capitalize group-hover/svc:text-primary transition-colors">
-												{meta.name}
-											</span>
-											{#if svc.id}
-												<span class="bg-muted text-muted-foreground rounded px-1.5 py-0.5 font-mono text-[10px]">
-													{svc.id}
-												</span>
-											{/if}
-											<span class="text-muted-foreground text-[10px] hidden sm:inline">
-												• {meta.tag}
-											</span>
-										</div>
-										<span class="text-muted-foreground text-xs">
-											{#if svc.uptime_secs > 0}
-												Uptime: {formatUptime(svc.uptime_secs)}
-											{:else}
-												Stopped / Standby
-											{/if}
-										</span>
-									</div>
-								</a>
-
-								<div class="flex flex-wrap items-center gap-2">
-									<Badge variant={stateBadgeVariant(svc.state)} class="capitalize text-xs gap-1.5">
-										<StatusIcon class={["size-3.5", stateColor(svc.state), svc.state === "starting" ? "animate-spin" : ""].join(" ")} />
-										{svc.state}
-									</Badge>
-
-									<Button
-										variant="outline"
-										size="sm"
-										href={meta.configHref}
-										class="text-xs gap-1 h-7 px-2.5 font-normal"
-									>
-										<SlidersIcon class="size-3" />
-										<span>Configure</span>
-										<ExternalLinkIcon class="size-2.5 text-muted-foreground" />
-									</Button>
-
-									{#if meta.canControl && isAdmin}
-										{#if isInactive}
-											<Button
-												variant="default"
-												size="sm"
-												disabled={isBusy}
-												onclick={() => executeServiceAction(svcId, "Start")}
-												class="text-xs gap-1 h-7 px-2.5 bg-emerald-600 hover:bg-emerald-700 text-white"
-											>
-												{#if isBusy && currentAct === "Start"}
-													<Loader2Icon class="size-3 animate-spin" />
-												{:else}
-													<PlayIcon class="size-3 fill-current" />
-												{/if}
-												Start
-											</Button>
-										{:else}
-											<Button
-												variant="secondary"
-												size="sm"
-												disabled={isBusy}
-												onclick={() => executeServiceAction(svcId, "Restart")}
-												class="text-xs gap-1 h-7 px-2"
-											>
-												{#if isBusy && currentAct === "Restart"}
-													<Loader2Icon class="size-3 animate-spin" />
-												{:else}
-													<RotateCwIcon class="size-3" />
-												{/if}
-												Restart
-											</Button>
-											<Button
-												variant="outline"
-												size="sm"
-												disabled={isBusy}
-												onclick={() => executeServiceAction(svcId, "Stop")}
-												class="text-xs gap-1 h-7 px-2 text-destructive hover:bg-destructive/10"
-											>
-												{#if isBusy && currentAct === "Stop"}
-													<Loader2Icon class="size-3 animate-spin" />
-												{:else}
-													<SquareIcon class="size-3 fill-current" />
-												{/if}
-												Stop
-											</Button>
-										{/if}
-									{/if}
-								</div>
-							</div>
-
-							{#if svc.summary}
-								<p class="font-mono text-[11px] text-foreground pt-1">{svc.summary}</p>
-							{/if}
-						</div>
-					{/each}
-				</div>
-			{/if}
-		</Card.Content>
-	</Card.Root>
+	<!-- Services live on their own tab; this is the one-line summary of them. -->
+	{#if !loading && serviceList.length > 0}
+		{@const problems = serviceList.filter((svc) => ["degraded", "error", "paused"].includes(svc.state.toLowerCase()))}
+		{@const running = serviceList.filter((svc) => ["online", "active"].includes(svc.state.toLowerCase())).length}
+		<a
+			href="/system/services"
+			class="md:col-span-2 xl:col-span-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border bg-card px-4 py-3 text-sm transition-colors hover:bg-accent/40"
+		>
+			<span class="font-semibold">Services</span>
+			<span class="text-muted-foreground tabular-nums">{running} of {serviceList.length} running</span>
+			{#each problems as svc (svc.name)}
+				<span class="text-warning">{getServiceMeta(svc.id, svc.name).name}: {degradedReason(svc.detail) ?? svc.summary ?? svc.state}</span>
+			{/each}
+			<span class="ml-auto flex items-center gap-1 text-xs font-medium text-muted-foreground">Manage <ArrowRightIcon class="size-3" /></span>
+		</a>
+	{/if}
 </div>
 
 <!-- Capabilities -->
@@ -592,7 +357,7 @@
 					<Card.Description>Compiled feature flags vs. runtime enabled capabilities</Card.Description>
 				</div>
 				{#if capabilitiesState.debugMode}
-					<Badge variant="outline" class="border-amber-500/40 text-amber-500 font-mono text-xs">
+					<Badge variant="outline" class="border-warning/40 text-warning font-mono text-xs">
 						Dev Override Active
 					</Badge>
 				{/if}
@@ -600,14 +365,14 @@
 		</Card.Header>
 		<Card.Content class="flex flex-col gap-4">
 			{#if capabilitiesState.debugMode}
-				<div class="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-900 dark:text-amber-200 flex items-center justify-between gap-3">
+				<div class="rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-foreground flex items-center justify-between gap-3">
 					<p>
 						<strong class="font-semibold">Vite Dev Capabilities Override:</strong> All navigation menus and sub-features are forced visible. Click the button or use Topbar to restore live filtering.
 					</p>
 					<Button
 						variant="outline"
 						size="sm"
-						class="h-7 text-xs border-amber-500/40 text-amber-600 dark:text-amber-300 hover:bg-amber-500/20 shrink-0"
+						class="h-7 text-xs border-warning/40 text-warning hover:bg-warning/20 shrink-0"
 						onclick={() => capabilitiesState.setDebugMode(false)}
 					>
 						Restore Live Filtering
@@ -617,7 +382,7 @@
 			{#if serverCaps}
 				<div>
 					<p
-						class="text-muted-foreground mb-2 text-xs font-medium uppercase tracking-wide"
+						class="text-muted-foreground mb-2 text-xs font-medium"
 					>
 						Enabled
 					</p>
@@ -632,7 +397,7 @@
 				<Separator />
 				<div>
 					<p
-						class="text-muted-foreground mb-2 text-xs font-medium uppercase tracking-wide"
+						class="text-muted-foreground mb-2 text-xs font-medium"
 					>
 						Compiled (not enabled)
 					</p>
@@ -651,5 +416,3 @@
 	</Card.Root>
 {/if}
 </div>
-
-<StopImpactDialog bind:this={stopDialog} />

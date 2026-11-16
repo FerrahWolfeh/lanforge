@@ -52,7 +52,7 @@
 		<!-- System-Managed Mode -->
 		<button
 			type="button"
-			class="flex flex-col items-start rounded-xl border p-4 text-left transition-all {wanMode === 'system_gateway' ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'border-border hover:border-muted-foreground/40'}"
+			class="flex flex-col items-start rounded-lg border p-4 text-left transition-all {wanMode === 'system_gateway' ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'border-border hover:border-muted-foreground/40'}"
 			onclick={() => (wanMode = "system_gateway")}
 		>
 			<div class="flex w-full items-center justify-between mb-2">
@@ -68,7 +68,7 @@
 		<!-- Integrated PPPoE Mode -->
 		<button
 			type="button"
-			class="flex flex-col items-start rounded-xl border p-4 text-left transition-all {wanMode === 'pppoe' ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'border-border hover:border-muted-foreground/40'}"
+			class="flex flex-col items-start rounded-lg border p-4 text-left transition-all {wanMode === 'pppoe' ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'border-border hover:border-muted-foreground/40'}"
 			onclick={() => (wanMode = "pppoe")}
 		>
 			<div class="flex w-full items-center justify-between mb-2">
@@ -101,7 +101,7 @@
 					class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background"
 					bind:value={wanIface}
 				>
-					{#each interfaces as iface}
+					{#each interfaces as iface (iface.name)}
 						<option value={iface.name}>
 							{iface.name} ({iface.bus_type} - {iface.carrier_up ? '🟢 Cable Connected' : '⚪ Disconnected'})
 						</option>

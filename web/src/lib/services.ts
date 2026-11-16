@@ -25,10 +25,10 @@ export interface ServiceMeta {
 
 const SERVICE_REGISTRY: Record<string, Omit<ServiceMeta, 'id'>> = {
 	pppoe: {
-		name: 'PPPoE Concentrator & WAN',
+		name: 'PPPoE WAN',
 		tag: 'WAN Gateway',
 		proto: 'PPP over Ethernet',
-		description: 'FTTH / DSL broadband session manager, MTU clamping, and kernel pppoe tunnel',
+		description: 'The internet connection over PPPoE (fiber or DSL): login, session and MSS clamping',
 		configHref: '/network/pppoe',
 		configLabel: 'PPPoE Settings',
 		icon: ZapIcon,
@@ -38,7 +38,7 @@ const SERVICE_REGISTRY: Record<string, Omit<ServiceMeta, 'id'>> = {
 		name: 'IPv6 Router Advertisements',
 		tag: 'RADVD / SLAAC',
 		proto: 'ICMPv6 (NDP)',
-		description: 'RFC 4861 autoconfiguration announcements, GUA/ULA prefixes, and RDNSS DNS option',
+		description: 'Tells LAN devices the IPv6 prefix, router and DNS server (SLAAC)',
 		configHref: '/network/ra',
 		configLabel: 'Router Advertisement Settings',
 		icon: RadioIcon,
@@ -48,7 +48,7 @@ const SERVICE_REGISTRY: Record<string, Omit<ServiceMeta, 'id'>> = {
 		name: 'DHCPv4 Server',
 		tag: 'Dynamic Leases',
 		proto: 'UDP Port 67',
-		description: 'IPv4 dynamic pool leasing, static reservations, default gateway, and DNS options',
+		description: 'Hands out IPv4 addresses, reservations, gateway and DNS server',
 		configHref: '/dhcp/server',
 		configLabel: 'DHCPv4 Server Options',
 		icon: ServerIcon,
@@ -58,17 +58,17 @@ const SERVICE_REGISTRY: Record<string, Omit<ServiceMeta, 'id'>> = {
 		name: 'DHCPv6 Server',
 		tag: 'Stateful / Stateless',
 		proto: 'UDP Port 547',
-		description: 'IPv6 address assignment, prefix delegation (IA_PD), and NTP/DNS announcements',
+		description: 'Hands out IPv6 addresses and delegated prefixes',
 		configHref: '/dhcp/scopes',
 		configLabel: 'DHCPv6 Scopes',
 		icon: ServerIcon,
 		canControl: true
 	},
 	dns: {
-		name: 'DNS Resolver & Filter Engine',
+		name: 'DNS Resolver',
 		tag: 'Recursive & Cache',
 		proto: 'UDP/TCP Port 53',
-		description: 'Multi-upstream recursive forwarder, query cache, local rewrites, and DNS shielding',
+		description: 'Answers DNS for the LAN: upstream servers, cache, local names and adblock',
 		configHref: '/dns/resolver',
 		configLabel: 'DNS Resolver Settings',
 		icon: GlobeIcon,
@@ -78,7 +78,7 @@ const SERVICE_REGISTRY: Record<string, Omit<ServiceMeta, 'id'>> = {
 		name: 'DNS over TLS (DoT)',
 		tag: 'Encrypted Transport',
 		proto: 'TCP Port 853',
-		description: 'Standard privacy-preserving encrypted DNS over TLS transport',
+		description: 'Encrypted DNS over TLS',
 		configHref: '/dns/resolver',
 		configLabel: 'DNS Transports',
 		icon: ShieldCheckIcon,
@@ -88,77 +88,107 @@ const SERVICE_REGISTRY: Record<string, Omit<ServiceMeta, 'id'>> = {
 		name: 'DNS over QUIC (DoQ)',
 		tag: 'QUIC / UDP',
 		proto: 'UDP Port 853',
-		description: 'Low-latency modern multiplexed encrypted DNS transport over QUIC',
+		description: 'Encrypted DNS over QUIC',
 		configHref: '/dns/resolver',
 		configLabel: 'DNS Transports',
 		icon: ShieldCheckIcon,
 		canControl: true
 	},
 	monitor: {
-		name: 'Neighbor Discovery & ARP/NDP',
+		name: 'Device Discovery',
 		tag: 'Kernel Netlink',
 		proto: 'RTM_GETNEIGH',
-		description: 'Passive Linux kernel ARP/NDP cache tracking and active ICMP keepalive probes',
+		description: 'Finds devices on the LAN from the ARP/NDP tables and checks they are still there',
 		configHref: '/network/devices',
 		configLabel: 'Device Inventory',
 		icon: NetworkIcon,
 		canControl: true
 	},
 	mdns: {
-		name: 'mDNS Hostname Prober',
+		name: 'mDNS Names',
 		tag: 'ZeroConf / SD',
 		proto: 'UDP Port 5353',
-		description: 'Multicast DNS PTR/SRV discovery prober for automatic hostname resolution',
+		description: 'Asks devices for their names over multicast DNS',
 		configHref: '/network/devices',
 		configLabel: 'Device Inventory',
 		icon: RadioIcon,
 		canControl: true
 	},
 	tftp: {
-		name: 'Bootstrapping TFTP Server',
+		name: 'TFTP Server',
 		tag: 'PXE Boot',
 		proto: 'UDP Port 69',
-		description: 'Network PXE bootloader, kernel, and initial ramdisk image distribution server',
-		configHref: '/system',
-		configLabel: 'System Status',
+		description: 'Serves boot files to devices that start from the network (PXE)',
+		configHref: '/tftp',
+		configLabel: 'TFTP Settings',
 		icon: FolderIcon,
 		canControl: true
 	},
 	db: {
-		name: 'Persistent Database Worker',
+		name: 'Database',
 		tag: 'Embedded Redb',
 		proto: 'ACID Transactions',
-		description: 'Transactional key-value store managing device leases, audit logs, and configurations',
+		description: 'Stores devices, leases, users and statistics; configuration lives in lanforge.toml',
 		configHref: '/system/database',
 		configLabel: 'Database Storage',
 		icon: HardDriveIcon,
 		canControl: false
 	},
 	control: {
-		name: 'Control API & UDS IPC',
+		name: 'CLI Socket',
 		tag: 'Admin Interface',
 		proto: 'Unix Domain Socket',
-		description: 'Internal daemon RPC dispatcher for CLI operations and authenticated management',
+		description: 'The Unix socket the lanforge CLI talks to',
 		configHref: '/system',
 		configLabel: 'System Status',
 		icon: KeyIcon,
 		canControl: false
 	},
 	http: {
-		name: 'REST API & WebUI Server',
+		name: 'HTTP API & WebUI',
 		tag: 'HTTP / REST',
 		proto: 'TCP Port 8088',
-		description: 'REST API backend, Prometheus metrics exporter, and embedded web interface host',
+		description: 'Serves this WebUI, the REST API and Prometheus metrics',
 		configHref: '/system',
 		configLabel: 'System Status',
 		icon: CpuIcon,
 		canControl: false
 	},
+	nft: {
+		name: 'Firewall',
+		tag: 'nftables',
+		proto: 'Netlink',
+		description: 'Filters traffic in and out of the router: zones, NAT and port forwards',
+		configHref: '/firewall',
+		configLabel: 'Firewall Settings',
+		icon: ShieldCheckIcon,
+		canControl: true
+	},
+	interfaces: {
+		name: 'Interface Monitor',
+		tag: 'Netlink',
+		proto: 'Netlink',
+		description: 'Watches the router\'s interfaces and their addresses',
+		configHref: '/system',
+		configLabel: 'System Status',
+		icon: NetworkIcon,
+		canControl: true
+	},
+	wan: {
+		name: 'WAN Monitor',
+		tag: 'WAN',
+		proto: 'Netlink',
+		description: 'Tracks whether the internet connection is up',
+		configHref: '/network/traffic',
+		configLabel: 'Traffic & SQM',
+		icon: GlobeIcon,
+		canControl: true
+	},
 	traffic: {
-		name: 'Traffic & SQM Manager',
+		name: 'Traffic & SQM',
 		tag: 'Bufferbloat / CAKE',
 		proto: 'Linux TC / Sysfs',
-		description: 'Smart Queue Management (CAKE), ingress IFB shaping, and NIC hardware RPS/ethtool tuning',
+		description: 'CAKE queue management against bufferbloat, and NIC offload tuning',
 		configHref: '/network/traffic',
 		configLabel: 'Traffic & SQM Settings',
 		icon: SlidersIcon,
@@ -169,6 +199,17 @@ const SERVICE_REGISTRY: Record<string, Omit<ServiceMeta, 'id'>> = {
 export function getServiceMeta(id?: string, name?: string): ServiceMeta {
 	const rawId = (id || '').toLowerCase().trim();
 	const rawName = (name || '').toLowerCase().trim();
+
+	// The daemon's ServiceId names first: the substring heuristics below would map "mdns" to DNS.
+	const DAEMON_IDS: Record<string, string> = {
+		dhcp4: 'dhcpv4',
+		dhcp6: 'dhcpv6',
+		discovery: 'monitor',
+		uds: 'control',
+		mdns: 'mdns'
+	};
+	const alias = DAEMON_IDS[rawId];
+	if (alias && SERVICE_REGISTRY[alias]) return { id: alias, ...SERVICE_REGISTRY[alias] };
 
 	// Match by known ID first
 	for (const [key, meta] of Object.entries(SERVICE_REGISTRY)) {
@@ -209,12 +250,34 @@ export function getServiceMeta(id?: string, name?: string): ServiceMeta {
 	return {
 		id: id || cleanName.toLowerCase().replace(/\s+/g, '-'),
 		name: cleanName,
-		tag: 'Background Service',
-		proto: 'Tokio Async',
-		description: 'Supervised daemon service worker task',
+		tag: 'Service',
+		proto: '',
+		description: 'Background service',
 		configHref: '/system',
 		configLabel: 'System Status',
 		icon: CpuIcon,
 		canControl: true
 	};
+}
+
+/**
+ * Why a degraded service is degraded, in plain words, or null. A degraded service still serves,
+ * so the daemon sends live numbers as its summary and the reason only in `detail`
+ * (`{ degraded: "upstream_unreachable" | ... | { custom: "..." } }`).
+ */
+export function degradedReason(detail: unknown): string | null {
+	if (!detail || typeof detail !== 'object' || !('degraded' in detail)) return null;
+	const reason = (detail as { degraded: unknown }).degraded;
+	switch (reason) {
+		case 'upstream_unreachable':
+			return 'WAN is down: upstream servers unreachable';
+		case 'interface_flapping':
+			return 'Interface link keeps going up and down';
+		case 'transport_errors':
+			return 'Socket errors outnumber traffic';
+	}
+	if (reason && typeof reason === 'object' && 'custom' in reason) {
+		return String((reason as { custom: unknown }).custom);
+	}
+	return null;
 }

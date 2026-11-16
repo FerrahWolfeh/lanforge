@@ -6,7 +6,6 @@
 	import { ModeWatcher } from "mode-watcher";
 	import { Toaster } from "$lib/components/ui/sonner";
 	import { toast } from "svelte-sonner";
-	import { auth } from "$lib/stores/auth.svelte";
 	import { sidebarState } from "$lib/stores/sidebar.svelte";
 	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
 	import { status } from "$lib/api/client";
@@ -159,7 +158,7 @@
 	<title>{currentTabTitle}</title>
 </svelte:head>
 
-<ModeWatcher defaultMode="system" />
+<ModeWatcher defaultMode="dark" />
 
 	{#if isAuthPage}
 		<main class="min-h-screen w-full bg-background text-foreground">
@@ -167,7 +166,7 @@
 		</main>
 	{:else}
 		<!-- Main Application Shell (Sidebar Inset Layout) -->
-		<div id="app-shell" class="flex h-screen w-full overflow-hidden bg-sidebar text-sidebar-foreground">
+		<div id="app-shell" class="flex h-dvh w-full overflow-hidden bg-sidebar text-sidebar-foreground">
 			<!-- Desktop Sidebar (Permanently mounted and static) -->
 			<div id="app-sidebar" class="hidden lg:flex lg:shrink-0">
 				<AppSidebar />
@@ -175,7 +174,7 @@
 
 			<!-- Main Inset Content Area (Floating Elevated Panel Card) -->
 			<div
-				class="relative flex flex-1 flex-col overflow-hidden min-h-0 lg:my-2.5 lg:mr-2.5 lg:rounded-2xl lg:border lg:border-sidebar-border/80 bg-background text-foreground lg:shadow-xs transition-all duration-300"
+				class="relative flex flex-1 flex-col overflow-hidden min-h-0 lg:my-2 lg:mr-2 lg:rounded-xl lg:border lg:border-sidebar-border bg-background text-foreground transition-all duration-300"
 			>
 				<NavigationProgressBar />
 				<Topbar {uptime} />
@@ -183,13 +182,13 @@
 					<!-- Parts of the config file the daemon could not apply: they run on defaults. -->
 					<div
 						role="alert"
-						class="mx-3 mt-3 sm:mx-6 flex gap-2.5 rounded-xl border border-destructive/40 bg-destructive/10 px-3.5 py-2.5 text-xs text-destructive"
+						class="mx-3 mt-3 sm:mx-6 flex gap-2.5 rounded-lg border border-warning/35 bg-warning/10 px-3.5 py-2.5 text-sm text-foreground"
 					>
-						<TriangleAlertIcon class="size-4 shrink-0 mt-0.5" />
+						<TriangleAlertIcon class="size-4 shrink-0 mt-0.5 text-warning" />
 						<div class="flex flex-col gap-1 min-w-0">
 							<span class="font-semibold">Configuration file problems — fix the file and run <code>lanforge reload</code></span>
 							{#each configIssues as issue}
-								<span class="break-words font-mono">{issue}</span>
+								<span class="break-words font-mono text-xs">{issue}</span>
 							{/each}
 						</div>
 					</div>

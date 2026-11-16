@@ -4,6 +4,7 @@
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import { toast } from "svelte-sonner";
+	import { toastReconcileResult } from "../reconcile";
 	import HelpPopover from "$lib/components/HelpPopover.svelte";
 
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
@@ -11,7 +12,6 @@
 	import RotateCcwIcon from "@lucide/svelte/icons/rotate-ccw";
 	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 	import SlidersIcon from "@lucide/svelte/icons/sliders";
-	import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
 
 	import {
 		dhcpPools,
@@ -20,14 +20,13 @@
 		dhcpOptionsGet,
 		dhcpReconcile,
 	} from "$lib/api/client";
-	import { parseCsvList as parseList } from "$lib/utils";
+	import { parseCsvList as parseList, errorMessage } from "$lib/utils";
+	import { ipv4Schema } from "$lib/utils/validation";
 	import type {
 		DhcpPoolsResponse,
 		Dhcpv4PoolConfig,
 		Dhcpv6PoolConfig,
 	} from "$lib/api/types";
-
-	import PoolStatsCards from "./components/PoolStatsCards.svelte";
 	import PoolV4Table from "./components/PoolV4Table.svelte";
 	import PoolV6Table from "./components/PoolV6Table.svelte";
 	import PoolV4Dialog from "./components/PoolV4Dialog.svelte";
@@ -83,22 +82,7 @@
 	});
 
 	// Derived metrics
-	const allLivePools = $derived([...poolStats.v4_pools, ...poolStats.v6_pools]);
 	const totalConfiguredCount = $derived(v4Pools.length + v6Pools.length);
-	const totalManagedAddresses = $derived(
-		allLivePools.reduce((acc, p) => acc + (p.total || 0), 0),
-	);
-	const totalUsedAddresses = $derived(
-		allLivePools.reduce((acc, p) => acc + (p.used || 0), 0),
-	);
-	const totalAvailableAddresses = $derived(
-		allLivePools.reduce((acc, p) => acc + (p.available || 0), 0),
-	);
-	const aggregateUtilization = $derived(
-		totalManagedAddresses > 0
-			? Math.round((totalUsedAddresses / totalManagedAddresses) * 1000) / 10
-			: 0,
-	);
 
 	async function loadAllData(showSpinner = true) {
 		if (showSpinner) loading = true;
@@ -111,13 +95,23 @@
 				dhcpOptionsGet(),
 			]);
 
+			if (statsRes.status === "rejected") {
+				toast.error(`Failed to load pool usage: ${errorMessage(statsRes.reason, "unknown error")}`);
+			}
+			if (configRes.status === "rejected") {
+				toast.error(`Failed to load pool configuration: ${errorMessage(configRes.reason, "unknown error")}`);
+			}
+			if (optsRes.status === "rejected") {
+				toast.error(`Failed to load DHCP defaults: ${errorMessage(optsRes.reason, "unknown error")}`);
+			}
+
 			if (statsRes.status === "fulfilled") {
 				poolStats = statsRes.value;
 			}
 			if (configRes.status === "fulfilled") {
 				v4Pools = JSON.parse(JSON.stringify(configRes.value.v4_pools));
 				v6Pools = JSON.parse(JSON.stringify(configRes.value.v6_pools));
-				activeUlaPrefix = configRes.value.active_ula_prefix ?? "fd00::/64";
+				activeUlaPrefix = configRes.value.active_ula_prefix ?? null;
 				activeGuaPrefix = configRes.value.active_gua_prefix ?? null;
 
 				pristinePoolsJson = JSON.stringify({
@@ -130,13 +124,15 @@
 				globalV4SubnetMask = optsRes.value.v4?.subnet_mask ?? "255.255.255.0";
 				globalV4LeaseTime = optsRes.value.v4?.lease_time ?? 86400;
 			}
-		} catch (err: any) {
-			toast.error(`Failed to load DHCP pools data: ${err.message}`);
+		} catch (err) {
+			toast.error(`Failed to load DHCP pools data: ${errorMessage(err, String(err))}`);
 		} finally {
 			loading = false;
 			isRefreshing = false;
 		}
 	}
+
+	let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 
 	async function saveScopes() {
 		saving = true;
@@ -147,9 +143,9 @@
 				v6_pools: v6Pools,
 			});
 			toast.success("DHCP address scopes and pools saved successfully");
-			setTimeout(() => loadAllData(false), 500);
-		} catch (err: any) {
-			toast.error(`Failed to save scopes: ${err.message}`);
+			refreshTimer = setTimeout(() => loadAllData(false), 500);
+		} catch (err) {
+			toast.error(`Failed to save scopes: ${errorMessage(err, String(err))}`);
 		} finally {
 			saving = false;
 		}
@@ -164,27 +160,10 @@
 		reconciling = true;
 		try {
 			const res = await dhcpReconcile();
-			if (res.invalidated_v4_leases.length === 0) {
-				toast.success(
-					`DHCP Reconcile: All leases within range (${res.valid_v4_leases} active, ${res.preserved_static_leases} static preserved)`,
-				);
-			} else {
-				toast.warning(
-					`Reconcile: Invalidated ${res.invalidated_v4_leases.length} out-of-range lease(s). ForceRenew sent.`,
-					{
-						description:
-							res.invalidated_v4_leases
-								.map((l) => `${l.mac} (${l.ip})`)
-								.slice(0, 3)
-								.join(", ") +
-							(res.invalidated_v4_leases.length > 3 ? "..." : ""),
-						duration: 8000,
-					},
-				);
-			}
+			toastReconcileResult(res);
 			await loadAllData(false);
-		} catch (err: any) {
-			toast.error(`Failed to reconcile leases: ${err.message}`);
+		} catch (err) {
+			toast.error(`Failed to reconcile leases: ${errorMessage(err, String(err))}`);
 		} finally {
 			reconciling = false;
 		}
@@ -225,6 +204,25 @@
 			toast.error("Range start and range end IP addresses are required");
 			return;
 		}
+		const checks: Array<[string, string]> = [
+			["Range start", v4Start],
+			["Range end", v4End],
+			...(v4Router.trim() ? [["Gateway", v4Router] as [string, string]] : []),
+			...(v4SubnetMask.trim() ? [["Subnet mask", v4SubnetMask] as [string, string]] : []),
+			...parseList(v4Dns).map((dns): [string, string] => ["DNS server", dns]),
+		];
+		for (const [label, value] of checks) {
+			if (!ipv4Schema.safeParse(value).success) {
+				toast.error(`${label} is not a valid IPv4 address: ${value.trim()}`);
+				return;
+			}
+		}
+		// Empty inherits the global lease time; 0 is not a usable DHCP lease.
+		const lease = v4Lease === "" || v4Lease === null ? null : Number(v4Lease);
+		if (lease !== null && (!Number.isInteger(lease) || lease < 1)) {
+			toast.error("Lease time must be a whole number of seconds, at least 1 (leave empty to inherit)");
+			return;
+		}
 		const pool: Dhcpv4PoolConfig = {
 			name: v4Name.trim() || null,
 			range_start: v4Start.trim(),
@@ -232,7 +230,7 @@
 			subnet_mask: v4SubnetMask.trim() || null,
 			router: v4Router.trim() || null,
 			dns_servers: parseList(v4Dns),
-			lease_time: v4Lease ? Number(v4Lease) : null,
+			lease_time: lease,
 			boot_file: v4BootFile.trim() || null,
 			tftp_server: v4TftpServer.trim() || null,
 		};
@@ -303,6 +301,7 @@
 
 	onMount(() => {
 		loadAllData(true);
+		return () => clearTimeout(refreshTimer);
 	});
 </script>
 
@@ -345,7 +344,7 @@
 				{#if isDirty}
 					<Badge
 						variant="outline"
-						class="text-amber-400 border-amber-500/30 bg-amber-500/10 text-xs font-semibold animate-pulse"
+						class="text-warning border-warning/30 bg-warning/10 text-xs font-semibold"
 					>
 						Unsaved Changes
 					</Badge>
@@ -383,7 +382,7 @@
 			>
 				<ShieldCheckIcon
 					data-icon="inline-start"
-					class={`size-3.5 mr-1 ${reconciling ? "animate-spin text-primary" : "text-emerald-400"}`}
+					class={`size-3.5 mr-1 ${reconciling ? "animate-spin text-primary" : "text-muted-foreground"}`}
 				/>
 				{reconciling ? "Auditing..." : "Reconcile Leases"}
 			</Button>
@@ -414,7 +413,7 @@
 					size="sm"
 					onclick={saveScopes}
 					disabled={saving || loading}
-					class="h-8 text-xs shadow-sm"
+					class="h-8 text-xs"
 				>
 					<SaveIcon
 						data-icon="inline-start"
@@ -426,17 +425,6 @@
 		</div>
 	</div>
 
-	<!-- KPI Stat Cards (4 Cards) -->
-	<PoolStatsCards
-		{loading}
-		{totalConfiguredCount}
-		v4PoolsCount={v4Pools.length}
-		v6PoolsCount={v6Pools.length}
-		{totalManagedAddresses}
-		{totalUsedAddresses}
-		{totalAvailableAddresses}
-		{aggregateUtilization}
-	/>
 
 	<fieldset disabled={!canEdit} class="contents">
 	<!-- SECTION 1: IPv4 Address Scopes -->

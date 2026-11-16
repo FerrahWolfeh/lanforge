@@ -38,30 +38,12 @@
 		}
 	}
 
-	const displayTopDomains = $derived.by(() => {
-		if (domainFilterMode === "device" && selectedClientFilter) {
-			if (filteredTopDomains.length > 0) return filteredTopDomains;
-			return [
-				{ domain: "api.github.com", count: 1420 },
-				{ domain: "crates.io", count: 850 },
-				{ domain: "raw.githubusercontent.com", count: 420 },
-				{ domain: "google.com", count: 310 },
-			];
-		}
-		const globalList = analyticsData?.top_domains ?? [];
-		if (globalList.length === 0) {
-			return [
-				{ domain: "google.com", count: 4820 },
-				{ domain: "github.com", count: 3150 },
-				{ domain: "cloudflare.com", count: 2410 },
-				{ domain: "discord.com", count: 1890 },
-				{ domain: "store.steampowered.com", count: 1240 },
-				{ domain: "youtube.com", count: 980 },
-				{ domain: "crates.io", count: 760 },
-			];
-		}
-		return globalList;
-	});
+	// No data shows the empty state, never sample domains.
+	const displayTopDomains = $derived(
+		domainFilterMode === "device" && selectedClientFilter
+			? filteredTopDomains
+			: (analyticsData?.top_domains ?? [])
+	);
 
 	const maxDomainCount = $derived.by(() => {
 		if (displayTopDomains.length === 0) return 1;
@@ -80,10 +62,10 @@
 			class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
 		>
 			<div class="flex items-center gap-2">
-				<GlobeIcon class="size-4 text-sky-400" />
+				<GlobeIcon class="size-4 text-muted-foreground" />
 				<div>
 					<Card.Title class="text-base">Top Resolved Domains</Card.Title>
-					<p class="text-[11px] text-muted-foreground">Excludes blocked ads &amp; trackers</p>
+					<p class="text-xs text-muted-foreground">Excludes blocked ads &amp; trackers</p>
 				</div>
 			</div>
 			<div class="flex flex-wrap items-center gap-2">
@@ -94,9 +76,9 @@
 					<button
 						type="button"
 						class={[
-							"px-2.5 py-1 rounded-md transition-all font-mono text-[11px]",
+							"px-2.5 py-1 rounded-md transition-all font-mono text-xs",
 							domainFilterMode === "global"
-								? "bg-background text-foreground shadow-sm font-semibold"
+								? "bg-background text-foreground font-semibold"
 								: "text-muted-foreground hover:text-foreground",
 						].join(" ")}
 						onclick={() => {
@@ -108,9 +90,9 @@
 					<button
 						type="button"
 						class={[
-							"px-2.5 py-1 rounded-md transition-all font-mono text-[11px]",
+							"px-2.5 py-1 rounded-md transition-all font-mono text-xs",
 							domainFilterMode === "device"
-								? "bg-background text-foreground shadow-sm font-semibold"
+								? "bg-background text-foreground font-semibold"
 								: "text-muted-foreground hover:text-foreground",
 						].join(" ")}
 						onclick={() => {
@@ -131,7 +113,7 @@
 				<!-- Device Selector Dropdown -->
 				{#if domainFilterMode === "device"}
 					<select
-						class="rounded-md border border-border/80 bg-background px-2 py-1 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-sky-400 max-w-[180px] truncate"
+						class="rounded-md border border-border/80 bg-background px-2 py-1 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-ring max-w-[180px] truncate"
 						bind:value={selectedClientFilter}
 						onchange={() =>
 							updateTopDomainsForDevice(selectedClientFilter)}
@@ -184,15 +166,16 @@
 						<div class="flex items-center justify-between gap-2">
 							<div class="flex items-center gap-2.5 min-w-0">
 								<div
-									class="flex size-7 shrink-0 items-center justify-center rounded-md border bg-sky-500/10 border-sky-500/20 text-sky-400 font-mono text-[10px] font-bold"
+									class="flex size-7 shrink-0 items-center justify-center rounded-md border bg-muted border-border text-muted-foreground font-mono text-xs font-bold"
 								>
 									#{i + 1}
 								</div>
-								<span
-									class="font-semibold text-xs text-foreground font-mono truncate"
+								<a
+									href={`/dns/domains/${encodeURIComponent(item.domain)}`}
+									class="font-semibold text-xs text-foreground font-mono truncate hover:underline"
 								>
 									{item.domain}
-								</span>
+								</a>
 							</div>
 							<div class="flex flex-col items-end shrink-0">
 								<span
@@ -201,7 +184,7 @@
 									{item.count.toLocaleString()} queries
 								</span>
 								<span
-									class="text-[10px] font-mono text-muted-foreground"
+									class="text-xs font-mono text-muted-foreground"
 								>
 									{pct}% of traffic
 								</span>
@@ -209,10 +192,10 @@
 						</div>
 						<!-- Progress Bar -->
 						<div
-							class="w-full h-1.5 rounded-full bg-zinc-800/80 overflow-hidden"
+							class="w-full h-1.5 rounded-full bg-muted overflow-hidden"
 						>
 							<div
-								class="h-full bg-gradient-to-r from-sky-500 to-indigo-500 rounded-full transition-all"
+								class="h-full bg-brand-gradient rounded-full transition-all"
 								style="width: {barPct}%"
 							></div>
 						</div>

@@ -1,25 +1,21 @@
 <script lang="ts">
+	import { createTimers, errorMessage } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import ShieldIcon from "@lucide/svelte/icons/shield";
-	import ShieldAlertIcon from "@lucide/svelte/icons/shield-alert";
-	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 	import LayoutDashboardIcon from "@lucide/svelte/icons/layout-dashboard";
 	import ListIcon from "@lucide/svelte/icons/list";
 	import SlidersIcon from "@lucide/svelte/icons/sliders";
 	import UsersIcon from "@lucide/svelte/icons/users";
-	import BanIcon from "@lucide/svelte/icons/ban";
 	import SettingsIcon from "@lucide/svelte/icons/settings";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import PauseIcon from "@lucide/svelte/icons/pause";
 	import PlayIcon from "@lucide/svelte/icons/play";
-	import ClockIcon from "@lucide/svelte/icons/clock";
 	import ChevronDownIcon from "@lucide/svelte/icons/chevron-down";
 	import { Button } from "$lib/components/ui/button";
-	import { Badge } from "$lib/components/ui/badge";
 	import { Switch } from "$lib/components/ui/switch";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import { toast } from "svelte-sonner";
-	import { onMount } from "svelte";
+	import { onDestroy, onMount } from "svelte";
 	import { createPolling } from "$lib/utils/polling";
 	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
 	import PageHeader from "$lib/components/PageHeader.svelte";
@@ -31,14 +27,19 @@
 		dnsAdblockSet,
 		dnsAdblockReload,
 	} from "$lib/api/client";
-	import type { DnsAdblockStatusResponse } from "$lib/api/types";
+	import {
+		provideAdblockStatus,
+		type AdblockStatusShare,
+	} from "./adblockStatusContext.svelte";
 
 	// Pause, toggle and list updates need dns_write; the settings are config (config_write).
 	const canDnsWrite = $derived(auth.can("dns_write"));
 
 	let { children } = $props();
 
-	let status = $state<DnsAdblockStatusResponse | null>(null);
+	const shared = $state<AdblockStatusShare>({ value: null, refresh: fetchStatus });
+	const status = $derived(shared.value);
+	provideAdblockStatus(shared);
 	let loadingStatus = $state(true);
 	let reloadingLists = $state(false);
 	let settingsOpen = $state(false);
@@ -53,7 +54,7 @@
 	async function fetchStatus() {
 		try {
 			const res = await dnsAdblockStatus();
-			if (res) status = res;
+			if (res) shared.value = res;
 		} catch {
 			// Silent fallback when daemon isn't ready
 		} finally {
@@ -70,8 +71,8 @@
 					: "Adblock domain filtering disabled",
 			);
 			await fetchStatus();
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to toggle adblock status");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to toggle adblock status"));
 		}
 	}
 
@@ -82,21 +83,25 @@
 			const label = seconds < 60 ? `${seconds}s` : `${mins}m`;
 			toast.info(`Adblock filtering paused for ${label}`);
 			await fetchStatus();
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to pause adblock");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to pause adblock"));
 		}
 	}
+
+	// Pending delayed refreshes, cleared on unmount.
+	const { later, clear: clearTimers } = createTimers();
+	onDestroy(clearTimers);
 
 	async function handleReloadLists() {
 		reloadingLists = true;
 		try {
 			await dnsAdblockReload();
 			toast.success("Triggered background blocklist compilation & reload");
-			setTimeout(fetchStatus, 1500);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to reload blocklists");
+			later(fetchStatus, 1500);
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to reload blocklists"));
 		} finally {
-			setTimeout(() => {
+			later(() => {
 				reloadingLists = false;
 			}, 1000);
 		}
@@ -120,14 +125,14 @@
 </script>
 
 <svelte:head>
-	<title>Adblock & Domain Filtering — Lanforge</title>
+	<title>Adblock — Lanforge</title>
 </svelte:head>
 
 <div class="flex flex-col gap-6">
 	<!-- Adblock Header Banner -->
 	<PageHeader
-		title="Adblock & Domain Filtering"
-		description="Zero-copy FST sinkhole blocking ads, trackers, and telemetry at sub-microsecond wire latency."
+		title="Adblock"
+		description="Blocks ads and trackers for every device that uses this router for DNS."
 		icon={ShieldIcon}
 		class="border-b pb-5"
 	>
@@ -159,23 +164,23 @@
 			>
 				{#snippet children()}
 					<div class="flex flex-col gap-2.5 text-xs text-muted-foreground">
-						<div class="flex flex-col gap-0.5 border-l-2 border-emerald-500/80 pl-2.5">
+						<div class="flex flex-col gap-0.5 border-l-2 border-success/80 pl-2.5">
 							<span class="font-semibold text-foreground flex items-center gap-1.5">
-								<span class="size-1.5 rounded-full bg-emerald-500"></span>
+								<span class="size-1.5 rounded-full bg-success"></span>
 								Tier 1: In-Memory Overrides & Exceptions
 							</span>
-							<span>User custom rules and <code class="text-primary font-mono font-medium">@@</code> exceptions evaluated in-memory with priority override and <code class="text-amber-500 font-mono font-medium">$important</code> handling.</span>
+							<span>User custom rules and <code class="text-primary font-mono font-medium">@@</code> exceptions evaluated in-memory with priority override and <code class="text-warning font-mono font-medium">$important</code> handling.</span>
 						</div>
-						<div class="flex flex-col gap-0.5 border-l-2 border-sky-500/80 pl-2.5">
+						<div class="flex flex-col gap-0.5 border-l-2 border-border pl-2.5">
 							<span class="font-semibold text-foreground flex items-center gap-1.5">
-								<span class="size-1.5 rounded-full bg-sky-500"></span>
+								<span class="size-1.5 rounded-full bg-muted"></span>
 								Tier 2: Zero-Copy Mmap Reversed FST
 							</span>
 							<span>Finite State Transducer on disk (<code class="text-foreground font-mono">blocklist.fst</code>). Traverses reversed labels (<code class="text-foreground font-mono">com.doubleclick</code>) for deterministic suffix & exact matching in ~0.2µs with zero heap bloat.</span>
 						</div>
-						<div class="flex flex-col gap-0.5 border-l-2 border-purple-500/80 pl-2.5">
+						<div class="flex flex-col gap-0.5 border-l-2 border-border pl-2.5">
 							<span class="font-semibold text-foreground flex items-center gap-1.5">
-								<span class="size-1.5 rounded-full bg-purple-500"></span>
+								<span class="size-1.5 rounded-full bg-muted"></span>
 								Tier 3: Incremental HTTP Manifest Cache
 							</span>
 							<span>Per-source ETag & Last-Modified conditional downloads. Merges sorted lists via streaming multi-way k-merge, skipping unchanged sources entirely.</span>
@@ -199,10 +204,10 @@
 								class="gap-2 text-xs h-8"
 							>
 								{#if status?.enabled}
-									<PauseIcon class="size-3.5 text-amber-500" />
+									<PauseIcon class="size-3.5 text-warning" />
 									Pause
 								{:else}
-									<PlayIcon class="size-3.5 text-emerald-500" />
+									<PlayIcon class="size-3.5 text-success" />
 									Resume
 								{/if}
 								<ChevronDownIcon class="size-3 opacity-60" />
@@ -231,8 +236,8 @@
 						<DropdownMenu.Item
 							onclick={() => toggleEnabled(!status?.enabled)}
 							class={status?.enabled
-								? "text-rose-500 font-medium"
-								: "text-emerald-500 font-medium"}
+								? "text-danger font-medium"
+								: "text-success font-medium"}
 						>
 							{#if status?.enabled}
 								Disable Indefinitely

@@ -22,6 +22,8 @@
 		if (result.affected.length === 0 && !result.warning) return true;
 		impact = result;
 		open = true;
+		// A second prompt while one is open supersedes it.
+		resolve?.(false);
 		return new Promise((r) => (resolve = r));
 	}
 
@@ -37,7 +39,7 @@
 		<AlertDialog.Header>
 			<AlertDialog.Title>Stop '{impact?.id}'?</AlertDialog.Title>
 			{#if impact?.warning}
-				<AlertDialog.Description class="font-medium text-amber-600 dark:text-amber-400">
+				<AlertDialog.Description class="font-medium text-warning">
 					{impact.warning}
 				</AlertDialog.Description>
 			{/if}
@@ -53,7 +55,7 @@
 			{#each impact?.affected ?? [] as entry (entry.id)}
 				<li class="flex items-center justify-between gap-3 rounded-md border px-3 py-1.5">
 					<span class="font-medium">{entry.name} <span class="font-mono text-muted-foreground">[{entry.id}]</span></span>
-					<span class={entry.outcome === "keeps_running" ? "text-muted-foreground" : "text-amber-500"}>
+					<span class={entry.outcome === "keeps_running" ? "text-muted-foreground" : "text-warning"}>
 						{outcomeLabel[entry.outcome]}
 					</span>
 				</li>

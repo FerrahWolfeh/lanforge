@@ -1,10 +1,12 @@
 <script lang="ts">
+	import { downloadBlob, errorMessage } from "$lib/utils";
 	import { toast } from "svelte-sonner";
 	import {
 		exportSystemConfig,
 		exportSystemConfigToml,
 		importSystemConfig,
 	} from "$lib/api/client";
+	import * as AlertDialog from "$lib/components/ui/alert-dialog";
 	import type {
 		SystemConfigExport,
 		SystemConfigImportResponse,
@@ -22,28 +24,20 @@
 	let importOverwrite = $state(false);
 	let importResult = $state<SystemConfigImportResponse | null>(null);
 	let showImportResultDialog = $state(false);
+	let confirmOverwriteOpen = $state(false);
 
 	async function handleExport() {
 		exporting = true;
 		try {
 			const config = await exportSystemConfig();
-			const jsonStr = JSON.stringify(config, null, 2);
-			const blob = new Blob([jsonStr], { type: "application/json" });
-			const url = URL.createObjectURL(blob);
-			const a = document.createElement("a");
 			const dateStr = new Date().toISOString().slice(0, 10);
-			a.href = url;
-			a.download = `lanforge-config-${dateStr}.json`;
-			document.body.appendChild(a);
-			a.click();
-			document.body.removeChild(a);
-			URL.revokeObjectURL(url);
+			downloadBlob(JSON.stringify(config, null, 2), `lanforge-config-${dateStr}.json`, "application/json");
 			toast.success("Configuration exported successfully", {
 				description: "Saved aggregated JSON persistence snapshot.",
 			});
-		} catch (e: any) {
+		} catch (e) {
 			toast.error("Export failed", {
-				description: e?.message || "Internal server error",
+				description: errorMessage(e, "Internal server error"),
 			});
 		} finally {
 			exporting = false;
@@ -54,22 +48,14 @@
 		exportingToml = true;
 		try {
 			const tomlStr = await exportSystemConfigToml();
-			const blob = new Blob([tomlStr], { type: "text/plain;charset=utf-8" });
-			const url = URL.createObjectURL(blob);
-			const a = document.createElement("a");
 			const dateStr = new Date().toISOString().slice(0, 10);
-			a.href = url;
-			a.download = `lanforge-${dateStr}.toml`;
-			document.body.appendChild(a);
-			a.click();
-			document.body.removeChild(a);
-			URL.revokeObjectURL(url);
+			downloadBlob(tomlStr, `lanforge-${dateStr}.toml`, "text/plain;charset=utf-8");
 			toast.success("TOML configuration exported", {
 				description: "Saved consolidated lanforge.toml file.",
 			});
-		} catch (e: any) {
+		} catch (e) {
 			toast.error("Export failed", {
-				description: e?.message || "Internal server error",
+				description: errorMessage(e, "Internal server error"),
 			});
 		} finally {
 			exportingToml = false;
@@ -81,6 +67,11 @@
 		if (target.files && target.files.length > 0) {
 			selectedFile = target.files[0];
 		}
+	}
+
+	function requestImport() {
+		if (importOverwrite && selectedFile) confirmOverwriteOpen = true;
+		else handleImport();
 	}
 
 	async function handleImport() {
@@ -118,9 +109,9 @@
 			selectedFile = null;
 			if (importFileInput) importFileInput.value = "";
 			await dbState.loadAll(true);
-		} catch (e: any) {
+		} catch (e) {
 			toast.error("Import failed", {
-				description: e?.message || "Internal server error",
+				description: errorMessage(e, "Internal server error"),
 			});
 		} finally {
 			importing = false;
@@ -139,7 +130,7 @@
 	onExportToml={handleExportToml}
 	onExportJson={handleExport}
 	onFileSelected={handleFileSelected}
-	onImport={handleImport}
+	onImport={requestImport}
 />
 
 <!-- Import Results Dialog -->
@@ -147,3 +138,25 @@
 	bind:open={showImportResultDialog}
 	result={importResult}
 />
+
+<AlertDialog.Root bind:open={confirmOverwriteOpen}>
+	<AlertDialog.Content class="rounded-lg">
+		<AlertDialog.Header>
+			<AlertDialog.Title class="text-base font-bold text-foreground">
+				Overwrite existing records?
+			</AlertDialog.Title>
+			<AlertDialog.Description class="text-xs">
+				Importing with "Overwrite Existing Records" replaces the current records with the contents of the file. This cannot be undone.
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel class="cursor-pointer text-xs">Cancel</AlertDialog.Cancel>
+			<AlertDialog.Action
+				class="cursor-pointer text-xs bg-destructive text-destructive-foreground hover:bg-destructive/90"
+				onclick={handleImport}
+			>
+				Import and Overwrite
+			</AlertDialog.Action>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>

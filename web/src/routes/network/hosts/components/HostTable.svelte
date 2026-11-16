@@ -1,9 +1,9 @@
 <script lang="ts">
+	import { copyToClipboard } from "$lib/utils";
 	import * as Table from "$lib/components/ui/table";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
-	import { toast } from "svelte-sonner";
 	import type { HostConfigEntry } from "$lib/api/types";
 	import DataTableCard from "$lib/components/DataTableCard.svelte";
 
@@ -44,8 +44,9 @@
 	let pageIndex = $state(0);
 	let pageSize = $state(15);
 
+	// A filter change starts over at page 1. Live updates of the list must not move
+	// the page, or a refresh every few seconds throws the reader back to page 1.
 	$effect(() => {
-		hosts;
 		searchQuery;
 		pageIndex = 0;
 	});
@@ -66,11 +67,49 @@
 		filteredHosts.slice(pageIndex * pageSize, (pageIndex + 1) * pageSize)
 	);
 
-	function copyText(text: string, label: string) {
-		navigator.clipboard.writeText(text);
-		toast.success(`Copied ${label}`);
-	}
+	// Keep the page in range when the list shrinks under it.
+	$effect(() => {
+		const lastPage = Math.max(0, Math.ceil(filteredHosts.length / pageSize) - 1);
+		if (pageIndex > lastPage) pageIndex = lastPage;
+	});
+
 </script>
+
+{#snippet actionsMenu(host: HostConfigEntry)}
+	<DropdownMenu.Root>
+		<DropdownMenu.Trigger
+			class="h-7 w-7 max-md:size-9 shrink-0 inline-flex items-center justify-center rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+		>
+			<MoreHorizontalIcon class="size-4" />
+		</DropdownMenu.Trigger>
+		<DropdownMenu.Content align="end" class="w-48 text-xs">
+			{#if canEdit}
+			<DropdownMenu.Item onclick={() => onEdit(host)} class="gap-2">
+				<PencilIcon class="size-3.5 text-muted-foreground" />
+				Edit Host Assignment
+			</DropdownMenu.Item>
+			<DropdownMenu.Separator />
+			{/if}
+			<DropdownMenu.Item onclick={() => copyToClipboard(host.mac, "MAC")} class="gap-2">
+				<CopyIcon class="size-3.5 text-muted-foreground" />
+				Copy MAC Address
+			</DropdownMenu.Item>
+			{#if host.v4_fixed || host.v4}
+				<DropdownMenu.Item onclick={() => copyToClipboard(host.v4_fixed || host.v4 || "", "Fixed IPv4")} class="gap-2">
+					<CopyIcon class="size-3.5 text-muted-foreground" />
+					Copy Fixed IPv4
+				</DropdownMenu.Item>
+			{/if}
+			{#if canEdit}
+			<DropdownMenu.Separator />
+			<DropdownMenu.Item onclick={() => onDelete(host.mac)} class="gap-2 text-danger">
+				<Trash2Icon class="size-3.5" />
+				Delete Static Host
+			</DropdownMenu.Item>
+			{/if}
+		</DropdownMenu.Content>
+	</DropdownMenu.Root>
+{/snippet}
 
 <DataTableCard
 	title="Static Hosts & Overrides"
@@ -152,6 +191,31 @@
 		{/if}
 	{/snippet}
 
+	{#snippet mobile()}
+		{#each paginatedHosts as host (host.mac)}
+			<div class="flex items-start gap-2 px-4 py-3">
+				<div class="flex flex-1 min-w-0 flex-col gap-0.5">
+					<span class="flex items-center gap-1.5 min-w-0">
+						<span class="truncate text-sm font-semibold tracking-tight text-foreground">
+							{host.hostname || "—"}
+						</span>
+						<Badge variant="outline" class="shrink-0 text-xs uppercase font-mono px-1.5 py-0">
+							{host.origin || "Config"}
+						</Badge>
+					</span>
+					{#if host.v4_fixed || host.v4}
+						<span class="truncate font-mono text-xs text-foreground">{host.v4_fixed || host.v4}</span>
+					{/if}
+					{#if host.v6_suffix}
+						<span class="truncate font-mono text-xs text-muted-foreground">{host.v6_suffix}</span>
+					{/if}
+					<span class="font-mono text-xs text-muted-foreground">{host.mac}</span>
+				</div>
+				{@render actionsMenu(host)}
+			</div>
+		{/each}
+	{/snippet}
+
 	{#snippet header()}
 		<Table.Head>Hostname</Table.Head>
 		<Table.Head>Target MAC</Table.Head>
@@ -168,11 +232,11 @@
 				<div class="flex items-center gap-1.5 flex-wrap">
 					<span>{host.hostname || "—"}</span>
 					{#if host.ignore_dns_log}
-						<Badge variant="secondary" class="text-[9px] font-mono px-1 py-0 text-muted-foreground border-border/50">
+						<Badge variant="secondary" class="text-xs font-mono px-1 py-0 text-muted-foreground border-border/50">
 							DNS Muted
 						</Badge>
 					{:else if host.ignored_log_domains && host.ignored_log_domains.length > 0}
-						<Badge variant="outline" class="text-[9px] font-mono px-1 py-0 text-muted-foreground" title={host.ignored_log_domains.join(", ")}>
+						<Badge variant="outline" class="text-xs font-mono px-1 py-0 text-muted-foreground" title={host.ignored_log_domains.join(", ")}>
 							{host.ignored_log_domains.length} {host.ignored_log_domains.length === 1 ? "domain" : "domains"} muted
 						</Badge>
 					{/if}
@@ -185,7 +249,7 @@
 					<span>{host.mac}</span>
 					<button
 						class="text-muted-foreground hover:text-foreground transition-colors p-0.5 cursor-pointer"
-						onclick={() => copyText(host.mac, "MAC")}
+						onclick={() => copyToClipboard(host.mac, "MAC")}
 						title="Copy MAC"
 					>
 						<CopyIcon class="size-3" />
@@ -197,10 +261,10 @@
 			<Table.Cell>
 				{#if host.v4_fixed || host.v4}
 					<div class="flex items-center gap-1.5">
-						<span class="text-emerald-400 font-medium">{host.v4_fixed || host.v4}</span>
+						<span class="text-foreground font-medium">{host.v4_fixed || host.v4}</span>
 						<button
 							class="text-muted-foreground hover:text-foreground transition-colors p-0.5 cursor-pointer"
-							onclick={() => copyText(host.v4_fixed || host.v4 || "", "IPv4")}
+							onclick={() => copyToClipboard(host.v4_fixed || host.v4 || "", "IPv4")}
 							title="Copy IPv4"
 						>
 							<CopyIcon class="size-3" />
@@ -212,52 +276,20 @@
 			</Table.Cell>
 
 			<!-- IPv6 Suffix -->
-			<Table.Cell class="text-sky-400">
+			<Table.Cell class="font-mono text-muted-foreground">
 				{host.v6_suffix || "—"}
 			</Table.Cell>
 
 			<!-- Origin -->
 			<Table.Cell class="font-sans">
-				<Badge variant="outline" class="text-[10px] uppercase font-mono">
+				<Badge variant="outline" class="text-xs uppercase font-mono">
 					{host.origin || "Config"}
 				</Badge>
 			</Table.Cell>
 
 			<!-- Actions Dropdown -->
 			<Table.Cell class="text-right font-sans">
-				<DropdownMenu.Root>
-					<DropdownMenu.Trigger
-						class="h-7 w-7 inline-flex items-center justify-center rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-					>
-						<MoreHorizontalIcon class="size-4" />
-					</DropdownMenu.Trigger>
-					<DropdownMenu.Content align="end" class="w-48 text-xs">
-						{#if canEdit}
-						<DropdownMenu.Item onclick={() => onEdit(host)} class="gap-2">
-							<PencilIcon class="size-3.5 text-amber-400" />
-							Edit Host Assignment
-						</DropdownMenu.Item>
-						<DropdownMenu.Separator />
-						{/if}
-						<DropdownMenu.Item onclick={() => copyText(host.mac, "MAC")} class="gap-2">
-							<CopyIcon class="size-3.5 text-muted-foreground" />
-							Copy MAC Address
-						</DropdownMenu.Item>
-						{#if host.v4_fixed || host.v4}
-							<DropdownMenu.Item onclick={() => copyText(host.v4_fixed || host.v4 || "", "Fixed IPv4")} class="gap-2">
-								<CopyIcon class="size-3.5 text-muted-foreground" />
-								Copy Fixed IPv4
-							</DropdownMenu.Item>
-						{/if}
-						{#if canEdit}
-						<DropdownMenu.Separator />
-						<DropdownMenu.Item onclick={() => onDelete(host.mac)} class="gap-2 text-rose-500">
-							<Trash2Icon class="size-3.5" />
-							Delete Static Host
-						</DropdownMenu.Item>
-						{/if}
-					</DropdownMenu.Content>
-				</DropdownMenu.Root>
+				{@render actionsMenu(host)}
 			</Table.Cell>
 		</Table.Row>
 	{/each}

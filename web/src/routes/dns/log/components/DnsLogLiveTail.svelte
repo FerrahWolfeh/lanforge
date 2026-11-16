@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { cleanDomain, cleanAnswer, getResultBadge, quickDnsRule, recordTypeClass } from "$lib/components/dns/dnsLog";
+	import { copyToClipboard, formatClockTime, formatLatency } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Table from "$lib/components/ui/table";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
@@ -21,9 +23,7 @@
 	import LaptopIcon from "@lucide/svelte/icons/laptop";
 	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
 	import SnowflakeIcon from "@lucide/svelte/icons/snowflake";
-	import { toast } from "svelte-sonner";
-	import { dnsBlock, dnsAllow } from "$lib/api/client";
-	import type { DnsQueryLogEntry, DnsRecordType, FilterMatch } from "$lib/api/types";
+	import type { DnsQueryLogEntry } from "$lib/api/types";
 
 	// Block, allow and rewrites need dns_write.
 	const canDnsWrite = $derived(auth.can("dns_write"));
@@ -56,149 +56,12 @@
 	let frozenEntries = $state<DnsQueryLogEntry[] | null>(null);
 	let copiedItem = $state<string | null>(null);
 
-	const typeVariants: Record<string, string> = {
-		A: "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20",
-		AAAA: "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20",
-		CNAME: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
-		PTR: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
-		TXT: "bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20",
-		MX: "bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20",
-		NS: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border-cyan-500/20",
-		SOA: "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/20",
-		SRV: "bg-teal-500/10 text-teal-600 dark:text-teal-400 border-teal-500/20",
-		HTTPS: "bg-violet-500/10 text-violet-600 dark:text-violet-400 border-violet-500/20",
-		SVCB: "bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-400 border-fuchsia-500/20",
-	};
-
-	function cleanDomain(raw: string): string {
-		if (!raw) return "";
-		return raw.trim().replace(/\.$/, "");
-	}
-
-	function cleanAnswer(raw?: string | null): string {
-		if (!raw) return "—";
-		return raw
-			.replace(/^"|"$/g, "")
-			.replace(/^(A|AAAA|CNAME|PTR|NS)\((.*)\)$/, "$2")
-			.trim()
-			.replace(/\.$/, "");
-	}
-
-	function formatTime(ts: number): string {
-		if (!ts) return "—";
-		const ms = ts < 1e11 ? ts * 1000 : ts;
-		const d = new Date(ms);
-		return d.toLocaleTimeString(undefined, {
-			hour12: false,
-			hour: "2-digit",
-			minute: "2-digit",
-			second: "2-digit",
-		});
-	}
-
-	function formatLatency(us: number): string {
-		if (us === 0) return "0 ms";
-		if (us < 1000) return `${us} µs`;
-		return `${(us / 1000).toFixed(1)} ms`;
-	}
-
-	async function copyToClipboard(text: string, label: string) {
-		try {
-			await navigator.clipboard.writeText(text);
-			copiedItem = text;
-			toast.success(`Copied ${label} to clipboard`);
-			setTimeout(() => {
-				copiedItem = null;
-			}, 2000);
-		} catch {
-			toast.error("Failed to copy to clipboard");
-		}
-	}
-
-	async function handleQuickBlock(domain: string) {
-		const target = cleanDomain(domain);
-		try {
-			await dnsBlock(target);
-			toast.success(`Added ${target} to adblock black list`);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to block domain");
-		}
-	}
-
-	async function handleQuickAllow(domain: string) {
-		const target = cleanDomain(domain);
-		try {
-			await dnsAllow(target);
-			toast.success(`Added ${target} to allowlist`);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to allow domain");
-		}
-	}
-
-	function getResultBadge(result: string, cached: boolean, filter?: FilterMatch | null) {
-		if (filter?.action === "allow") {
-			return {
-				label: "Allowed (@@)",
-				class: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
-			};
-		}
-		const lower = (result || "").toLowerCase();
-		if (
-			lower === "cachedblock" ||
-			lower === "cached_block" ||
-			(lower.includes("block") && cached)
-		) {
-			return {
-				label: "Cached Block",
-				class: "bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/20",
-			};
-		}
-		if (lower.includes("block") || lower.includes("deny")) {
-			return {
-				label: "Blocked",
-				class: "bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20",
-			};
-		}
-		if (lower === "rewritten" || lower.includes("rewrite")) {
-			return {
-				label: "Rewritten",
-				class: "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20",
-			};
-		}
-		if (lower === "local") {
-			return {
-				label: "Local",
-				class: "bg-teal-500/10 text-teal-600 dark:text-teal-400 border-teal-500/20",
-			};
-		}
-		if (lower === "nxdomain") {
-			return {
-				label: "NXDomain",
-				class: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
-			};
-		}
-		if (lower === "error") {
-			return {
-				label: "Error",
-				class: "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20",
-			};
-		}
-		if (cached || lower === "cached") {
-			return {
-				label: "Cached",
-				class: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
-			};
-		}
-		if (lower === "coalesced") {
-			return {
-				label: "Coalesced",
-				class: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border-cyan-500/20",
-			};
-		}
-		return {
-			label: "Forwarded",
-			class: "bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/20",
-		};
+	async function copyItem(text: string, label: string) {
+		if (!(await copyToClipboard(text, label))) return;
+		copiedItem = text;
+		setTimeout(() => {
+			copiedItem = null;
+		}, 2000);
 	}
 
 	function handleMouseEnter() {
@@ -236,7 +99,7 @@
 	});
 </script>
 
-<Card.Root class="overflow-hidden border shadow-sm">
+<Card.Root class="overflow-hidden border">
 	<!-- Live Control Header -->
 	<Card.Header class="p-4 border-b border-border/50 bg-muted/20 space-y-3">
 		<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -244,7 +107,7 @@
 				<div class="flex items-center gap-2">
 					<RadioIcon
 						class="size-4 {isConnected && !isPaused
-							? 'text-emerald-500 animate-pulse'
+							? 'text-success'
 							: 'text-muted-foreground'}"
 					/>
 					<Card.Title class="text-sm font-semibold tracking-tight">
@@ -253,8 +116,8 @@
 				</div>
 				<Badge
 					variant="outline"
-					class="font-mono text-[10px] px-2 py-0.5 {isConnected && !isPaused
-						? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+					class="font-mono text-xs px-2 py-0.5 {isConnected && !isPaused
+						? 'border-success/30 bg-success/10 text-success'
 						: 'border-border bg-secondary text-muted-foreground'}"
 				>
 					{isPaused ? "Paused" : isConnected ? "Streaming" : "Disconnected"}
@@ -263,7 +126,7 @@
 				{#if bufferedNewCount > 0}
 					<Badge
 						variant="secondary"
-						class="font-mono text-[10px] bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30 animate-pulse"
+						class="font-mono text-xs bg-warning/10 text-warning border-warning/20"
 					>
 						+{bufferedNewCount} new buffered
 					</Badge>
@@ -301,7 +164,7 @@
 				<Button
 					variant={freezeOnHover ? "secondary" : "ghost"}
 					size="sm"
-					class="h-8 text-xs gap-1.5 px-2.5 {isHovered ? 'border-amber-500/40 text-amber-600' : ''}"
+					class="h-8 text-xs gap-1.5 px-2.5 {isHovered ? 'border-warning/40 text-warning' : ''}"
 					onclick={() => (freezeOnHover = !freezeOnHover)}
 					title="Prevent incoming events from shifting the table when mouse is over rows"
 				>
@@ -374,19 +237,19 @@
 						</Table.Cell>
 					</Table.Row>
 				{:else}
-					{#each displayEntries as entry, i (`live-${entry.timestamp}-${entry.src_ip}-${entry.domain}-${entry.qtype}-${i}`)}
+					{#each displayEntries as entry (entry._seq)}
 						{@const domainClean = cleanDomain(entry.domain)}
 						{@const answerClean = cleanAnswer(entry.answer)}
-						{@const style = typeVariants[entry.qtype] || "bg-secondary text-secondary-foreground border-border"}
+						{@const style = recordTypeClass(entry.qtype)}
 						{@const badgeInfo = getResultBadge(entry.result, entry.cached, entry.filter)}
 						{@const isCoalesced = entry.result === "coalesced"}
 						<Table.Row
-							class="hover:bg-muted/50 transition-colors cursor-pointer group text-xs font-normal {entry.coalesce_id != null ? 'border-l-4 border-l-cyan-500/70' : ''}"
+							class="hover:bg-muted/50 transition-colors cursor-pointer group text-xs font-normal {entry.coalesce_id != null ? 'border-l-4 border-l-info/70' : ''}"
 							onclick={() => onInspect(entry)}
 						>
 							<!-- Time -->
 							<Table.Cell class="font-mono text-muted-foreground whitespace-nowrap">
-								{formatTime(entry.timestamp)}
+								{formatClockTime(entry.timestamp)}
 							</Table.Cell>
 
 							<!-- Client -->
@@ -399,7 +262,7 @@
 												{entry.src_hostname}
 											</span>
 										</div>
-										<span class="text-[10px] font-mono text-muted-foreground truncate pl-5">
+										<span class="text-xs font-mono text-muted-foreground truncate pl-5">
 											{entry.src_ip}
 										</span>
 									</div>
@@ -417,14 +280,14 @@
 							<Table.Cell class="font-medium">
 								<div class="flex items-center gap-1.5 {isCoalesced ? 'pl-2' : ''}">
 									{#if isCoalesced}
-										<span class="text-cyan-600 dark:text-cyan-400 font-mono text-[11px] shrink-0" title="Coalesced into in-flight query">↳</span>
+										<span class="text-info font-mono text-xs shrink-0" title="Coalesced into in-flight query">↳</span>
 									{/if}
 									<span class="truncate max-w-[220px] font-mono text-foreground font-medium" title={domainClean}>
 										{domainClean}
 									</span>
 									{#if entry.repeats > 1}
 										<span
-											class="shrink-0 rounded border border-border bg-muted px-1 font-mono text-[10px] text-muted-foreground"
+											class="shrink-0 rounded border border-border bg-muted px-1 font-mono text-xs text-muted-foreground"
 											title={`${entry.repeats} identical queries from this client, folded into one line`}
 										>
 											×{entry.repeats}
@@ -434,13 +297,13 @@
 										type="button"
 										onclick={(e) => {
 											e.stopPropagation();
-											copyToClipboard(domainClean, "domain name");
+											copyItem(domainClean, "domain name");
 										}}
 										class="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 hover:text-primary rounded"
 										title="Copy domain"
 									>
 										{#if copiedItem === domainClean}
-											<CheckIcon class="size-3.5 text-emerald-500" />
+											<CheckIcon class="size-3.5 text-success" />
 										{:else}
 											<CopyIcon class="size-3.5 text-muted-foreground" />
 										{/if}
@@ -450,7 +313,7 @@
 
 							<!-- Type -->
 							<Table.Cell>
-								<Badge variant="outline" class="px-2 py-0.5 text-[10px] font-mono border font-semibold {style}">
+								<Badge variant="outline" class="px-2 py-0.5 text-xs font-mono border font-semibold {style}">
 									{entry.qtype}
 								</Badge>
 							</Table.Cell>
@@ -460,13 +323,13 @@
 								<div class="flex items-center gap-1.5 flex-wrap">
 									<Badge
 										variant="outline"
-										class="px-2 py-0.5 text-[10px] font-mono border font-semibold {badgeInfo.class}"
+										class="px-2 py-0.5 text-xs font-mono border font-semibold {badgeInfo.class}"
 										title={entry.filter?.rule ? `Rule: ${entry.filter.rule}` : undefined}
 									>
 										{badgeInfo.label}
 									</Badge>
 									{#if isCoalesced}
-										<span class="text-[10px] text-cyan-600 dark:text-cyan-400 font-mono" title={`Batch #${entry.coalesce_id}`}>multiplex</span>
+										<span class="text-xs text-info font-mono" title={`Batch #${entry.coalesce_id}`}>multiplex</span>
 									{/if}
 								</div>
 							</Table.Cell>
@@ -489,21 +352,21 @@
 											<EyeIcon class="size-3.5 text-primary" />
 											Inspect Log
 										</DropdownMenu.Item>
-										<DropdownMenu.Item onclick={() => copyToClipboard(domainClean, "domain")} class="gap-2">
+										<DropdownMenu.Item onclick={() => copyItem(domainClean, "domain")} class="gap-2">
 											<CopyIcon class="size-3.5 text-muted-foreground" />
 											Copy Domain
 										</DropdownMenu.Item>
-										<DropdownMenu.Item onclick={() => copyToClipboard(entry.src_ip, "client IP")} class="gap-2">
+										<DropdownMenu.Item onclick={() => copyItem(entry.src_ip, "client IP")} class="gap-2">
 											<CopyIcon class="size-3.5 text-muted-foreground" />
 											Copy Client IP
 										</DropdownMenu.Item>
 										{#if canDnsWrite}
 										<DropdownMenu.Separator />
-										<DropdownMenu.Item onclick={() => handleQuickBlock(domainClean)} class="gap-2 text-rose-500">
+										<DropdownMenu.Item onclick={() => quickDnsRule("block", domainClean)} class="gap-2 text-danger">
 											<ShieldAlertIcon class="size-3.5" />
 											Block Domain
 										</DropdownMenu.Item>
-										<DropdownMenu.Item onclick={() => handleQuickAllow(domainClean)} class="gap-2 text-emerald-500">
+										<DropdownMenu.Item onclick={() => quickDnsRule("allow", domainClean)} class="gap-2 text-success">
 											<ShieldCheckIcon class="size-3.5" />
 											Allow Domain
 										</DropdownMenu.Item>
@@ -511,7 +374,7 @@
 											onclick={() => onAddRewrite(domainClean, answerClean !== "—" ? answerClean : "")}
 											class="gap-2"
 										>
-											<ArrowRightLeftIcon class="size-3.5 text-amber-500" />
+											<ArrowRightLeftIcon class="size-3.5 text-warning" />
 											Create Rewrite
 										</DropdownMenu.Item>
 										{/if}

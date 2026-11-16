@@ -629,7 +629,7 @@ fn render_status_dashboard(
     println!(
         " {} {}  {}",
         printer.status_badge(status.enabled),
-        "Firewall & NAT Orchestrator (nftables)".bold().white(),
+        "Firewall (nftables)".bold().white(),
         badge
     );
 
@@ -2066,10 +2066,10 @@ async fn handle_reload(client: &LanforgeClient, printer: &Printer) -> Result<()>
     if printer.json {
         return printer.print_json(&resp);
     }
-    printer.success(&format!(
-        "Firewall rules recompiled and reloaded in-place: {}",
-        resp.message
-    ));
+    printer.success_detail(
+        "Firewall rules recompiled and reloaded in-place",
+        &resp.message,
+    );
     Ok(())
 }
 

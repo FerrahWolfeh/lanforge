@@ -212,15 +212,15 @@ impl AuthManager {
     }
 }
 
-pub fn extract_token_str(headers: &HeaderMap) -> Option<&str> {
-    if let Some(auth_header) = headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok()) {
-        if let Some(stripped) = auth_header.strip_prefix("Bearer ") {
-            return Some(stripped);
-        }
-        if !auth_header.contains(' ') {
-            return Some(auth_header);
-        }
+fn header_token(headers: &HeaderMap) -> Option<&str> {
+    let auth_header = headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok())?;
+    if let Some(stripped) = auth_header.strip_prefix("Bearer ") {
+        return Some(stripped);
     }
+    (!auth_header.contains(' ')).then_some(auth_header)
+}
+
+fn cookie_token(headers: &HeaderMap) -> Option<&str> {
     if let Some(cookie_header) = headers.get(COOKIE).and_then(|v| v.to_str().ok()) {
         for cookie in cookie_header.split(';') {
             let cookie = cookie.trim();
@@ -235,23 +235,16 @@ pub fn extract_token_str(headers: &HeaderMap) -> Option<&str> {
     None
 }
 
-/// Extract authentication token from headers (Authorization, Cookie) or query string (`token`, `access_token`).
+/// Extract the authentication token: `Authorization` header, then session cookie.
+///
+/// The token is never read from the query string: URLs end up in proxy/access logs and browser
+/// history. The header comes before the cookie, so a stale cookie left in the browser cannot
+/// shadow the token a request carries on purpose.
 #[must_use]
-pub fn extract_token(headers: &HeaderMap, query: Option<&str>) -> Option<String> {
-    if let Some(tok) = extract_token_str(headers) {
-        return Some(tok.to_string());
-    }
-    if let Some(q) = query {
-        for pair in q.split('&') {
-            if let Some((k, v)) = pair.split_once('=')
-                && (k == "token" || k == "access_token")
-                && !v.is_empty()
-            {
-                return Some(v.to_string());
-            }
-        }
-    }
-    None
+pub fn extract_token(headers: &HeaderMap) -> Option<String> {
+    header_token(headers)
+        .or_else(|| cookie_token(headers))
+        .map(str::to_string)
 }
 
 impl Default for AuthManager {
@@ -269,11 +262,9 @@ where
 
     fn from_request_parts(parts: &mut Parts, state: &S) -> impl Future<Output = HttpResult<Self>> {
         let auth_manager = AuthManager::from_ref(state);
-        let result = extract_token(&parts.headers, parts.uri.query())
+        let result = extract_token(&parts.headers)
             .ok_or_else(|| {
-                HttpError::Auth(
-                    "Missing Authorization header, session cookie, or token parameter".into(),
-                )
+                HttpError::Auth("Missing Authorization header, or session cookie".into())
             })
             .and_then(|token| {
                 auth_manager
@@ -380,10 +371,8 @@ where
     async fn from_request_parts(parts: &mut Parts, state: &S) -> HttpResult<Self> {
         let auth_manager = AuthManager::from_ref(state);
         let db = Arc::<dyn DatabaseStore>::from_ref(state);
-        let token = extract_token(&parts.headers, parts.uri.query()).ok_or_else(|| {
-            HttpError::Auth(
-                "Missing Authorization header, session cookie, or token parameter".into(),
-            )
+        let token = extract_token(&parts.headers).ok_or_else(|| {
+            HttpError::Auth("Missing Authorization header, or session cookie".into())
         })?;
 
         authenticate_token(&token, &auth_manager, db.as_ref())
@@ -499,9 +488,8 @@ pub async fn middleware(
         return Ok(next.run(req).await);
     }
 
-    let token = extract_token(req.headers(), req.uri().query()).ok_or_else(|| {
-        HttpError::Auth("Missing Authorization header, session cookie, or token parameter".into())
-    })?;
+    let token = extract_token(req.headers())
+        .ok_or_else(|| HttpError::Auth("Missing Authorization header, or session cookie".into()))?;
 
     let user = authenticate_token(&token, &auth_manager, db.as_ref())?;
 

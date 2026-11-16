@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { copyToClipboard, errorMessage } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Card from "$lib/components/ui/card";
 	import { Button } from "$lib/components/ui/button";
@@ -28,16 +29,11 @@
 	let copiedDomain = $state<string | null>(null);
 
 	async function copyText(text: string) {
-		try {
-			await navigator.clipboard.writeText(text);
-			copiedDomain = text;
-			toast.success(`Copied "${text}" to clipboard`);
-			setTimeout(() => {
-				copiedDomain = null;
-			}, 2000);
-		} catch {
-			toast.error("Failed to copy to clipboard");
-		}
+		if (!(await copyToClipboard(text, `"${text}"`))) return;
+		copiedDomain = text;
+		setTimeout(() => {
+			copiedDomain = null;
+		}, 2000);
 	}
 
 	async function handleAllow(domain: string) {
@@ -45,8 +41,8 @@
 			await dnsAllow(domain);
 			toast.success(`Whitelisted domain: ${domain}`);
 			onAllowedDomain(domain);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to allow domain");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to allow domain"));
 		}
 	}
 
@@ -67,7 +63,7 @@
 		<Card.Header class="pb-3 border-b border-border/50">
 			<div class="flex items-center justify-between">
 				<div class="flex items-center gap-2">
-					<ShieldAlertIcon class="size-4 text-rose-500" />
+					<ShieldAlertIcon class="size-4 text-danger" />
 					<Card.Title class="text-base">Top Blocked Domains</Card.Title>
 				</div>
 				<span class="text-xs text-muted-foreground font-mono">
@@ -100,9 +96,13 @@
 						<div class="flex items-center justify-between p-3.5 hover:bg-muted/40 transition-colors group">
 							<div class="flex flex-col gap-1 min-w-0 pr-3 flex-1">
 								<div class="flex items-center gap-2 min-w-0">
-									<span class="font-mono text-xs font-semibold truncate text-foreground" title={item.domain}>
+									<a
+										href={`/dns/domains/${encodeURIComponent(item.domain)}`}
+										class="font-mono text-xs font-semibold truncate text-foreground hover:underline"
+										title={item.domain}
+									>
 										{item.domain}
-									</span>
+									</a>
 									<button
 										type="button"
 										onclick={() => copyText(item.domain)}
@@ -110,14 +110,14 @@
 										title="Copy domain"
 									>
 										{#if copiedDomain === item.domain}
-											<CheckIcon class="size-3 text-emerald-500" />
+											<CheckIcon class="size-3 text-success" />
 										{:else}
 											<CopyIcon class="size-3" />
 										{/if}
 									</button>
 								</div>
 								<div class="w-full bg-muted/60 rounded-full h-1 overflow-hidden">
-									<div class="bg-rose-500 h-1 rounded-full" style="width: {pct}%"></div>
+									<div class="bg-danger h-1 rounded-full" style="width: {pct}%"></div>
 								</div>
 							</div>
 
@@ -131,7 +131,7 @@
 									variant="ghost"
 									size="sm"
 									onclick={() => handleAllow(item.domain)}
-									class="h-7 px-2 text-xs gap-1 text-emerald-600 hover:text-emerald-500 hover:bg-emerald-500/10"
+									class="h-7 px-2 text-xs gap-1 text-success hover:text-success hover:bg-success/10"
 									title="Add to Allowlist"
 								>
 									<ShieldCheckIcon class="size-3.5" />
@@ -184,11 +184,20 @@
 						<div class="flex items-center justify-between p-3.5 hover:bg-muted/40 transition-colors">
 							<div class="flex flex-col gap-1 min-w-0 pr-3 flex-1">
 								<div class="flex items-center gap-2 min-w-0">
-									<span class="text-xs font-semibold truncate text-foreground">
-										{client.hostname || client.ip}
-									</span>
+									{#if client.mac}
+										<a
+											href={`/network/devices/${encodeURIComponent(client.mac)}`}
+											class="text-xs font-semibold truncate text-foreground hover:underline"
+										>
+											{client.hostname || client.ip}
+										</a>
+									{:else}
+										<span class="text-xs font-semibold truncate text-foreground">
+											{client.hostname || client.ip}
+										</span>
+									{/if}
 									{#if client.hostname}
-										<span class="text-[11px] font-mono text-muted-foreground">
+										<span class="text-xs font-mono text-muted-foreground">
 											({client.ip})
 										</span>
 									{/if}

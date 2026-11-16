@@ -1,7 +1,7 @@
 <script lang="ts">
+import { errorMessage } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Tabs from "$lib/components/ui/tabs";
-	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import {
@@ -49,7 +49,7 @@
 
 	// Editable form fields
 	let formEnabled = $state(true);
-	let formIface = $state("end0");
+	let formIface = $state("");
 	let formManaged = $state(false);
 	let formOtherConfig = $state(false);
 	let formDeprecateOnRenumber = $state(true);
@@ -86,7 +86,7 @@
 	let isDirty = $derived.by(() => {
 		if (!config) return false;
 		if (formEnabled !== config.enabled) return true;
-		if (formIface !== (config.iface || "end0")) return true;
+		if (formIface !== (config.iface ?? "")) return true;
 		if (formManaged !== config.managed) return true;
 		if (formOtherConfig !== config.other_config) return true;
 		if (formDeprecateOnRenumber !== (config.deprecate_on_renumber ?? true)) return true;
@@ -118,7 +118,7 @@
 
 	function syncFormFromConfig(c: RaServerConfig) {
 		formEnabled = c.enabled;
-		formIface = c.iface ?? (availableInterfaces[0]?.name || "end0");
+		formIface = c.iface ?? "";
 		formManaged = c.managed;
 		formOtherConfig = c.other_config;
 		formDeprecateOnRenumber = c.deprecate_on_renumber ?? true;
@@ -149,20 +149,26 @@
 		formDnssl = dnsslList;
 	}
 
-	async function loadAll(silent = false) {
+	// Status is polled; the config (and its form re-sync) refreshes at most this often.
+	const CONFIG_REFRESH_MS = 30_000;
+	let configLoadedAt = 0;
+
+	async function loadAll(silent = false, withConfig = true) {
 		if (!silent) loading = true;
 		try {
 			const fetchSetup = !silent || availableInterfaces.length === 0;
 			const [s, c, setupRes] = await Promise.all([
 				raStatus().catch(() => null),
-				raConfig().catch(() => null),
+				withConfig ? raConfig().catch(() => null) : Promise.resolve(null),
 				fetchSetup ? getSetupStatus().catch(() => null) : Promise.resolve(null),
 			]);
-			status = s;
+			// A failed poll keeps the last status: a null here would read as "Disabled".
+			if (s) status = s;
 			if (setupRes?.interfaces) {
 				availableInterfaces = setupRes.interfaces;
 			}
 			if (c) {
+				configLoadedAt = Date.now();
 				if (!config || !isDirty) {
 					config = c;
 					syncFormFromConfig(c);
@@ -197,11 +203,11 @@
 				hop_limit: Number.isFinite(formHopLimit) ? formHopLimit : 64,
 				priority: formPriority,
 				max_interval_secs: Number(formMaxInterval) || 200,
-				min_interval_secs: formMinInterval ? Number(formMinInterval) : null,
-				lifetime_secs: formLifetime ? Number(formLifetime) : null,
+				min_interval_secs: formMinInterval ?? null,
+				lifetime_secs: formLifetime ?? null,
 				reachable_time_ms: Number(formReachableTime) || 0,
 				retrans_timer_ms: Number(formRetransTimer) || 0,
-				mtu: formMtu ? Number(formMtu) : null,
+				mtu: formMtu ?? null,
 				prefixes: formPrefixes,
 				rdnss: rdnssObj,
 				dnssl: dnsslObj,
@@ -210,8 +216,8 @@
 			await raUpdateConfig(payload);
 			toast.success("Router Advertisement configuration saved!");
 			await loadAll(true);
-		} catch (err: any) {
-			toast.error(err?.message || "Failed to update RA configuration");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to update RA configuration"));
 		} finally {
 			saving = false;
 		}
@@ -223,8 +229,8 @@
 			await raTrigger();
 			toast.success("RA multicast burst packet triggered!");
 			await loadAll(true);
-		} catch (err: any) {
-			toast.error(err?.message || "Failed to trigger RA burst");
+		} catch (err) {
+			toast.error(errorMessage(err, "Failed to trigger RA burst"));
 		} finally {
 			triggering = false;
 		}
@@ -239,7 +245,10 @@
 
 	onMount(() => {
 		loadAll();
-		const stopPolling = createPolling(() => loadAll(true), 5000);
+		const stopPolling = createPolling(
+			() => loadAll(true, Date.now() - configLoadedAt >= CONFIG_REFRESH_MS),
+			5000
+		);
 		return () => {
 			stopPolling();
 		};
@@ -253,14 +262,14 @@
 <div class="flex flex-col gap-6 w-full">
 	<!-- Page Header -->
 	<PageHeader
-		title="IPv6 Router Advertisement"
-		description="Autonomous SLAAC orchestration, RFC 4861/8106 ICMPv6 telemetry, and runtime parameters."
+		title="IPv6 Router Advertisements"
+		description="How devices on the LAN learn the IPv6 prefix, router and DNS server."
 		icon={RadioIcon}
 	>
 		{#snippet badge()}
 			{#if status?.enabled}
 				<StatusBadge variant="online" showDot={true} pulse={true} text="Active" />
-			{:else}
+			{:else if status}
 				<StatusBadge variant="dormant" text="Idle / Disabled" />
 			{/if}
 		{/snippet}
@@ -281,7 +290,7 @@
 				size="sm"
 				onclick={handleTriggerBurst}
 				disabled={triggering || !status?.enabled}
-				class="h-8 text-xs gap-1.5 shadow-sm"
+				class="h-8 text-xs gap-1.5"
 			>
 				<ZapIcon class="size-3.5 {triggering ? 'animate-pulse' : ''}" />
 				<span>Trigger Burst</span>
@@ -291,13 +300,13 @@
 	</PageHeader>
 
 	{#if capabilitiesState.isLoaded && !capabilitiesState.isActualEnabled("ra")}
-		<div class="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-amber-900 dark:text-amber-200 flex items-start gap-3">
-			<RadioIcon class="size-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+		<div class="rounded-lg border border-warning/30 bg-warning/10 p-4 text-warning flex items-start gap-3">
+			<RadioIcon class="size-5 text-muted-foreground shrink-0 mt-0.5" />
 			<div class="flex flex-col gap-1 text-xs">
 				<div class="flex items-center gap-2">
 					<span class="font-semibold text-sm">Router Advertisement (RA) Module is Disabled</span>
 					{#if capabilitiesState.debugMode}
-						<span class="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-mono font-medium text-amber-600 dark:text-amber-300 border border-amber-500/30">
+						<span class="rounded bg-warning/20 px-1.5 py-0.5 text-xs font-mono font-medium text-warning border border-warning/30">
 							DEV OVERRIDE
 						</span>
 					{/if}
@@ -311,12 +320,12 @@
 
 	{#if loading && !status}
 		<div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-			<Skeleton class="h-28 w-full rounded-xl" />
-			<Skeleton class="h-28 w-full rounded-xl" />
-			<Skeleton class="h-28 w-full rounded-xl" />
-			<Skeleton class="h-28 w-full rounded-xl" />
+			<Skeleton class="h-28 w-full rounded-lg" />
+			<Skeleton class="h-28 w-full rounded-lg" />
+			<Skeleton class="h-28 w-full rounded-lg" />
+			<Skeleton class="h-28 w-full rounded-lg" />
 		</div>
-		<Skeleton class="h-96 w-full rounded-xl" />
+		<Skeleton class="h-96 w-full rounded-lg" />
 	{:else}
 		<!-- KPI Stats Cards -->
 		<RaStatsCards {status} />
@@ -333,7 +342,7 @@
 						<SlidersIcon class="size-4" />
 						Configuration
 						{#if isDirty}
-							<span class="size-2 rounded-full bg-amber-500 animate-pulse"></span>
+							<span class="size-2 rounded-full bg-warning animate-pulse"></span>
 						{/if}
 					</Tabs.Trigger>
 				</Tabs.List>
@@ -365,7 +374,6 @@
 					bind:formRdnss
 					bind:formDnssl
 					{interfaceOptions}
-					{status}
 					{isDirty}
 					{saving}
 					onSave={handleSaveConfig}
