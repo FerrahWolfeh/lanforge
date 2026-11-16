@@ -220,7 +220,7 @@
 							</span>
 							{#if isDbgOnly && !isCollapsed}
 								<span
-									class="ml-auto mr-2.5 rounded bg-amber-500/15 px-1 py-0.5 text-[9px] font-mono font-medium text-amber-500 border border-amber-500/30 shrink-0"
+									class="ml-auto mr-2.5 rounded bg-warning/15 px-1 py-0.5 text-[10px] font-mono font-medium text-warning border border-warning/30 shrink-0"
 									title="Disabled on daemon, visible due to dev capabilities override"
 								>
 									dbg
