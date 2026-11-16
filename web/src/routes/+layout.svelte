@@ -159,7 +159,7 @@
 	<title>{currentTabTitle}</title>
 </svelte:head>
 
-<ModeWatcher defaultMode="system" />
+<ModeWatcher defaultMode="dark" />
 
 	{#if isAuthPage}
 		<main class="min-h-screen w-full bg-background text-foreground">

@@ -3,7 +3,7 @@
 	import { dev } from "$app/environment";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import { Badge } from "$lib/components/ui/badge";
-	import { toggleMode } from "mode-watcher";
+	import { switchMode } from "$lib/theme";
 	import { sidebarState } from "$lib/stores/sidebar.svelte";
 	import { auth } from "$lib/stores/auth.svelte";
 	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
@@ -72,7 +72,7 @@
 			keywords: ["theme", "dark", "light", "mode", "colors"],
 			category: "Quick Actions",
 			icon: SunMoonIcon,
-			action: () => toggleMode()
+			action: () => switchMode()
 		},
 		{
 			id: "action-sidebar",

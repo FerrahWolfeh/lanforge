@@ -1,18 +1,10 @@
 <script lang="ts">
-	import { toggleMode } from "mode-watcher";
+	import { switchMode } from "$lib/theme";
 	import { Button } from "$lib/components/ui/button";
 	import SunIcon from "@lucide/svelte/icons/sun";
 	import MoonIcon from "@lucide/svelte/icons/moon";
 
-	function handleToggle() {
-		if (typeof document !== "undefined" && "startViewTransition" in document) {
-			(document as Document & { startViewTransition: (cb: () => void) => void }).startViewTransition(() => {
-				toggleMode();
-			});
-		} else {
-			toggleMode();
-		}
-	}
+	const handleToggle = switchMode;
 </script>
 
 <Button
