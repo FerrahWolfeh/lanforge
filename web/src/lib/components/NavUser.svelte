@@ -79,7 +79,7 @@
 
 <DropdownMenu.Root>
 	<DropdownMenu.Trigger
-		class="flex items-center h-10 w-full rounded-xl text-left text-sm transition-[background-color,color] duration-150 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring overflow-hidden cursor-pointer"
+		class="flex items-center h-10 w-full rounded-md text-left text-sm transition-[background-color,color] duration-150 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring overflow-hidden cursor-pointer"
 		title={sidebarState.isCollapsed ? `${username} (${role})` : undefined}
 	>
 		<div class="size-10 shrink-0 flex items-center justify-center">
@@ -96,7 +96,7 @@
 				: 'opacity-100 max-w-[140px] translate-x-0'}"
 		>
 			<span class="truncate font-semibold tracking-tight text-foreground">{username}</span>
-			<span class="truncate text-[10px] text-muted-foreground uppercase font-mono">{role}</span>
+			<span class="truncate text-xs text-muted-foreground">{role}</span>
 		</div>
 
 		<div
@@ -108,7 +108,7 @@
 		</div>
 	</DropdownMenu.Trigger>
 
-	<DropdownMenu.Content class="w-56 rounded-xl shadow-lg border border-border/80" side="right" align="end" sideOffset={8}>
+	<DropdownMenu.Content class="w-56 rounded-md shadow-lg border border-border/80" side="right" align="end" sideOffset={8}>
 		<DropdownMenu.Label class="p-0 font-normal">
 			<div class="flex items-center gap-2 px-2.5 py-2 text-left text-sm">
 				<div
@@ -119,7 +119,7 @@
 				<div class="grid flex-1 text-left text-sm leading-tight">
 					<span class="truncate font-semibold text-foreground">{username}</span>
 					<div class="flex items-center gap-1.5 mt-0.5">
-						<Badge variant="secondary" class="text-[10px] px-1.5 py-0 font-mono">
+						<Badge variant="secondary" class="text-xs px-1.5 py-0 font-mono">
 							{role}
 						</Badge>
 					</div>

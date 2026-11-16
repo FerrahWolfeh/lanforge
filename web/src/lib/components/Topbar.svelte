@@ -157,15 +157,15 @@
 				<Tooltip.Root>
 					<Tooltip.Trigger
 						class={[
-							"flex items-center gap-1.5 h-8 px-2.5 rounded-xl border text-xs font-mono font-medium transition-colors cursor-pointer select-none",
+							"flex items-center gap-1.5 h-8 px-2.5 rounded-md border text-xs font-mono font-medium transition-colors cursor-pointer select-none",
 							capabilitiesState.debugMode
-								? "bg-amber-500/15 border-amber-500/40 text-amber-500 hover:bg-amber-500/25 shadow-xs"
+								? "bg-warning/15 border-warning/40 text-warning hover:bg-warning/25"
 								: "bg-muted/40 border-border/70 text-muted-foreground hover:text-foreground hover:bg-muted/80",
 						].join(" ")}
 						onclick={() => capabilitiesState.toggleDebugMode()}
 						aria-label="Toggle capabilities debug override (Vite Dev only)"
 					>
-						<BugIcon class="size-3.5 shrink-0 {capabilitiesState.debugMode ? 'text-amber-500' : 'text-muted-foreground'}" />
+						<BugIcon class="size-3.5 shrink-0 {capabilitiesState.debugMode ? 'text-warning' : 'text-muted-foreground'}" />
 						<span class="hidden sm:inline">Caps:</span>
 						<span class="font-semibold">{capabilitiesState.debugMode ? "All" : "Live"}</span>
 					</Tooltip.Trigger>
@@ -190,7 +190,7 @@
 		>
 			<SearchIcon class="size-3.5" />
 			<span>Search...</span>
-			<kbd class="pointer-events-none inline-flex h-4.5 select-none items-center gap-0.5 rounded border border-border/80 bg-background px-1.5 font-mono text-[11px] font-medium text-muted-foreground">
+			<kbd class="pointer-events-none inline-flex h-4.5 select-none items-center gap-0.5 rounded border border-border/80 bg-background px-1.5 font-mono text-xs font-medium text-muted-foreground">
 				<span>⌘</span>K
 			</kbd>
 		</button>

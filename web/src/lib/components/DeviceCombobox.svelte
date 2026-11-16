@@ -128,14 +128,14 @@
 	<!-- Autocomplete Suggestions Popover -->
 	{#if open && !readonly && !disabled && matchingDevices.length > 0}
 		<div
-			class="absolute top-full left-0 right-0 z-50 mt-1 flex flex-col rounded-lg border border-border bg-card p-1 shadow-xl max-h-52 overflow-y-auto text-xs"
+			class="absolute top-full left-0 right-0 z-50 mt-1 flex flex-col rounded-lg border border-border bg-card p-1 max-h-52 overflow-y-auto text-xs"
 		>
 			<div
-				class="flex items-center justify-between px-2.5 py-1 text-[10px] uppercase tracking-wider text-muted-foreground font-semibold border-b border-border/40"
+				class="flex items-center justify-between px-2.5 py-1 text-xs font-medium text-muted-foreground border-b border-border/40"
 			>
 				<span>Discovered LAN Devices</span>
-				<span class="flex items-center gap-1 font-mono text-[10px]">
-					<WifiIcon class="h-3 w-3 text-emerald-400" />
+				<span class="flex items-center gap-1 font-mono text-xs">
+					<WifiIcon class="h-3 w-3 text-muted-foreground" />
 					{activeDevices.length} available
 				</span>
 			</div>
@@ -156,28 +156,28 @@
 						>
 							{dev.hostname || "Unassigned Device"}
 						</span>
-						<span class="text-muted-foreground text-[10px]">
+						<span class="text-muted-foreground text-xs">
 							{dev.mac}
 						</span>
 					</div>
 					<div class="flex items-center gap-2 shrink-0">
 						{#if dev.primary_v4 || dev.v4?.ip}
 							<span
-								class="text-emerald-500 font-mono text-[11px]"
+								class="text-foreground font-mono text-xs"
 							>
 								{dev.primary_v4 || dev.v4?.ip}
 							</span>
 						{/if}
 						{#if dev.primary_v6}
 							<span
-								class="text-purple-400 font-mono text-[10px] hidden sm:inline max-w-[130px] truncate"
+								class="text-muted-foreground font-mono text-xs hidden sm:inline max-w-[130px] truncate"
 								title={dev.primary_v6}
 							>
 								{dev.primary_v6}
 							</span>
 						{/if}
 						{#if isSelected}
-							<CheckIcon class="h-3.5 w-3.5 text-emerald-500" />
+							<CheckIcon class="h-3.5 w-3.5 text-success" />
 						{/if}
 					</div>
 				</button>

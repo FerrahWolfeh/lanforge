@@ -386,7 +386,7 @@
 <Dialog.Root bind:open={commandState.isOpen}>
 	<Dialog.Content
 		showCloseButton={false}
-		class="p-0 overflow-hidden sm:max-w-xl rounded-2xl shadow-2xl border border-border/80 bg-card gap-0 top-4 translate-y-0 sm:top-[15%]"
+		class="p-0 overflow-hidden sm:max-w-xl rounded-lg shadow-2xl border border-border/80 bg-card gap-0 top-4 translate-y-0 sm:top-[15%]"
 	>
 		<Dialog.Header class="sr-only">
 			<Dialog.Title>Command Palette</Dialog.Title>
@@ -402,7 +402,7 @@
 				placeholder="Type a command or search for a page..."
 				class="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
 			/>
-			<Badge variant="outline" class="font-mono text-[10px] text-muted-foreground px-1.5 py-0">
+			<Badge variant="outline" class="font-mono text-xs text-muted-foreground px-1.5 py-0">
 				ESC
 			</Badge>
 		</div>
@@ -424,7 +424,7 @@
 					)}
 					<button
 						type="button"
-						class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl text-left transition-colors cursor-pointer {isSelected
+						class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-md text-left transition-colors cursor-pointer {isSelected
 							? 'bg-primary text-primary-foreground'
 							: 'hover:bg-muted/60 text-foreground'}"
 						onclick={() => executeItem(item)}
@@ -444,7 +444,7 @@
 								</span>
 								{#if item.subtitle}
 									<span
-										class="text-[11px] truncate font-mono {isSelected
+										class="text-xs truncate font-mono {isSelected
 											? 'text-primary-foreground/80'
 											: 'text-muted-foreground'}"
 									>
@@ -457,14 +457,14 @@
 						<div class="flex items-center gap-1.5 shrink-0">
 							{#if isDbgOnly}
 								<span
-									class="text-[9px] font-mono font-medium px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-500 border border-amber-500/30"
+									class="text-xs font-mono font-medium px-1.5 py-0.5 rounded bg-warning/15 text-warning border border-warning/30"
 									title="Disabled on daemon (visible in dev mode)"
 								>
 									DBG
 								</span>
 							{/if}
 							<span
-								class="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded {isSelected
+								class="text-xs font-medium px-1.5 py-0.5 rounded {isSelected
 									? 'bg-primary-foreground/20 text-primary-foreground'
 									: 'bg-muted/60 text-muted-foreground'}"
 							>
@@ -480,15 +480,15 @@
 		</div>
 
 		<!-- Footer Help (keyboard hints: no use on a touch screen) -->
-		<div class="max-sm:hidden flex items-center justify-between px-4 py-2 border-t border-border/50 bg-muted/20 text-[11px] text-muted-foreground">
+		<div class="max-sm:hidden flex items-center justify-between px-4 py-2 border-t border-border/50 bg-muted/20 text-xs text-muted-foreground">
 			<div class="flex items-center gap-3">
 				<span class="flex items-center gap-1">
-					<kbd class="rounded border border-border/80 bg-background px-1 py-0.5 font-mono text-[10px]">↑</kbd>
-					<kbd class="rounded border border-border/80 bg-background px-1 py-0.5 font-mono text-[10px]">↓</kbd>
+					<kbd class="rounded border border-border/80 bg-background px-1 py-0.5 font-mono text-xs">↑</kbd>
+					<kbd class="rounded border border-border/80 bg-background px-1 py-0.5 font-mono text-xs">↓</kbd>
 					navigate
 				</span>
 				<span class="flex items-center gap-1">
-					<kbd class="rounded border border-border/80 bg-background px-1 py-0.5 font-mono text-[10px]">↵</kbd>
+					<kbd class="rounded border border-border/80 bg-background px-1 py-0.5 font-mono text-xs">↵</kbd>
 					execute
 				</span>
 			</div>

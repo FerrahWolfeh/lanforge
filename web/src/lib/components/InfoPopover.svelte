@@ -53,17 +53,17 @@
 	>
 		{#if title}
 			<div class="flex items-center gap-1.5 font-semibold text-foreground text-xs">
-				<InfoIcon class="size-3.5 text-sky-500 shrink-0" />
+				<InfoIcon class="size-3.5 text-muted-foreground shrink-0" />
 				<span>{title}</span>
 			</div>
 		{/if}
 		{#if body}
-			<p class="text-muted-foreground text-[11px] leading-relaxed">
+			<p class="text-muted-foreground text-xs leading-relaxed">
 				{body}
 			</p>
 		{/if}
 		{#if children}
-			<div class="flex flex-col gap-1.5 pt-0.5 text-[11px]">
+			<div class="flex flex-col gap-1.5 pt-0.5 text-xs">
 				{@render children()}
 			</div>
 		{/if}

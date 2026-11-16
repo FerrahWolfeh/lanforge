@@ -52,19 +52,19 @@
 	<Portal>
 		<div
 			transition:fly={{ y: 24, duration: 220, easing: cubicOut }}
-			class="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center justify-between p-3 sm:p-3.5 rounded-xl border bg-card/95 backdrop-blur-md shadow-2xl border-primary/40 gap-4 w-[92vw] max-w-3xl pointer-events-auto"
+			class="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center justify-between p-3 sm:p-3.5 rounded-lg border bg-card/95 backdrop-blur-md border-primary/40 gap-4 w-[92vw] max-w-3xl pointer-events-auto"
 		>
 			<div class="flex items-center gap-2.5 min-w-0">
 				<span class="relative flex size-2.5 shrink-0">
-					<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-					<span class="relative inline-flex rounded-full size-2.5 bg-amber-500"></span>
+					<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-warning opacity-75"></span>
+					<span class="relative inline-flex rounded-full size-2.5 bg-warning"></span>
 				</span>
 				<div class="flex flex-col sm:flex-row sm:items-center sm:gap-2 truncate">
 					<span class="text-xs font-semibold text-foreground truncate">
 						{displayTitle}
 					</span>
 					{#if description}
-						<span class="text-[11px] text-muted-foreground hidden sm:inline truncate">
+						<span class="text-xs text-muted-foreground hidden sm:inline truncate">
 							{description}
 						</span>
 					{/if}
@@ -91,7 +91,7 @@
 						size="sm"
 						onclick={onSave}
 						disabled={saving || disabled}
-						class="h-8 text-xs shadow-xs transition-all duration-150 hover:shadow-primary/20 hover:shadow-md active:scale-95 transform-gpu cursor-pointer"
+						class="h-8 text-xs transition-all duration-150 active:scale-95 transform-gpu cursor-pointer"
 					>
 						{#if saving}
 							<RefreshCwIcon class="animate-spin size-3.5" data-icon="inline-start" />

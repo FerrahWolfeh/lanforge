@@ -44,7 +44,7 @@
 
 <div class={cn("inline-flex items-center font-mono font-bold tabular-nums text-foreground", sizeClasses.gap, className)}>
 	<!-- Rx (Download) -->
-	<div class="flex items-center gap-1 text-sky-400">
+	<div class="flex items-center gap-1 text-chart-2">
 		{#if showIcons}
 			<ArrowDownIcon class={cn("shrink-0", sizeClasses.arrow)} />
 		{/if}
@@ -54,7 +54,7 @@
 	<span class="text-muted-foreground/50 select-none font-normal">/</span>
 
 	<!-- Tx (Upload) -->
-	<div class="flex items-center gap-1 text-emerald-400">
+	<div class="flex items-center gap-1 text-chart-3">
 		{#if showIcons}
 			<ArrowUpIcon class={cn("shrink-0", sizeClasses.arrow)} />
 		{/if}

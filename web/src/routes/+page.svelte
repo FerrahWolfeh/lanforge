@@ -193,7 +193,7 @@
 			icon: GlobeIcon,
 			color: "sky" as const,
 			sparklineData: dnsSparkline,
-			sparklineColor: "#0ea5e9",
+			sparklineColor: "var(--chart-1)",
 			href: "/dns/resolver",
 		},
 		{
@@ -361,7 +361,7 @@
 			<Card.Header class="p-4 py-3 border-b border-border/50">
 				<div class="flex items-center justify-between gap-2 min-w-0">
 					<div class="flex items-center gap-2 min-w-0">
-						<ActivityIcon class="size-4 text-emerald-400 shrink-0" />
+						<ActivityIcon class="size-4 text-muted-foreground shrink-0" />
 						<Card.Title class="text-sm sm:text-base font-semibold truncate">
 							Service Status<span class="hidden md:inline">&nbsp;& Runtime Health</span>
 						</Card.Title>
@@ -388,18 +388,18 @@
 									<a href={svc.href} class="text-xs font-semibold text-foreground hover:text-primary transition-colors truncate">
 										{svc.name}
 									</a>
-									<Badge variant="outline" class="text-[9px] font-mono px-1 py-0 hidden sm:inline-flex">
+									<Badge variant="outline" class="text-xs font-mono px-1 py-0 hidden sm:inline-flex">
 										{svc.tag}
 									</Badge>
 								</div>
-								<span class="text-[11px] text-muted-foreground truncate">{svc.desc}</span>
+								<span class="text-xs text-muted-foreground truncate">{svc.desc}</span>
 							</div>
 						</div>
 
-						<div class="flex items-center gap-3 shrink-0 font-mono text-[11px]">
-							<span class="text-muted-foreground text-[10px] hidden md:inline">
+						<div class="flex items-center gap-3 shrink-0 font-mono text-xs">
+							<span class="text-muted-foreground text-xs hidden md:inline">
 								{#if degradedReason(banner?.detail)}
-									<span class="text-amber-500">{degradedReason(banner?.detail)}</span>
+									<span class="text-warning">{degradedReason(banner?.detail)}</span>
 								{:else if banner?.summary}
 									{banner.summary}
 								{:else}
@@ -408,7 +408,7 @@
 							</span>
 							<Badge
 								variant={banner?.state === "online" || banner?.state === "active" ? "secondary" : "outline"}
-								class="text-[10px] capitalize font-mono"
+								class="text-xs capitalize font-mono"
 							>
 								{banner?.state ?? "active"}
 							</Badge>
@@ -422,7 +422,7 @@
 		<Card.Root class="flex flex-col lg:col-span-1">
 			<Card.Header class="p-4 py-3 border-b border-border/50">
 				<div class="flex items-center gap-2 min-w-0">
-					<CpuIcon class="size-4 text-purple-400 shrink-0" />
+					<CpuIcon class="size-4 text-muted-foreground shrink-0" />
 					<Card.Title class="text-sm sm:text-base font-semibold truncate">Network & Vitals</Card.Title>
 				</div>
 			</Card.Header>
@@ -442,13 +442,13 @@
 							<span class="text-muted-foreground font-medium"
 								>LAN Interface</span
 							>
-							<Badge variant="outline" class="font-mono text-[10px]"
+							<Badge variant="outline" class="font-mono text-xs"
 								>{statusData?.network?.lan_iface || "eth0"}</Badge
 							>
 						</div>
 						<div class="flex items-center justify-between font-mono">
 							<span class="text-muted-foreground">IPv4 Gateway</span>
-							<span class="text-emerald-400 font-semibold"
+							<span class="text-foreground font-semibold"
 								>{statusData?.network?.lan_ipv4 || "192.168.1.1"}</span
 							>
 						</div>
@@ -461,15 +461,15 @@
 						<span class="text-muted-foreground font-medium"
 							>IPv6 Prefixes</span
 						>
-						<div class="flex justify-between font-mono text-[11px]">
+						<div class="flex justify-between font-mono text-xs">
 							<span class="text-muted-foreground">GUA</span>
-							<span class="text-sky-400 truncate max-w-[170px]" title={formatIpv6Prefix(statusData?.network?.gua)}
+							<span class="text-foreground truncate max-w-[170px]" title={formatIpv6Prefix(statusData?.network?.gua)}
 								>{formatIpv6Prefix(statusData?.network?.gua)}</span
 							>
 						</div>
-						<div class="flex justify-between font-mono text-[11px]">
+						<div class="flex justify-between font-mono text-xs">
 							<span class="text-muted-foreground">ULA</span>
-							<span class="text-purple-400 truncate max-w-[170px]" title={formatIpv6Prefix(statusData?.network?.ula)}
+							<span class="text-muted-foreground truncate max-w-[170px]" title={formatIpv6Prefix(statusData?.network?.ula)}
 								>{formatIpv6Prefix(statusData?.network?.ula)}</span
 							>
 						</div>
@@ -481,27 +481,27 @@
 					>
 						<div class="flex items-center justify-between">
 							<div class="flex items-center gap-1.5">
-								<DatabaseIcon class="size-3.5 text-amber-400" />
+								<DatabaseIcon class="size-3.5 text-muted-foreground" />
 								<span class="text-muted-foreground font-medium"
 									>Database Storage</span
 								>
 							</div>
 							<Badge
 								variant="secondary"
-								class="text-[10px] uppercase font-mono"
+								class="text-xs font-mono"
 							>
 								redb
 							</Badge>
 						</div>
-						<div class="flex items-center justify-between font-mono text-[11px]">
+						<div class="flex items-center justify-between font-mono text-xs">
 							<span class="text-muted-foreground">Footprint</span>
 							<span class="text-foreground font-medium">
 								{statusData?.db?.size_bytes ? formatBytes(statusData.db.size_bytes) : "—"}
 							</span>
 						</div>
-						<div class="flex items-center justify-between font-mono text-[11px]">
+						<div class="flex items-center justify-between font-mono text-xs">
 							<span class="text-muted-foreground">Last Disk Sync</span>
-							<span class="text-emerald-400 font-medium">
+							<span class="text-foreground font-medium">
 								{statusData?.db?.last_flush_secs_ago !== undefined ? `${statusData.db.last_flush_secs_ago}s ago` : "—"}
 							</span>
 						</div>
@@ -520,7 +520,7 @@
 							<span class="text-foreground font-bold"
 								>{formatBytes(rssBytes)}</span
 							>
-							<span class="text-muted-foreground text-[11px]"
+							<span class="text-muted-foreground text-xs"
 								>VMS: {formatBytes(vmsBytes)}</span
 							>
 						</div>
