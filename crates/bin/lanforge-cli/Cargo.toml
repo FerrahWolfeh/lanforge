@@ -16,8 +16,8 @@ path = "src/main.rs"
 
 [features]
 default = ["remote", "ring"]
-ring = ["rustls/ring", "hyper-rustls?/ring"]
-aws-lc = ["rustls/aws-lc-rs", "hyper-rustls?/aws-lc-rs"]
+ring = ["rustls?/ring", "hyper-rustls?/ring"]
+aws-lc = ["rustls?/aws-lc-rs", "hyper-rustls?/aws-lc-rs"]
 remote = [
     "dep:bytes",
     "dep:directories",
@@ -25,6 +25,7 @@ remote = [
     "dep:hyper-util",
     "dep:hyper-rustls",
     "dep:http-body-util",
+    "dep:rustls",
     "dep:rustls-pki-types",
     "dep:futures",
     "dep:url",
@@ -42,7 +43,7 @@ chrono = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 bytes = { workspace = true, optional = true }
 clap = { workspace = true }
-rustls = { workspace = true }
+rustls = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
 hyper = { workspace = true, features = ["client", "http1", "http2"], optional = true }
 hyper-util = { workspace = true, features = ["client-legacy", "tokio"], optional = true }

@@ -22,7 +22,7 @@ fn hot_types_stay_within_their_size_budget() {
         ("Duid", size_of::<Duid>(), 16),
         ("DeviceIdentifier", size_of::<DeviceIdentifier>(), 24),
         ("Hostname", size_of::<Hostname>(), 32),
-        ("Device", size_of::<Device>(), 104),
+        ("Device", size_of::<Device>(), 120), // +16: `last_observed`
         ("DeviceUpdate", size_of::<DeviceUpdate>(), 32),
         ("LanforgeEvent", size_of::<LanforgeEvent>(), 40),
         ("TimedEvent", size_of::<TimedEvent>(), 56),

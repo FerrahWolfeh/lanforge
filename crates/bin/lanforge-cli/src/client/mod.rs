@@ -64,7 +64,9 @@ use lanforge_api::api::{HttpErrorResponse, HttpWrappedResponse};
 use lanforge_types::network::dns::adblock::{AdblockRuleAction, AdblockRuleEntry};
 #[cfg(feature = "remote")]
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-#[cfg(feature = "ring")]
+#[cfg(all(feature = "remote", feature = "aws-lc", not(feature = "ring")))]
+use rustls::crypto::aws_lc_rs;
+#[cfg(all(feature = "remote", feature = "ring"))]
 use rustls::crypto::ring;
 #[cfg(feature = "remote")]
 use std::sync::Arc;
@@ -119,20 +121,22 @@ impl ServerCertVerifier for NoCertificateVerification {
             .signature_verification_algorithms
             .supported_schemes();
         #[cfg(all(feature = "aws-lc", not(feature = "ring")))]
-        return rustls::crypto::aws_lc_rs::default_provider()
+        return aws_lc_rs::default_provider()
             .signature_verification_algorithms
             .supported_schemes();
-        #[cfg(not(any(feature = "ring", feature = "aws-lc")))]
-        return vec![];
     }
 }
 
+#[cfg(all(feature = "remote", not(any(feature = "ring", feature = "aws-lc"))))]
+compile_error!("the `remote` feature needs a TLS crypto provider: enable `ring` or `aws-lc`");
+
+#[cfg(feature = "remote")]
 #[inline]
 pub fn init_crypto() {
     #[cfg(feature = "ring")]
     let _ = ring::default_provider().install_default();
     #[cfg(all(feature = "aws-lc", not(feature = "ring")))]
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = aws_lc_rs::default_provider().install_default();
 }
 
 #[cfg(feature = "remote")]
@@ -168,8 +172,6 @@ pub struct LanforgeClient {
 
 impl LanforgeClient {
     pub fn new(socket: String, remote: Option<String>, token: Option<String>) -> Result<Self> {
-        init_crypto();
-
         #[cfg(not(feature = "remote"))]
         let _ = (remote, token);
         #[cfg(feature = "remote")]

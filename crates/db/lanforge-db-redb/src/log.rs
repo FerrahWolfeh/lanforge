@@ -215,6 +215,22 @@ fn query_matches(
     true
 }
 
+/// The runtime form of `device`: its `last_seen` slot holds `last_observed` (the liveness is
+/// rebuilt on load from the addresses' own timestamps, which the record keeps).
+fn runtime_record(device: &Device) -> Device {
+    let mut record = device.clone();
+    record.last_seen = device.last_observed;
+    record.last_observed = SystemTime::UNIX_EPOCH;
+    record
+}
+
+/// A device read back from its runtime form (see [`runtime_record`]).
+fn restored_runtime_device(mut device: Device) -> Device {
+    device.last_observed = device.last_seen;
+    device.last_seen = device.calculate_last_seen();
+    device
+}
+
 impl RedbDatabase {
     pub fn load_runtime_devices(&self) -> Result<Vec<Device>, DbError> {
         let devices = self.read_table_or_default(TABLE_RUNTIME_DEVICES, |table| {
@@ -222,7 +238,7 @@ impl RedbDatabase {
             let mut list = Vec::with_capacity(count);
             for row in table.iter()? {
                 let (_, value) = row?;
-                list.push(decode(value.value())?);
+                list.push(restored_runtime_device(decode(value.value())?));
             }
             Ok(list)
         })?;
@@ -245,7 +261,7 @@ impl RedbDatabase {
         let mut bytes = Vec::with_capacity(512);
         for device in upserts {
             if device.origin == Origin::Dynamic {
-                encode_into(device.as_ref(), &mut bytes)?;
+                encode_into(&runtime_record(device), &mut bytes)?;
                 table.insert(device.mac.0, bytes.as_slice())?;
             } else {
                 table.remove(device.mac.0)?;
@@ -271,7 +287,7 @@ impl RedbDatabase {
             .iter()
             .filter(|device| device.origin == Origin::Dynamic)
         {
-            encode_into(device.as_ref(), &mut bytes)?;
+            encode_into(&runtime_record(device), &mut bytes)?;
             table.insert(device.mac.0, bytes.as_slice())?;
         }
         drop(table);
