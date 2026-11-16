@@ -197,6 +197,7 @@ fn handle_dns_logs_follow(
                     "protocol": entry.protocol,
                     "filter": entry.filter,
                     "coalesce_id": entry.coalesce_id,
+                    "repeats": entry.repeats,
                     "event": {
                         "Dns": {
                             "QueryResolved": {
@@ -212,6 +213,7 @@ fn handle_dns_logs_follow(
                                 "answer": entry.answer,
                                 "filter": entry.filter,
                                 "coalesce_id": entry.coalesce_id,
+                                "repeats": entry.repeats,
                             }
                         }
                     }

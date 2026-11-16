@@ -7,6 +7,7 @@
 #![cfg(feature = "server")]
 use std::fs;
 use std::io::Read;
+use std::time::Duration;
 use std::{sync::Arc, time::Instant};
 
 use crate::server::api_router;
@@ -18,13 +19,14 @@ use axum::{
 };
 use flate2::read::GzDecoder;
 use http_body_util::BodyExt;
-use lanforge_core::bus::{EventBus, LanforgeEvent};
+use lanforge_core::bus::{DnsEvent, EventBus, LanforgeEvent};
 use lanforge_core::context::{LanforgeContext, state::State as CoreState};
 use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_db::worker::DbWorker;
 use lanforge_db::{UserStore, config::DatabaseConfig, engine::LanforgeDb, log_engine::LogDb, redb};
 use lanforge_types::build::BuildInfo;
 use lanforge_types::events::{FirewallEvent, SystemEvent, TimedEvent};
+use lanforge_types::network::dns::{DnsRecordType, QueryLogEntry, QueryResult, TransportProtocol};
 use lanforge_types::network::traffic::{
     InterfaceThroughputPoint, InterfaceTrafficStats, TrafficHistorySample, TrafficTelemetryResponse,
 };
@@ -35,6 +37,7 @@ use lanforge_types::{
 };
 use serde::Serialize;
 use serde_json::{Value, json};
+use tokio::time::timeout;
 use tower::ServiceExt;
 
 // ---------------------------------------------------------------------------
@@ -1251,6 +1254,57 @@ async fn test_dns_upstreams_contract() {
         .delete("/api/v1/dns/upstreams?addr=8.8.8.8%3A53&protocol=udp")
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// The live DNS log carries how many identical queries a folded line stands for: the WebUI
+/// shows "×N" from it, and every live line used to read as one query.
+#[tokio::test]
+async fn the_live_dns_log_carries_repeats() {
+    let state = make_state(false).await;
+    let ctx = state.ctx.clone();
+    let router = build_router(state);
+    let req = Request::builder()
+        .uri("/api/v1/dns/logs?follow=true")
+        .body(Body::empty())
+        .unwrap();
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let _ = ctx
+        .bus()
+        .publish(LanforgeEvent::Dns(DnsEvent::QueryResolved(Arc::new(
+            QueryLogEntry {
+                timestamp: 1_794_000_000,
+                src_ip: "192.168.1.61".parse().unwrap(),
+                domain: Arc::from("a.example"),
+                upstream_us: 0,
+                qtype: DnsRecordType::A,
+                result: QueryResult::Forwarded,
+                cached: false,
+                src_mac: None,
+                answer: None,
+                protocol: TransportProtocol::Udp,
+                filter: None,
+                coalesce_id: None,
+                repeats: 29,
+                upstream: None,
+            },
+        ))));
+
+    let mut body = res.into_body();
+    let frame = timeout(Duration::from_secs(5), body.frame())
+        .await
+        .expect("a live line")
+        .unwrap()
+        .unwrap();
+    let text = String::from_utf8_lossy(frame.data_ref().unwrap()).to_string();
+    let json: Value = serde_json::from_str(text.trim().trim_start_matches("data:").trim()).unwrap();
+    assert_eq!(json["domain"], "a.example");
+    assert_eq!(json["repeats"], 29, "{json}");
+    assert_eq!(
+        json["event"]["Dns"]["QueryResolved"]["repeats"], 29,
+        "{json}"
+    );
 }
 
 // ---------------------------------------------------------------------------
