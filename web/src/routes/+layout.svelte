@@ -167,7 +167,7 @@
 		</main>
 	{:else}
 		<!-- Main Application Shell (Sidebar Inset Layout) -->
-		<div id="app-shell" class="flex h-screen w-full overflow-hidden bg-sidebar text-sidebar-foreground">
+		<div id="app-shell" class="flex h-dvh w-full overflow-hidden bg-sidebar text-sidebar-foreground">
 			<!-- Desktop Sidebar (Permanently mounted and static) -->
 			<div id="app-sidebar" class="hidden lg:flex lg:shrink-0">
 				<AppSidebar />

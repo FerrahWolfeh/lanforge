@@ -119,7 +119,7 @@
 
 <Card.Root
 	class={cn(
-		"group relative overflow-hidden transition-all duration-200 hover:border-primary/40 hover:shadow-md rounded-xl bg-card border border-border/60 shadow-xs flex flex-col justify-between",
+		"group relative overflow-hidden max-sm:py-0 transition-all duration-200 hover:border-primary/40 hover:shadow-md rounded-xl bg-card border border-border/60 shadow-xs flex flex-col justify-between",
 		href ? "cursor-pointer" : "",
 		className
 	)}

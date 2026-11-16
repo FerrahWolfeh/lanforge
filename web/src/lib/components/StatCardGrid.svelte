@@ -27,7 +27,16 @@
 	});
 </script>
 
-<div class={cn("grid gap-3.5 sm:gap-4", gridColsClass, className)}>
+<!-- Phones: one swipeable row with the next card peeking, so the cards do not push
+     the page content several screens down. -->
+<div
+	class={cn(
+		"grid gap-3.5 sm:gap-4",
+		gridColsClass,
+		"max-sm:-mx-3 max-sm:flex max-sm:snap-x max-sm:snap-mandatory max-sm:overflow-x-auto max-sm:scroll-px-3 max-sm:px-3 max-sm:pb-1 max-sm:[scrollbar-width:none] max-sm:*:w-[85%] max-sm:*:shrink-0 max-sm:*:snap-start",
+		className
+	)}
+>
 	{#if children}
 		{@render children()}
 	{/if}

@@ -85,7 +85,7 @@
 			<Button
 				variant="outline"
 				size="icon"
-				class="size-7 rounded-lg"
+				class="size-7 max-sm:size-9 rounded-lg"
 				disabled={pageIndex === 0 || disabled}
 				onclick={() => handlePage(0)}
 				title="First page"
@@ -95,7 +95,7 @@
 			<Button
 				variant="outline"
 				size="icon"
-				class="size-7 rounded-lg"
+				class="size-7 max-sm:size-9 rounded-lg"
 				disabled={pageIndex === 0 || disabled}
 				onclick={() => handlePage(pageIndex - 1)}
 				title="Previous page"
@@ -105,7 +105,7 @@
 			<Button
 				variant="outline"
 				size="icon"
-				class="size-7 rounded-lg"
+				class="size-7 max-sm:size-9 rounded-lg"
 				disabled={pageIndex >= totalPages - 1 || disabled}
 				onclick={() => handlePage(pageIndex + 1)}
 				title="Next page"
@@ -115,7 +115,7 @@
 			<Button
 				variant="outline"
 				size="icon"
-				class="size-7 rounded-lg"
+				class="size-7 max-sm:size-9 rounded-lg"
 				disabled={pageIndex >= totalPages - 1 || disabled}
 				onclick={() => handlePage(totalPages - 1)}
 				title="Last page"
