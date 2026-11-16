@@ -241,7 +241,7 @@
 </script>
 
 <Dialog.Root bind:open>
-	<Dialog.Content class="w-[95vw] max-w-lg sm:max-w-lg overflow-hidden border shadow-lg">
+	<Dialog.Content class="w-[95vw] max-w-lg sm:max-w-lg border shadow-lg">
 		<Dialog.Header class="space-y-1 min-w-0 pr-6">
 			<div class="flex items-center gap-2 min-w-0">
 				<Badge variant="outline" class="font-mono text-xs px-2 py-0.5 shrink-0">

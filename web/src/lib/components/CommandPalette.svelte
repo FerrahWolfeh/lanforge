@@ -386,7 +386,7 @@
 <Dialog.Root bind:open={commandState.isOpen}>
 	<Dialog.Content
 		showCloseButton={false}
-		class="p-0 overflow-hidden sm:max-w-xl rounded-2xl shadow-2xl border border-border/80 bg-card gap-0 top-[20%] sm:top-[25%]"
+		class="p-0 overflow-hidden sm:max-w-xl rounded-2xl shadow-2xl border border-border/80 bg-card gap-0 top-4 translate-y-0 sm:top-[15%]"
 	>
 		<Dialog.Header class="sr-only">
 			<Dialog.Title>Command Palette</Dialog.Title>
@@ -479,8 +479,8 @@
 			{/if}
 		</div>
 
-		<!-- Footer Help -->
-		<div class="flex items-center justify-between px-4 py-2 border-t border-border/50 bg-muted/20 text-[11px] text-muted-foreground">
+		<!-- Footer Help (keyboard hints: no use on a touch screen) -->
+		<div class="max-sm:hidden flex items-center justify-between px-4 py-2 border-t border-border/50 bg-muted/20 text-[11px] text-muted-foreground">
 			<div class="flex items-center gap-3">
 				<span class="flex items-center gap-1">
 					<kbd class="rounded border border-border/80 bg-background px-1 py-0.5 font-mono text-[10px]">↑</kbd>
