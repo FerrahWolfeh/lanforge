@@ -55,17 +55,17 @@
 	function currentPayload(): DhcpOptionsConfig {
 		const v4RawMap: Record<number, string> = {};
 		for (const opt of v4RawOptions) {
-			if (opt.code && opt.value) v4RawMap[opt.code] = opt.value;
+			if (opt.code) v4RawMap[opt.code] = opt.value;
 		}
 		const v6RawMap: Record<number, string> = {};
 		for (const opt of v6RawOptions) {
-			if (opt.code && opt.value) v6RawMap[opt.code] = opt.value;
+			if (opt.code) v6RawMap[opt.code] = opt.value;
 		}
 
 		return {
 			v4: {
 				enabled: v4Enabled,
-				lease_time: Number(v4LeaseTime) || 86400,
+				lease_time: Number(v4LeaseTime),
 				router: v4Router.trim() || null,
 				subnet_mask: v4SubnetMask.trim() || null,
 				dns_servers: parseList(v4DnsStr),
@@ -78,7 +78,7 @@
 			},
 			v6: {
 				enabled: v6Enabled,
-				lease_time: Number(v6LeaseTime) || 86400,
+				lease_time: Number(v6LeaseTime),
 				dns_servers: parseList(v6DnsStr),
 				search_domains: parseList(v6SearchDomainsStr),
 				ntp_servers: parseList(v6NtpStr),
@@ -136,7 +136,7 @@
 
 	const humanLeaseDuration = $derived.by(() => {
 		const secs = Number(v4LeaseTime) || 0;
-		if (secs <= 0) return "Indefinite / Unspecified";
+		if (secs <= 0) return "invalid (needs at least 1 second)";
 		const d = Math.floor(secs / 86400);
 		const h = Math.floor((secs % 86400) / 3600);
 		const m = Math.floor((secs % 3600) / 60);
@@ -196,7 +196,20 @@
 		}
 	}
 
+	// DHCP lease times are 32-bit seconds (RFC 2131 section 3.3); 0 is not a usable lease.
+	function validLease(secs: number) {
+		return Number.isInteger(secs) && secs >= 1 && secs <= 0xffffffff;
+	}
+
 	async function saveOptions() {
+		if (!validLease(Number(v4LeaseTime))) {
+			toast.error("IPv4 lease duration must be a whole number of seconds, at least 1");
+			return;
+		}
+		if (!validLease(Number(v6LeaseTime))) {
+			toast.error("IPv6 lease duration must be a whole number of seconds, at least 1");
+			return;
+		}
 		saving = true;
 		try {
 			const payload = currentPayload();

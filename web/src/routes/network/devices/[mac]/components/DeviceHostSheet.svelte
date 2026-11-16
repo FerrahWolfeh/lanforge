@@ -10,7 +10,7 @@
 	import { hostAdd, hostRemove } from "$lib/api/client";
 	import type { HostConfigEntry } from "$lib/api/types";
 	import { z } from "zod";
-	import { validateForm, macSchema, type FieldErrors } from "$lib/utils/validation";
+	import { validateForm, macSchema, hostnameSchema, type FieldErrors } from "$lib/utils/validation";
 
 	/** Name and fixed addresses of one device, kept in lanforge.toml as a static host. */
 	let {
@@ -34,7 +34,7 @@
 
 	const hostFormSchema = z.object({
 		mac: macSchema,
-		hostname: z.string().trim().max(63, "Hostname cannot exceed 63 characters").optional().or(z.literal("")),
+		hostname: hostnameSchema.optional().or(z.literal("")),
 		v4: z.string().trim().ipv4("Invalid IPv4 address format (e.g. 192.168.1.10)").optional().or(z.literal("")),
 		v6Suffix: z
 			.string()
@@ -63,6 +63,7 @@
 
 	async function handleSubmit(e: SubmitEvent) {
 		e.preventDefault();
+		if (submitting) return;
 		fieldErrors = {};
 
 		const validation = validateForm(hostFormSchema, {

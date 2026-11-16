@@ -49,7 +49,7 @@
 
 	// Editable form fields
 	let formEnabled = $state(true);
-	let formIface = $state("end0");
+	let formIface = $state("");
 	let formManaged = $state(false);
 	let formOtherConfig = $state(false);
 	let formDeprecateOnRenumber = $state(true);
@@ -86,7 +86,7 @@
 	let isDirty = $derived.by(() => {
 		if (!config) return false;
 		if (formEnabled !== config.enabled) return true;
-		if (formIface !== (config.iface || "end0")) return true;
+		if (formIface !== (config.iface ?? "")) return true;
 		if (formManaged !== config.managed) return true;
 		if (formOtherConfig !== config.other_config) return true;
 		if (formDeprecateOnRenumber !== (config.deprecate_on_renumber ?? true)) return true;
@@ -118,7 +118,7 @@
 
 	function syncFormFromConfig(c: RaServerConfig) {
 		formEnabled = c.enabled;
-		formIface = c.iface ?? (availableInterfaces[0]?.name || "end0");
+		formIface = c.iface ?? "";
 		formManaged = c.managed;
 		formOtherConfig = c.other_config;
 		formDeprecateOnRenumber = c.deprecate_on_renumber ?? true;
@@ -158,7 +158,8 @@
 				raConfig().catch(() => null),
 				fetchSetup ? getSetupStatus().catch(() => null) : Promise.resolve(null),
 			]);
-			status = s;
+			// A failed poll keeps the last status: a null here would read as "Disabled".
+			if (s) status = s;
 			if (setupRes?.interfaces) {
 				availableInterfaces = setupRes.interfaces;
 			}
@@ -197,11 +198,11 @@
 				hop_limit: Number.isFinite(formHopLimit) ? formHopLimit : 64,
 				priority: formPriority,
 				max_interval_secs: Number(formMaxInterval) || 200,
-				min_interval_secs: formMinInterval ? Number(formMinInterval) : null,
-				lifetime_secs: formLifetime ? Number(formLifetime) : null,
+				min_interval_secs: formMinInterval ?? null,
+				lifetime_secs: formLifetime ?? null,
 				reachable_time_ms: Number(formReachableTime) || 0,
 				retrans_timer_ms: Number(formRetransTimer) || 0,
-				mtu: formMtu ? Number(formMtu) : null,
+				mtu: formMtu ?? null,
 				prefixes: formPrefixes,
 				rdnss: rdnssObj,
 				dnssl: dnsslObj,
@@ -260,7 +261,7 @@
 		{#snippet badge()}
 			{#if status?.enabled}
 				<StatusBadge variant="online" showDot={true} pulse={true} text="Active" />
-			{:else}
+			{:else if status}
 				<StatusBadge variant="dormant" text="Idle / Disabled" />
 			{/if}
 		{/snippet}

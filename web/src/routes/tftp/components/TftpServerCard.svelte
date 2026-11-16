@@ -18,7 +18,8 @@
 		listenAddr = $bindable("0.0.0.0:69"),
 		blockSize = $bindable(512),
 		timeoutSecs = $bindable(5),
-		maxRetries = $bindable(3)
+		maxRetries = $bindable(3),
+		issues = {}
 	}: {
 		loading: boolean;
 		enabled: boolean;
@@ -27,6 +28,7 @@
 		blockSize: number;
 		timeoutSecs: number;
 		maxRetries: number;
+		issues?: { blockSize?: string | null; timeoutSecs?: string | null; maxRetries?: string | null };
 	} = $props();
 
 	const BLOCK_SIZE_PRESETS = [
@@ -138,13 +140,13 @@
 						<Label class="text-xs">Block Size (blksize)</Label>
 						<Input
 							type="number"
-							min="512"
+							min="8"
 							max="65464"
 							bind:value={blockSize}
 							class="font-mono text-xs"
 						/>
-						<span class="text-xs text-muted-foreground">
-							Default: 512 bytes
+						<span class="text-xs {issues.blockSize ? 'text-destructive' : 'text-muted-foreground'}">
+							{issues.blockSize ?? "Default: 512 bytes"}
 						</span>
 					</div>
 
@@ -158,8 +160,8 @@
 							bind:value={timeoutSecs}
 							class="font-mono text-xs"
 						/>
-						<span class="text-xs text-muted-foreground">
-							Retransmission window
+						<span class="text-xs {issues.timeoutSecs ? 'text-destructive' : 'text-muted-foreground'}">
+							{issues.timeoutSecs ?? "Retransmission window"}
 						</span>
 					</div>
 
@@ -173,8 +175,8 @@
 							bind:value={maxRetries}
 							class="font-mono text-xs"
 						/>
-						<span class="text-xs text-muted-foreground">
-							Fail after N drops
+						<span class="text-xs {issues.maxRetries ? 'text-destructive' : 'text-muted-foreground'}">
+							{issues.maxRetries ?? "Fail after N drops"}
 						</span>
 					</div>
 				</div>

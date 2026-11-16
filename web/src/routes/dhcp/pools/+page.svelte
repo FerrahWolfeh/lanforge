@@ -21,6 +21,7 @@
 		dhcpReconcile,
 	} from "$lib/api/client";
 	import { parseCsvList as parseList } from "$lib/utils";
+	import { ipv4Schema } from "$lib/utils/validation";
 	import type {
 		DhcpPoolsResponse,
 		Dhcpv4PoolConfig,
@@ -94,13 +95,23 @@
 				dhcpOptionsGet(),
 			]);
 
+			if (statsRes.status === "rejected") {
+				toast.error(`Failed to load pool usage: ${statsRes.reason?.message ?? "unknown error"}`);
+			}
+			if (configRes.status === "rejected") {
+				toast.error(`Failed to load pool configuration: ${configRes.reason?.message ?? "unknown error"}`);
+			}
+			if (optsRes.status === "rejected") {
+				toast.error(`Failed to load DHCP defaults: ${optsRes.reason?.message ?? "unknown error"}`);
+			}
+
 			if (statsRes.status === "fulfilled") {
 				poolStats = statsRes.value;
 			}
 			if (configRes.status === "fulfilled") {
 				v4Pools = JSON.parse(JSON.stringify(configRes.value.v4_pools));
 				v6Pools = JSON.parse(JSON.stringify(configRes.value.v6_pools));
-				activeUlaPrefix = configRes.value.active_ula_prefix ?? "fd00::/64";
+				activeUlaPrefix = configRes.value.active_ula_prefix ?? null;
 				activeGuaPrefix = configRes.value.active_gua_prefix ?? null;
 
 				pristinePoolsJson = JSON.stringify({
@@ -210,6 +221,25 @@
 			toast.error("Range start and range end IP addresses are required");
 			return;
 		}
+		const checks: Array<[string, string]> = [
+			["Range start", v4Start],
+			["Range end", v4End],
+			...(v4Router.trim() ? [["Gateway", v4Router] as [string, string]] : []),
+			...(v4SubnetMask.trim() ? [["Subnet mask", v4SubnetMask] as [string, string]] : []),
+			...parseList(v4Dns).map((dns): [string, string] => ["DNS server", dns]),
+		];
+		for (const [label, value] of checks) {
+			if (!ipv4Schema.safeParse(value).success) {
+				toast.error(`${label} is not a valid IPv4 address: ${value.trim()}`);
+				return;
+			}
+		}
+		// Empty inherits the global lease time; 0 is not a usable DHCP lease.
+		const lease = v4Lease === "" || v4Lease === null ? null : Number(v4Lease);
+		if (lease !== null && (!Number.isInteger(lease) || lease < 1)) {
+			toast.error("Lease time must be a whole number of seconds, at least 1 (leave empty to inherit)");
+			return;
+		}
 		const pool: Dhcpv4PoolConfig = {
 			name: v4Name.trim() || null,
 			range_start: v4Start.trim(),
@@ -217,7 +247,7 @@
 			subnet_mask: v4SubnetMask.trim() || null,
 			router: v4Router.trim() || null,
 			dns_servers: parseList(v4Dns),
-			lease_time: v4Lease ? Number(v4Lease) : null,
+			lease_time: lease,
 			boot_file: v4BootFile.trim() || null,
 			tftp_server: v4TftpServer.trim() || null,
 		};

@@ -8,6 +8,7 @@
 	import { onMount } from "svelte";
 	import { toast } from "svelte-sonner";
 	import { markSetupCompleted } from "$lib/stores/setup.svelte";
+	import { ipv4Schema, ipv6Schema } from "$lib/utils/validation";
 
 	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 	import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
@@ -148,6 +149,10 @@
 
 	function handleNextStep1() {
 		errorMsg = "";
+		if (!admin_username.trim()) {
+			errorMsg = "Admin username cannot be empty.";
+			return;
+		}
 		if (admin_password.length < 8) {
 			errorMsg = "Password must be at least 8 characters long.";
 			return;
@@ -166,8 +171,17 @@
 				errorMsg = "Please select a WAN interface.";
 				return;
 			}
+			if (wan_iface === lan_iface) {
+				errorMsg = "The WAN interface cannot be the same as the LAN interface.";
+				return;
+			}
 			if (!pppoe_username.trim()) {
 				errorMsg = "PPPoE username cannot be empty.";
+				return;
+			}
+			const vlan = pppoe_vlan.trim();
+			if (vlan && (!/^\d+$/.test(vlan) || Number(vlan) < 1 || Number(vlan) > 4094)) {
+				errorMsg = "VLAN tag must be a whole number from 1 to 4094, or empty for none.";
 				return;
 			}
 		} else {
@@ -179,6 +193,37 @@
 		step = 3;
 	}
 
+	function ipv4ToInt(ip: string): number | null {
+		if (!ipv4Schema.safeParse(ip).success) return null;
+		return ip.trim().split(".").reduce((acc, part) => ((acc << 8) | Number(part)) >>> 0, 0);
+	}
+
+	// Checks that the LAN address, DHCP gateway and pool are valid and share one subnet.
+	function lanSubnetError(): string | null {
+		const ip = ipv4ToInt(lan_ip);
+		const mask = ipv4ToInt(subnet_mask);
+		if (ip === null) return "LAN IP is not a valid IPv4 address.";
+		if (mask === null) return "Subnet mask is not a valid IPv4 mask.";
+		if (!dhcp_enabled) return null;
+		const network = (ip & mask) >>> 0;
+		const fields: Array<[string, string]> = [
+			["DHCP pool start", dhcp_pool_start],
+			["DHCP pool end", dhcp_pool_end],
+		];
+		if (dhcp_router.trim()) fields.push(["DHCP gateway", dhcp_router]);
+		const values: Record<string, number> = {};
+		for (const [label, value] of fields) {
+			const n = ipv4ToInt(value);
+			if (n === null) return `${label} is not a valid IPv4 address.`;
+			if (((n & mask) >>> 0) !== network) return `${label} is outside the LAN subnet.`;
+			values[label] = n;
+		}
+		if (values["DHCP pool start"] > values["DHCP pool end"]) {
+			return "DHCP pool start must not be after the pool end.";
+		}
+		return null;
+	}
+
 	function handleNextStep3() {
 		errorMsg = "";
 		if (!lan_iface) {
@@ -188,6 +233,31 @@
 		if (!lan_ip.trim()) {
 			errorMsg = "LAN IP cannot be empty.";
 			return;
+		}
+		if (wan_mode === "pppoe" && wan_iface === lan_iface) {
+			errorMsg = "The LAN interface cannot be the same as the PPPoE WAN interface.";
+			return;
+		}
+		const subnetError = lanSubnetError();
+		if (subnetError) {
+			errorMsg = subnetError;
+			return;
+		}
+		if (ra_enabled && ra_custom_ula && !ra_ula_prefix.trim()) {
+			errorMsg = "Enter the custom ULA prefix, or turn the custom ULA option off.";
+			return;
+		}
+		if (dns_preset === "custom") {
+			const servers = getUpstreamDnsList();
+			if (servers.length === 0) {
+				errorMsg = "Enter at least one custom DNS server, or pick a preset.";
+				return;
+			}
+			const bad = servers.find((s) => !ipv4Schema.safeParse(s).success && !ipv6Schema.safeParse(s).success);
+			if (bad) {
+				errorMsg = `Invalid DNS server address: ${bad}`;
+				return;
+			}
 		}
 		step = 4;
 	}
@@ -224,7 +294,7 @@
 				interface: wan_iface,
 				username: pppoe_username,
 				password: pppoe_password,
-				vlan_id: pppoe_vlan ? Number.parseInt(pppoe_vlan, 10) : null,
+				vlan_id: pppoe_vlan.trim() ? Number(pppoe_vlan.trim()) : null,
 				mtu: pppoe_mtu || 1492,
 				nftables: {
 					flow_offload: firewall_flow_offload,

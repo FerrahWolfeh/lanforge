@@ -121,6 +121,13 @@
 		onnext: () => void;
 	} = $props();
 
+	// Keep the gateway following the router IP only while the user has not edited it apart.
+	function onLanIpInput(e: Event & { currentTarget: HTMLInputElement }) {
+		const next = e.currentTarget.value;
+		if (dhcpRouter === lanIp) dhcpRouter = next;
+		lanIp = next;
+	}
+
 	function togglePreset(id: string) {
 		if (selectedAdblockPresets.includes(id)) {
 			selectedAdblockPresets = selectedAdblockPresets.filter((p) => p !== id);
@@ -152,7 +159,7 @@
 			value={lanIface}
 			onchange={(e) => onLanIfaceChange((e.target as HTMLSelectElement).value)}
 		>
-			{#each interfaces as iface}
+			{#each interfaces as iface (iface.name)}
 				<option value={iface.name}>
 					{iface.name} ({iface.bus_type} - {iface.carrier_up ? '🟢 Cable Connected' : '⚪ Disconnected'} {iface.ips[0] ? `[${iface.ips[0]}]` : ''})
 				</option>
@@ -163,7 +170,7 @@
 	<div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
 		<div class="space-y-1.5">
 			<Label for="lan_ip">Lanforge Router IP</Label>
-			<Input id="lan_ip" bind:value={lanIp} placeholder="192.168.1.1" onchange={() => (dhcpRouter = lanIp)} />
+			<Input id="lan_ip" value={lanIp} placeholder="192.168.1.1" oninput={onLanIpInput} />
 		</div>
 		<div class="space-y-1.5">
 			<Label for="subnet_mask">Subnet Mask</Label>
@@ -223,7 +230,7 @@
 
 		{#if dhcpV6Enabled}
 			<div class="space-y-1.5 pt-2 border-t text-xs">
-				<Label for="v6_range" class="text-xs">Dynamic Allocation Range (Suffix Suffix or CIDR)</Label>
+				<Label for="v6_range" class="text-xs">Dynamic Allocation Range (Suffix or CIDR)</Label>
 				<Input id="v6_range" class="h-8 text-xs font-mono" bind:value={dhcpV6PoolRange} placeholder="::100-::1fff" />
 				<p class="text-xs text-muted-foreground">
 					Standard suffix scope announced over UDP 547. Dynamically combined with active LAN ULA or GUA prefixes.
@@ -413,7 +420,7 @@
 				</p>
 
 				<div class="grid grid-cols-1 gap-2 pt-1">
-					{#each ADBLOCK_PRESET_OPTIONS as preset}
+					{#each ADBLOCK_PRESET_OPTIONS as preset (preset.id)}
 						{@const isSelected = selectedAdblockPresets.includes(preset.id)}
 						<button
 							type="button"

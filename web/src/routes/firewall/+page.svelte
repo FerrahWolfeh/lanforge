@@ -132,9 +132,11 @@
 				availableInterfaces = setupRes.interfaces;
 			}
 			if (c) {
+				// Capture before replacing serverConfig: the check compares against it
+				const wasDirty = isDirty;
 				serverConfig = c;
 				// Only reset draft if user hasn't made local changes
-				if (!isDirty) {
+				if (!wasDirty) {
 					draft = structuredClone(c);
 				}
 			}
@@ -273,6 +275,14 @@
 	// ---------------------------------------------------------------------------
 	// Lifecycle
 	// ---------------------------------------------------------------------------
+
+	// The prefill dialog lives in the full-mode Port Forward tab: if that tab is never
+	// shown (other modes, read-only user), drop the request instead of popping it later.
+	$effect(() => {
+		if (pendingForward && draft !== null && (draft.mode !== "full" || !canEdit)) {
+			pendingForward = null;
+		}
+	});
 
 	onMount(() => {
 		const forwardTo = page.url.searchParams.get("forward_to");

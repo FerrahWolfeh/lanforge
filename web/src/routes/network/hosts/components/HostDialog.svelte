@@ -12,7 +12,7 @@
 	import { hostAdd } from "$lib/api/client";
 	import type { HostConfigEntry, DeviceEntry } from "$lib/api/types";
 	import { z } from "zod";
-	import { validateForm, macSchema, type FieldErrors } from "$lib/utils/validation";
+	import { validateForm, macSchema, hostnameSchema, type FieldErrors } from "$lib/utils/validation";
 
 	let {
 		open = $bindable(false),
@@ -30,9 +30,12 @@
 
 	const hostFormSchema = z.object({
 		mac: macSchema,
-		hostname: z.string().trim().max(63, "Hostname cannot exceed 63 characters").optional().or(z.literal("")),
+		hostname: hostnameSchema.optional().or(z.literal("")),
 		v4: z.string().trim().ipv4("Invalid IPv4 address format (e.g. 192.168.1.10)").optional().or(z.literal("")),
-		v6Suffix: z.string().trim().optional().or(z.literal("")),
+		v6Suffix: z
+			.string()
+			.trim()
+			.regex(/^[0-9a-fA-F:]*$/, "Use hex digits and colons only (e.g. ::10)"),
 	});
 
 	let formMac = $state("");
@@ -68,7 +71,7 @@
 	function handleDeviceSelect(dev: DeviceEntry) {
 		formMac = dev.mac;
 		if (fieldErrors.mac) fieldErrors.mac = undefined;
-		if (dev.hostname && dev.hostname !== "—" && !dev.hostname.startsWith("<")) {
+		if (dev.hostname && dev.hostname !== "—" && dev.hostname !== "?" && !dev.hostname.startsWith("<")) {
 			formHostname = dev.hostname;
 		}
 		const rawV4 = dev.v4?.ip || (dev.primary_v4 && dev.primary_v4 !== "—" ? dev.primary_v4.replace(/\s*\?$/, "") : "");
@@ -88,6 +91,7 @@
 
 	async function handleSubmit(e: Event) {
 		e.preventDefault();
+		if (submitting) return;
 		fieldErrors = {};
 
 		const validation = validateForm(hostFormSchema, {

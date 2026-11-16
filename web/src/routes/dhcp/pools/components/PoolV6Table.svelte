@@ -8,6 +8,7 @@
 	import GlobeIcon from "@lucide/svelte/icons/globe";
 	import type { Dhcpv6PoolConfig, DhcpPoolsResponse, DhcpPoolEntry } from "$lib/api/types";
 	import DataTableCard from "$lib/components/DataTableCard.svelte";
+	import { formatIpv6Prefix } from "$lib/utils/format";
 
 	let {
 		v6Pools = [],
@@ -26,6 +27,14 @@
 		onEdit?: (idx: number) => void;
 		onDelete?: (idx: number) => void;
 	} = $props();
+
+	// The pool address and the ULA prefix are both written differently (CIDR or bare address):
+	// compare their /64 network part, and never match when the OS has no ULA.
+	function isInActiveUla(address: string) {
+		if (!activeUlaPrefix) return false;
+		const network = (value: string) => formatIpv6Prefix(value.split("/")[0], 64).toLowerCase();
+		return network(address) === network(activeUlaPrefix);
+	}
 
 	function getUtilizationStyles(pct: number) {
 		if (pct >= 90) {
@@ -142,7 +151,7 @@
 				{:else if pool.address}
 					<div class="flex items-center gap-1.5 font-mono text-xs text-foreground font-semibold">
 						<span>{pool.address}</span>
-						{#if activeUlaPrefix && pool.address.startsWith(activeUlaPrefix)}
+						{#if isInActiveUla(pool.address)}
 							<Badge variant="outline" class="text-xs text-muted-foreground border-muted-foreground/30">ULA</Badge>
 						{/if}
 					</div>

@@ -90,12 +90,12 @@
 		if (sqmEnabled !== serverConfig.sqm.enabled) return true;
 		if (Number(sqmDownloadMbps) !== serverConfig.sqm.download_mbps) return true;
 		if (Number(sqmUploadMbps) !== serverConfig.sqm.upload_mbps) return true;
-		if (sqmInterface !== serverConfig.sqm.interface) return true;
-		if (sqmOverhead !== serverConfig.sqm.overhead) return true;
-		if (sqmDiffserv !== serverConfig.sqm.diffserv) return true;
-		if (sqmPerHostIsolation !== serverConfig.sqm.per_host_isolation) return true;
+		if (sqmInterface !== (serverConfig.sqm.interface || "auto")) return true;
+		if (sqmOverhead !== (serverConfig.sqm.overhead || "auto")) return true;
+		if (sqmDiffserv !== (serverConfig.sqm.diffserv || "diffserv4")) return true;
+		if (sqmPerHostIsolation !== (serverConfig.sqm.per_host_isolation ?? true)) return true;
 		if (sqmRttMs !== (serverConfig.sqm.rtt_ms ?? null)) return true;
-		if (sqmIngressDevice !== serverConfig.sqm.ingress_device) return true;
+		if (sqmIngressDevice !== (serverConfig.sqm.ingress_device || "ifb4lanforge")) return true;
 		return false;
 	});
 
@@ -105,12 +105,12 @@
 		if (sqmEnabled !== serverConfig.sqm.enabled) count++;
 		if (Number(sqmDownloadMbps) !== serverConfig.sqm.download_mbps) count++;
 		if (Number(sqmUploadMbps) !== serverConfig.sqm.upload_mbps) count++;
-		if (sqmInterface !== serverConfig.sqm.interface) count++;
-		if (sqmOverhead !== serverConfig.sqm.overhead) count++;
-		if (sqmDiffserv !== serverConfig.sqm.diffserv) count++;
-		if (sqmPerHostIsolation !== serverConfig.sqm.per_host_isolation) count++;
+		if (sqmInterface !== (serverConfig.sqm.interface || "auto")) count++;
+		if (sqmOverhead !== (serverConfig.sqm.overhead || "auto")) count++;
+		if (sqmDiffserv !== (serverConfig.sqm.diffserv || "diffserv4")) count++;
+		if (sqmPerHostIsolation !== (serverConfig.sqm.per_host_isolation ?? true)) count++;
 		if (sqmRttMs !== (serverConfig.sqm.rtt_ms ?? null)) count++;
-		if (sqmIngressDevice !== serverConfig.sqm.ingress_device) count++;
+		if (sqmIngressDevice !== (serverConfig.sqm.ingress_device || "ifb4lanforge")) count++;
 		return Math.max(count, 1);
 	});
 

@@ -9,6 +9,7 @@
 	import HardDriveDownloadIcon from "@lucide/svelte/icons/hard-drive-download";
 	import type { Dhcpv4PoolConfig, DhcpPoolsResponse, DhcpPoolEntry } from "$lib/api/types";
 	import DataTableCard from "$lib/components/DataTableCard.svelte";
+	import { formatUptime } from "$lib/utils/format";
 
 	let {
 		v4Pools = [],
@@ -166,7 +167,7 @@
 			</Table.Cell>
 
 			<Table.Cell class="text-xs font-mono text-muted-foreground">
-				{pool.lease_time ? `${Math.round(pool.lease_time / 3600)}h` : `${Math.round(globalV4LeaseTime / 3600)}h (Default)`}
+				{pool.lease_time ? formatUptime(pool.lease_time) : `${formatUptime(globalV4LeaseTime)} (Default)`}
 			</Table.Cell>
 
 			<Table.Cell class="text-right">

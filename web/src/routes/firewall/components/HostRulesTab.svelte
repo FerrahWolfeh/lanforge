@@ -11,6 +11,7 @@
 	import ArrowLeftRightIcon from "@lucide/svelte/icons/arrow-left-right";
 	import HelpPopover from "$lib/components/HelpPopover.svelte";
 	import type { FirewallZone, HostPortRule, L4Protocol } from "$lib/api/types";
+	import { portNumberSchema } from "$lib/utils/validation";
 
 	interface Props {
 		zones: FirewallZone[];
@@ -24,10 +25,16 @@
 	let newPort = $state<number | "">(22);
 	let newProto = $state<L4Protocol>("Tcp");
 	let newComment = $state("");
+	let portError = $state<string | null>(null);
 
 	function handleAddPort(zoneName: string) {
-		if (typeof newPort !== "number" || newPort < 1 || newPort > 65535) return;
-		const portNumber = newPort;
+		const parsed = portNumberSchema.safeParse(newPort);
+		if (!parsed.success) {
+			portError = parsed.error.issues[0]?.message ?? "Invalid port";
+			return;
+		}
+		portError = null;
+		const portNumber = parsed.data;
 		const updatedZones = zones.map((z) => {
 			if (z.name !== zoneName) return z;
 			const newRule: HostPortRule = {
@@ -117,6 +124,7 @@
 								class="h-7 text-xs gap-1"
 								onclick={() => {
 									addingZone = zone.name;
+									portError = null;
 									newPort = 22;
 									newComment = "";
 								}}
@@ -177,8 +185,12 @@
 										min="1"
 										max="65535"
 										bind:value={newPort}
+										aria-invalid={Boolean(portError)}
 										class="h-7 text-xs font-mono"
 									/>
+									{#if portError}
+										<p class="text-xs text-destructive mt-0.5">{portError}</p>
+									{/if}
 								</div>
 								<div>
 									<span class="text-xs text-muted-foreground block mb-0.5">Protocol</span>

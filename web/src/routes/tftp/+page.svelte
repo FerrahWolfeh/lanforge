@@ -65,11 +65,23 @@
 			enabled,
 			listen_addr: listenAddr.trim() || "0.0.0.0:69",
 			root_dir: rootDir.trim() || "/var/lib/lanforge/tftp",
-			block_size: Number(blockSize) || 512,
-			timeout: Number(timeoutSecs) || 5,
-			max_retries: Number(maxRetries) || 3,
+			block_size: Number(blockSize),
+			timeout: Number(timeoutSecs),
+			max_retries: Number(maxRetries),
 		};
 	}
+
+	function intIssue(value: number, min: number, max: number) {
+		const n = Number(value);
+		return Number.isInteger(n) && n >= min && n <= max ? null : `Enter a whole number from ${min} to ${max}`;
+	}
+
+	// RFC 2348 limits block size to 8..65464; timeout and retries follow the server limits.
+	const tftpIssues = $derived({
+		blockSize: intIssue(blockSize, 8, 65464),
+		timeoutSecs: intIssue(timeoutSecs, 1, 60),
+		maxRetries: intIssue(maxRetries, 1, 10),
+	});
 
 	function currentDhcpPxePayload() {
 		return {
@@ -95,6 +107,16 @@
 				serviceBanners(),
 			]);
 
+			if (optsRes.status === "rejected") {
+				toast.error(`Failed to load TFTP settings: ${optsRes.reason?.message ?? "unknown error"}`);
+			}
+			if (sysRes.status === "rejected") {
+				toast.error(`Failed to load system status: ${sysRes.reason?.message ?? "unknown error"}`);
+			}
+			if (bannersRes.status === "rejected") {
+				toast.error(`Failed to load service status: ${bannersRes.reason?.message ?? "unknown error"}`);
+			}
+
 			if (optsRes.status === "fulfilled") {
 				fullOptions = optsRes.value;
 				const tftp = optsRes.value.tftp ?? {
@@ -109,9 +131,9 @@
 				enabled = tftp.enabled ?? false;
 				listenAddr = tftp.listen_addr || "0.0.0.0:69";
 				rootDir = tftp.root_dir || "/var/lib/lanforge/tftp";
-				blockSize = tftp.block_size || 512;
-				timeoutSecs = tftp.timeout || 5;
-				maxRetries = tftp.max_retries || 3;
+				blockSize = tftp.block_size ?? 512;
+				timeoutSecs = tftp.timeout ?? 5;
+				maxRetries = tftp.max_retries ?? 3;
 
 				dhcpV4TftpServer = optsRes.value.v4?.tftp_server || "";
 				dhcpV4BootFile = optsRes.value.v4?.boot_file || "";
@@ -159,22 +181,32 @@
 	}
 
 	async function saveAll() {
-		if (!fullOptions) return;
+		if (!fullOptions) {
+			toast.error("Settings have not loaded yet: refresh the page before saving");
+			return;
+		}
+		const issue = tftpIssues.blockSize ?? tftpIssues.timeoutSecs ?? tftpIssues.maxRetries;
+		if (issue) {
+			toast.error("Fix the highlighted TFTP transmission settings before saving");
+			return;
+		}
 		saving = true;
 		try {
+			// Merge into the current server state: DHCP options may have changed since page load.
+			const base = await dhcpOptionsGet();
 			const tftp = currentTftpPayload();
 			const dhcp = currentDhcpPxePayload();
 
 			const mergedPayload: DhcpOptionsConfig = {
-				...fullOptions,
+				...base,
 				tftp,
 				v4: {
-					...fullOptions.v4,
+					...base.v4,
 					tftp_server: dhcp.tftp_server,
 					boot_file: dhcp.v4_boot_file,
 				},
 				v6: {
-					...fullOptions.v6,
+					...base.v6,
 					boot_file: dhcp.v6_boot_file,
 				},
 			};
@@ -373,6 +405,7 @@
 			bind:blockSize
 			bind:timeoutSecs
 			bind:maxRetries
+			issues={tftpIssues}
 		/>
 
 		<TftpNetbootCard

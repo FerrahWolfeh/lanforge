@@ -113,6 +113,7 @@
 	<!-- New Zone Dialog with templates -->
 	<ZoneNewDialog
 		bind:open={newDialogOpen}
+		{zones}
 		onAdd={handleZoneAdd}
 		onClose={() => (newDialogOpen = false)}
 	/>

@@ -13,11 +13,12 @@
 
   interface Props {
     open: boolean;
+    zones: FirewallZone[];
     onAdd: (zone: FirewallZone) => void;
     onClose: () => void;
   }
 
-  let { open = $bindable(), onAdd, onClose }: Props = $props();
+  let { open = $bindable(), zones, onAdd, onClose }: Props = $props();
 
   // ── Template definitions ───────────────────────────────────────────────
   interface ZoneTemplate {
@@ -92,6 +93,10 @@
     }
     if (/\s/.test(trimmed)) {
       nameError = "Zone name cannot contain spaces.";
+      return false;
+    }
+    if (zones.some((zone) => zone.name === trimmed.toLowerCase())) {
+      nameError = "A zone with this name already exists.";
       return false;
     }
     nameError = null;

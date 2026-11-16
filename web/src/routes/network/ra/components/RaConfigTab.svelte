@@ -29,7 +29,7 @@
 
 	let {
 		formEnabled = $bindable(true),
-		formIface = $bindable("end0"),
+		formIface = $bindable(""),
 		formManaged = $bindable(false),
 		formOtherConfig = $bindable(false),
 		formDeprecateOnRenumber = $bindable(true),

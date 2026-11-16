@@ -121,7 +121,7 @@
 				} else {
 					comment = prefill?.name ?? "";
 					protocol = "Tcp";
-					srcZone = zones.find((z) => z === "external" || z === "wan") ?? zones[0] ?? "";
+					srcZone = zones.find((zone) => zone === "external" || zone === "wan") ?? zones[0] ?? "";
 					externalPort = 80;
 					internalIp = "";
 					internalIpv6 = "";
@@ -188,13 +188,16 @@
 		internalIpv6: ipv6Schema,
 	});
 
+	// An IPv6 pinhole is routed, so a device rule that includes IPv6 keeps the external port.
+	const portFollowsExternal = $derived(Boolean(deviceTarget) && ipMode !== "v4");
+
 	// ── Submit ────────────────────────────────────────────────────────────────
 	function handleSave() {
 		if (deviceTarget) {
 			const validation = validateForm(portForwardBaseSchema, {
 				srcZone,
 				externalPort: externalPort === "" ? NaN : externalPort,
-				internalPort: internalPort === "" ? NaN : internalPort,
+				internalPort: portFollowsExternal ? externalPort : internalPort === "" ? NaN : internalPort,
 				comment: comment.trim() || undefined,
 			});
 			if (!validation.success) {
@@ -209,7 +212,7 @@
 				internal_ip: deviceTarget,
 				external_port: Number(externalPort),
 				// An IPv6 pinhole is routed: it keeps the external port.
-				internal_port: ipMode === "v4" ? Number(internalPort) : Number(externalPort),
+				internal_port: portFollowsExternal ? Number(externalPort) : Number(internalPort),
 				protocol,
 				enable_hairpin: ipMode === "v6" ? false : enableHairpin,
 				family: ipMode === "dual" ? null : ipMode === "v4" ? "ipv4" : "ipv6",
@@ -540,17 +543,24 @@
 				<Field.Field data-invalid={!!errors.internalPort || undefined}>
 					<Field.Label class="text-xs">Internal Port</Field.Label>
 					<Field.Content>
-						<Input
-							type="number"
-							min="1"
-							max="65535"
-							bind:value={internalPort}
-							placeholder="80"
-							class={cn("font-mono text-xs", errors.internalPort && "border-destructive")}
-							aria-invalid={Boolean(errors.internalPort)}
-							oninput={() => { if (errors.internalPort) errors = { ...errors, internalPort: "" }; }}
-						/>
+						{#if portFollowsExternal}
+							<Input type="number" value={externalPort} disabled class="font-mono text-xs" />
+						{:else}
+							<Input
+								type="number"
+								min="1"
+								max="65535"
+								bind:value={internalPort}
+								placeholder="80"
+								class={cn("font-mono text-xs", errors.internalPort && "border-destructive")}
+								aria-invalid={Boolean(errors.internalPort)}
+								oninput={() => { if (errors.internalPort) errors = { ...errors, internalPort: "" }; }}
+							/>
+						{/if}
 					</Field.Content>
+					{#if portFollowsExternal}
+						<p class="text-xs text-muted-foreground">IPv6 pinholes are routed, so the host gets the external port.</p>
+					{/if}
 					{#if errors.internalPort}
 						<Field.Error class="flex items-center gap-1 text-xs">
 							<AlertCircleIcon class="size-3.5 shrink-0" />
@@ -595,8 +605,8 @@
 								{srcZone || "Select zone…"}
 							</Select.Trigger>
 							<Select.Content>
-								{#each zones as z (z)}
-									<Select.Item value={z} class="text-xs">{z}</Select.Item>
+								{#each zones as zone (zone)}
+									<Select.Item value={zone} class="text-xs">{zone}</Select.Item>
 								{/each}
 							</Select.Content>
 						</Select.Root>
