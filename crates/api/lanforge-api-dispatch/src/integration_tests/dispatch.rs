@@ -2181,12 +2181,25 @@ fn query_line(
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
+    query_line_at(client, src, mac, domain, result, repeats, now);
+}
+
+/// [`query_line`] with the line's timestamp.
+fn query_line_at(
+    client: &ClientContext,
+    src: &str,
+    mac: Option<MacAddr>,
+    domain: &str,
+    result: QueryResult,
+    repeats: u32,
+    timestamp: u64,
+) {
     let _ = client
         .ctx
         .bus()
         .publish(LanforgeEvent::Dns(DnsEvent::QueryResolved(Arc::new(
             QueryLogEntry {
-                timestamp: now,
+                timestamp,
                 src_ip: src.parse().unwrap(),
                 domain: Arc::from(domain),
                 upstream_us: 0,
@@ -2202,6 +2215,51 @@ fn query_line(
                 upstream: None,
             },
         ))));
+}
+
+/// A line stamped after the view's window (the clock was set back since it was logged) is
+/// outside the window: the totals always equal the sum of the hourly buckets.
+#[tokio::test]
+async fn dns_views_leave_out_lines_from_the_future() {
+    use QueryResult::Forwarded;
+    let client = served_client().await;
+    let phone = MacAddr::parse("02:00:00:00:00:62").unwrap();
+    leased_device(&client, phone, "192.168.1.62", "phone");
+    let later = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 3 * 3600;
+    query_line(
+        &client,
+        "192.168.1.62",
+        Some(phone),
+        "example.com",
+        Forwarded,
+        2,
+    );
+    query_line_at(
+        &client,
+        "192.168.1.62",
+        Some(phone),
+        "example.com",
+        Forwarded,
+        7,
+        later,
+    );
+    sleep(Duration::from_millis(50)).await;
+
+    let Response::DeviceDns(dns) = client.handle_device_dns(phone).await else {
+        panic!("device dns");
+    };
+    assert_eq!(dns.total, 2);
+    assert_eq!(dns.rate.iter().map(|b| b.total).sum::<u64>(), 2);
+    let Response::DnsDomain(dns) = client.handle_dns_domain("example.com".into()).await else {
+        panic!("dns domain");
+    };
+    assert_eq!(dns.total, 2);
+    assert_eq!(dns.rate.iter().map(|b| b.total).sum::<u64>(), 2);
+    assert_eq!(dns.clients[0].total, 2);
 }
 
 /// The device DNS view counts every line of the device: by its MAC, by its LAN address and by

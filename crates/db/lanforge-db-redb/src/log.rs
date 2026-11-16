@@ -1186,7 +1186,7 @@ impl LogStore for RedbDatabase {
         match txn.open_table(TABLE_DNS_QUERIES) {
             Ok(table) => {
                 for item in table
-                    .range((since_secs, 0)..)
+                    .range((since_secs, 0)..=(now_secs, u64::MAX))
                     .map_err(|e| DbError::Backend(e.to_string()))?
                 {
                     let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
@@ -1260,7 +1260,7 @@ impl LogStore for RedbDatabase {
         match txn.open_table(TABLE_DNS_QUERIES) {
             Ok(table) => {
                 for item in table
-                    .range((since_secs, 0)..)
+                    .range((since_secs, 0)..=(now_secs, u64::MAX))
                     .map_err(|e| DbError::Backend(e.to_string()))?
                 {
                     let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
