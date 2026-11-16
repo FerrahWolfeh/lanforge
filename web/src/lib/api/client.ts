@@ -274,7 +274,7 @@ async function requestCore<T>(
 	}
 
 	// Unwrap { "data": ... } envelope
-	return (json && 'data' in json ? json.data : json) as T;
+	return (json && typeof json === 'object' && 'data' in json ? json.data : json) as T;
 }
 
 const request = <T>(
