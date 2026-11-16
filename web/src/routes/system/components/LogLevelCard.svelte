@@ -155,7 +155,7 @@
 <Card.Root>
 	<Card.Header class="pb-2">
 		<Card.Title class="flex items-center gap-2 text-sm font-medium">
-			<ScrollTextIcon class="text-teal-400 size-4" />
+			<ScrollTextIcon class="text-muted-foreground size-4" />
 			Logging
 			<InfoPopover
 				title="Daemon log filter"
@@ -173,7 +173,7 @@
 					<dt class="text-muted-foreground">Active</dt>
 					<dd class="flex items-center gap-2">
 						<span class="font-mono text-xs font-medium">{current.active}</span>
-						<Badge variant={current.source === "temporary" ? "secondary" : "outline"} class="text-[10px]">
+						<Badge variant={current.source === "temporary" ? "secondary" : "outline"} class="text-xs">
 							{SOURCE_LABEL[current.source]}
 						</Badge>
 					</dd>
@@ -239,7 +239,7 @@
 						spellcheck={false}
 					/>
 					{#if invalid}
-						<p class="text-destructive text-[11px]">{invalid}</p>
+						<p class="text-destructive text-xs">{invalid}</p>
 					{/if}
 					<div class="flex justify-end gap-2">
 						{#if current.source === "saved" || current.source === "temporary"}

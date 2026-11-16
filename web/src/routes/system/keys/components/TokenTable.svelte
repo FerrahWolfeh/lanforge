@@ -208,7 +208,7 @@
 					<div class="flex flex-col gap-0.5">
 						<span class="text-xs font-bold text-foreground">{token.name}</span>
 						<div class="flex items-center gap-1.5">
-							<span class="text-[11px] font-mono text-muted-foreground">
+							<span class="text-xs font-mono text-muted-foreground">
 								ID: #{token.id}
 							</span>
 							<button
@@ -224,7 +224,7 @@
 								}}
 							>
 								{#if copiedTokenId === token.id}
-									<CheckIcon class="size-3 text-emerald-500" />
+									<CheckIcon class="size-3 text-success" />
 								{:else}
 									<CopyIcon class="size-3" />
 								{/if}
@@ -239,15 +239,15 @@
 				<div class="flex flex-wrap gap-1 max-w-xs">
 					{#each token.scopes as sc}
 						{#if sc === "admin"}
-							<Badge variant="default" class="text-[10px] px-1.5 py-0 font-mono">
+							<Badge variant="default" class="text-xs px-1.5 py-0 font-mono">
 								admin
 							</Badge>
 						{:else if sc === "monitoring"}
-							<Badge variant="secondary" class="text-[10px] px-1.5 py-0 font-mono">
+							<Badge variant="secondary" class="text-xs px-1.5 py-0 font-mono">
 								monitoring
 							</Badge>
 						{:else}
-							<Badge variant="outline" class="text-[10px] px-1.5 py-0 font-mono text-muted-foreground">
+							<Badge variant="outline" class="text-xs px-1.5 py-0 font-mono text-muted-foreground">
 								{sc}
 							</Badge>
 						{/if}
@@ -270,21 +270,21 @@
 			<!-- Status / Expiration -->
 			<Table.Cell class="py-3 font-sans whitespace-nowrap">
 				{#if expired}
-					<Badge variant="destructive" class="text-[10px] px-1.5 py-0 font-medium">
+					<Badge variant="destructive" class="text-xs px-1.5 py-0 font-medium">
 						Expired
 					</Badge>
-					<p class="text-[10px] text-destructive/80 mt-0.5">
+					<p class="text-xs text-destructive/80 mt-0.5">
 						{formatDate(token.expires_at)}
 					</p>
 				{:else if token.expires_at}
-					<Badge variant="outline" class="text-[10px] px-1.5 py-0 font-medium text-emerald-600 dark:text-emerald-400 border-emerald-500/30 bg-emerald-500/10">
+					<Badge variant="outline" class="text-xs px-1.5 py-0 font-medium text-success border-success/30 bg-success/10">
 						Active
 					</Badge>
-					<p class="text-[10px] text-muted-foreground mt-0.5">
+					<p class="text-xs text-muted-foreground mt-0.5">
 						Expires on {formatDate(token.expires_at)}
 					</p>
 				{:else}
-					<Badge variant="outline" class="text-[10px] px-1.5 py-0 font-medium text-emerald-600 dark:text-emerald-400 border-emerald-500/30 bg-emerald-500/10">
+					<Badge variant="outline" class="text-xs px-1.5 py-0 font-medium text-success border-success/30 bg-success/10">
 						Active (Permanent)
 					</Badge>
 				{/if}
@@ -322,7 +322,7 @@
 
 <!-- AlertDialog for Revoke -->
 <AlertDialog.Root bind:open={isRevokeOpen}>
-	<AlertDialog.Content class="rounded-xl">
+	<AlertDialog.Content class="rounded-lg">
 		<AlertDialog.Header>
 			<AlertDialog.Title class="text-base font-bold text-foreground">
 				Revoke API Key?
@@ -353,7 +353,7 @@
 
 <!-- AlertDialog for Renew -->
 <AlertDialog.Root bind:open={isRenewOpen}>
-	<AlertDialog.Content class="rounded-xl">
+	<AlertDialog.Content class="rounded-lg">
 		<AlertDialog.Header>
 			<AlertDialog.Title class="text-base font-bold text-foreground">
 				Renew API Key?
@@ -367,7 +367,7 @@
 				Cancel
 			</AlertDialog.Cancel>
 			<AlertDialog.Action
-				class="cursor-pointer text-xs bg-primary text-primary-foreground hover:bg-primary/90 shadow-xs"
+				class="cursor-pointer text-xs bg-primary text-primary-foreground hover:bg-primary/90"
 				onclick={handleRenewToken}
 				disabled={isRenewing}
 			>

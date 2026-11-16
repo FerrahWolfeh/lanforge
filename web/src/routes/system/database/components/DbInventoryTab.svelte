@@ -51,7 +51,7 @@
 			<!-- Mobile View: Card List -->
 			<div class="flex flex-col gap-3 sm:hidden">
 				{#each inventoryItems as item}
-					<div class="p-3.5 rounded-xl border bg-card/60 flex flex-col gap-2.5">
+					<div class="p-3.5 rounded-lg border bg-card/60 flex flex-col gap-2.5">
 						<div class="flex items-start justify-between gap-2">
 							<div class="flex items-center gap-2.5">
 								<div class="flex size-8 items-center justify-center rounded-lg bg-muted text-muted-foreground shrink-0">
@@ -59,7 +59,7 @@
 								</div>
 								<div class="flex flex-col">
 									<span class="text-xs font-semibold text-foreground">{item.title}</span>
-									<span class="text-[10px] text-muted-foreground">{item.category}</span>
+									<span class="text-xs text-muted-foreground">{item.category}</span>
 								</div>
 							</div>
 							<Badge variant="secondary" class="font-mono text-xs shrink-0 font-semibold">
@@ -67,18 +67,18 @@
 							</Badge>
 						</div>
 
-						<p class="text-[11px] text-muted-foreground leading-relaxed">
+						<p class="text-xs text-muted-foreground leading-relaxed">
 							{item.description}
 						</p>
 
 						<div class="flex items-center justify-between pt-1 border-t border-border/40 text-xs">
 							<div>
 								{#if isInMemory}
-									<Badge variant="outline" class="border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[10px]">
+									<Badge variant="outline" class="border-warning/25 bg-warning/10 text-warning text-xs">
 										RAM Only
 									</Badge>
 								{:else}
-									<Badge variant="outline" class="border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px]">
+									<Badge variant="outline" class="border-success/25 bg-success/10 text-success text-xs">
 										<CheckIcon class="size-3 mr-1" />
 										Persistent (redb)
 									</Badge>
@@ -120,26 +120,26 @@
 										</div>
 										<div class="flex flex-col">
 											<span class="text-xs font-semibold text-foreground">{item.title}</span>
-											<span class="text-[11px] text-muted-foreground line-clamp-1">{item.description}</span>
+											<span class="text-xs text-muted-foreground line-clamp-1">{item.description}</span>
 										</div>
 									</div>
 								</Table.Cell>
 								<Table.Cell>
-									<Badge variant="secondary" class="text-[11px] font-normal">
+									<Badge variant="secondary" class="text-xs font-normal">
 										{item.category}
 									</Badge>
 								</Table.Cell>
 								<Table.Cell class="text-right font-mono font-semibold text-xs">
 									{item.count.toLocaleString()}
-									<span class="text-[10px] font-normal text-muted-foreground ml-1">{item.unit}</span>
+									<span class="text-xs font-normal text-muted-foreground ml-1">{item.unit}</span>
 								</Table.Cell>
 								<Table.Cell>
 									{#if isInMemory}
-										<Badge variant="outline" class="border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[10px]">
+										<Badge variant="outline" class="border-warning/25 bg-warning/10 text-warning text-xs">
 											RAM Only
 										</Badge>
 									{:else}
-										<Badge variant="outline" class="border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px]">
+										<Badge variant="outline" class="border-success/25 bg-success/10 text-success text-xs">
 											<CheckIcon class="size-3 mr-1" />
 											Persistent (redb)
 										</Badge>

@@ -181,7 +181,7 @@
 	<div class="rounded-lg border bg-muted/20 p-3.5 space-y-3">
 		<div class="flex items-center justify-between">
 			<div class="flex items-center gap-2">
-				<ServerIcon class="h-4 w-4 text-emerald-400" />
+				<ServerIcon class="h-4 w-4 text-success" />
 				<div>
 					<h5 class="text-sm font-semibold text-foreground">DHCPv4 Server</h5>
 					<p class="text-xs text-muted-foreground">Dynamic IPv4 address assignment for local clients.</p>
@@ -212,7 +212,7 @@
 	<div class="rounded-lg border bg-muted/20 p-3.5 space-y-3">
 		<div class="flex items-center justify-between">
 			<div class="flex items-center gap-2">
-				<ServerIcon class="h-4 w-4 text-cyan-400" />
+				<ServerIcon class="h-4 w-4 text-muted-foreground" />
 				<div>
 					<h5 class="text-sm font-semibold text-foreground">DHCPv6 Server (RFC 8415)</h5>
 					<p class="text-xs text-muted-foreground">Stateful IPv6 address delegation and DNS announcement.</p>
@@ -225,7 +225,7 @@
 			<div class="space-y-1.5 pt-2 border-t text-xs">
 				<Label for="v6_range" class="text-xs">Dynamic Allocation Range (Suffix Suffix or CIDR)</Label>
 				<Input id="v6_range" class="h-8 text-xs font-mono" bind:value={dhcpV6PoolRange} placeholder="::100-::1fff" />
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					Standard suffix scope announced over UDP 547. Dynamically combined with active LAN ULA or GUA prefixes.
 				</p>
 			</div>
@@ -236,7 +236,7 @@
 	<div class="rounded-lg border bg-muted/20 p-3.5 space-y-3">
 		<div class="flex items-center justify-between">
 			<div class="flex items-center gap-2">
-				<RadioIcon class="h-4 w-4 text-purple-400" />
+				<RadioIcon class="h-4 w-4 text-muted-foreground" />
 				<div>
 					<h5 class="text-sm font-semibold text-foreground">IPv6 Router Advertisement (SLAAC)</h5>
 					<p class="text-xs text-muted-foreground">Autonomous IPv6 configuration announced via ICMPv6 periodic router beacons.</p>
@@ -277,7 +277,7 @@
 					<div class="space-y-1 pt-2">
 						<Label for="ra_prefix" class="text-xs">Custom ULA Prefix (RFC 4193)</Label>
 						<Input id="ra_prefix" class="h-8 text-xs font-mono" bind:value={raUlaPrefix} placeholder="fdxx:xxxx:xxxx:xxxx::/64" />
-						<p class="text-[11px] text-muted-foreground">
+						<p class="text-xs text-muted-foreground">
 							Requires a valid /64 prefix length (e.g. <code class="font-mono text-foreground">fd12:3456:789a:1::/64</code>).
 						</p>
 					</div>
@@ -331,15 +331,15 @@
 			<div class="rounded border bg-background/50 p-2.5 space-y-1.5 text-xs">
 				<div class="flex items-center justify-between text-muted-foreground">
 					<span class="font-medium text-foreground">Quad9 Dual-Stack Anycast (4 Resolvers)</span>
-					<Badge variant="secondary" class="text-[10px] px-1.5 py-0">Malware Filter + DNSSEC</Badge>
+					<Badge variant="secondary" class="text-xs px-1.5 py-0">Malware Filter + DNSSEC</Badge>
 				</div>
-				<div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] font-mono">
+				<div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs font-mono">
 					<div class="flex items-center gap-1.5">
-						<span class="px-1 py-0.5 rounded bg-blue-500/10 text-blue-400 font-sans text-[10px] font-semibold">IPv4</span>
+						<span class="px-1 py-0.5 rounded bg-muted text-muted-foreground font-sans text-xs font-semibold">IPv4</span>
 						<span>9.9.9.9, 149.112.112.112</span>
 					</div>
 					<div class="flex items-center gap-1.5">
-						<span class="px-1 py-0.5 rounded bg-purple-500/10 text-purple-400 font-sans text-[10px] font-semibold">IPv6</span>
+						<span class="px-1 py-0.5 rounded bg-muted text-muted-foreground font-sans text-xs font-semibold">IPv6</span>
 						<span>2620:fe::fe, 2620:fe::9</span>
 					</div>
 				</div>
@@ -348,15 +348,15 @@
 			<div class="rounded border bg-background/50 p-2.5 space-y-1.5 text-xs">
 				<div class="flex items-center justify-between text-muted-foreground">
 					<span class="font-medium text-foreground">Cloudflare 1.1.1.1 (4 Resolvers)</span>
-					<Badge variant="secondary" class="text-[10px] px-1.5 py-0">Ultra-Fast + Privacy</Badge>
+					<Badge variant="secondary" class="text-xs px-1.5 py-0">Ultra-Fast + Privacy</Badge>
 				</div>
-				<div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] font-mono">
+				<div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs font-mono">
 					<div class="flex items-center gap-1.5">
-						<span class="px-1 py-0.5 rounded bg-blue-500/10 text-blue-400 font-sans text-[10px] font-semibold">IPv4</span>
+						<span class="px-1 py-0.5 rounded bg-muted text-muted-foreground font-sans text-xs font-semibold">IPv4</span>
 						<span>1.1.1.1, 1.0.0.1</span>
 					</div>
 					<div class="flex items-center gap-1.5">
-						<span class="px-1 py-0.5 rounded bg-purple-500/10 text-purple-400 font-sans text-[10px] font-semibold">IPv6</span>
+						<span class="px-1 py-0.5 rounded bg-muted text-muted-foreground font-sans text-xs font-semibold">IPv6</span>
 						<span>2606:4700:4700::1111, 2606:4700:4700::1001</span>
 					</div>
 				</div>
@@ -365,15 +365,15 @@
 			<div class="rounded border bg-background/50 p-2.5 space-y-1.5 text-xs">
 				<div class="flex items-center justify-between text-muted-foreground">
 					<span class="font-medium text-foreground">Google Public DNS (4 Resolvers)</span>
-					<Badge variant="secondary" class="text-[10px] px-1.5 py-0">Worldwide Anycast</Badge>
+					<Badge variant="secondary" class="text-xs px-1.5 py-0">Worldwide Anycast</Badge>
 				</div>
-				<div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] font-mono">
+				<div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs font-mono">
 					<div class="flex items-center gap-1.5">
-						<span class="px-1 py-0.5 rounded bg-blue-500/10 text-blue-400 font-sans text-[10px] font-semibold">IPv4</span>
+						<span class="px-1 py-0.5 rounded bg-muted text-muted-foreground font-sans text-xs font-semibold">IPv4</span>
 						<span>8.8.8.8, 8.8.4.4</span>
 					</div>
 					<div class="flex items-center gap-1.5">
-						<span class="px-1 py-0.5 rounded bg-purple-500/10 text-purple-400 font-sans text-[10px] font-semibold">IPv6</span>
+						<span class="px-1 py-0.5 rounded bg-muted text-muted-foreground font-sans text-xs font-semibold">IPv6</span>
 						<span>2001:4860:4860::8888, 2001:4860:4860::8844</span>
 					</div>
 				</div>
@@ -382,7 +382,7 @@
 			<div class="space-y-1 pt-1">
 				<Label for="custom_dns" class="text-xs">Custom DNS Server IPs (Comma separated)</Label>
 				<Input id="custom_dns" class="h-8 text-xs font-mono" bind:value={customDnsServers} placeholder="1.1.1.1, 8.8.8.8, 2620:fe::fe" />
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					Specify IPv4 and/or IPv6 upstream resolver addresses.
 				</p>
 			</div>
@@ -393,7 +393,7 @@
 	<div class="rounded-lg border bg-muted/20 p-3.5 space-y-3">
 		<div class="flex items-center justify-between">
 			<div class="flex items-center gap-2">
-				<ShieldIcon class="h-4 w-4 text-emerald-400" />
+				<ShieldIcon class="h-4 w-4 text-success" />
 				<div>
 					<h5 class="text-sm font-semibold text-foreground">Built-in DNS Adblocker</h5>
 					<p class="text-xs text-muted-foreground">Block ads, trackers, and telemetry network-wide via Lanforge DNS.</p>
@@ -406,9 +406,9 @@
 			<div class="space-y-2 pt-2 border-t">
 				<div class="flex items-center justify-between">
 					<span class="text-xs font-medium text-foreground">Initial Community Filter Lists</span>
-					<Badge variant="outline" class="text-[10px]">{selectedAdblockPresets.length} selected</Badge>
+					<Badge variant="outline" class="text-xs">{selectedAdblockPresets.length} selected</Badge>
 				</div>
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					Selected community feeds will be downloaded and enforced immediately on first boot.
 				</p>
 
@@ -423,9 +423,9 @@
 							<div class="space-y-0.5 pr-2">
 								<div class="flex items-center gap-2">
 									<span class="text-xs font-semibold text-foreground">{preset.title}</span>
-									<Badge variant="secondary" class="text-[9px] px-1.5 py-0 font-mono">{preset.badge}</Badge>
+									<Badge variant="secondary" class="text-xs px-1.5 py-0 font-mono">{preset.badge}</Badge>
 								</div>
-								<p class="text-[11px] text-muted-foreground">{preset.description}</p>
+								<p class="text-xs text-muted-foreground">{preset.description}</p>
 							</div>
 							<div class="flex h-5 w-5 shrink-0 items-center justify-center rounded border {isSelected ? 'bg-primary border-primary text-primary-foreground' : 'border-input bg-background'}">
 								{#if isSelected}

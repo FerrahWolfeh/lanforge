@@ -150,10 +150,10 @@
 	}
 
 	function stateDotClass(state: string): string {
-		if (isOnline(state)) return "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]";
-		if (isStarting(state)) return "bg-amber-500 animate-pulse";
-		if (isInactive(state)) return "bg-zinc-500";
-		return "bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.8)]";
+		if (isOnline(state)) return "bg-success";
+		if (isStarting(state)) return "bg-warning animate-pulse";
+		if (isInactive(state)) return "bg-muted-foreground";
+		return "bg-danger";
 	}
 
 	function formatUptime(secs: number): string {
@@ -341,7 +341,7 @@
 				{@const starting = isStarting(banner.state)}
 				{@const inactive = isInactive(banner.state)}
 
-				<Card.Root class="flex flex-col justify-between transition-all hover:border-zinc-600/70 hover:shadow-sm group">
+				<Card.Root class="flex flex-col justify-between transition-all hover:border-muted-foreground/40 group">
 					<!-- Clickable Body: Direct Navigation to Configuration -->
 					<div
 						role="button"
@@ -363,10 +363,10 @@
 										</span>
 									</div>
 									<div class="flex items-center gap-1.5 pt-0.5">
-										<span class="bg-muted text-muted-foreground rounded px-1.5 py-0.2 font-mono text-[10px]">
+										<span class="bg-muted text-muted-foreground rounded px-1.5 py-0.2 font-mono text-xs">
 											{svcId}
 										</span>
-										<span class="text-muted-foreground text-[10px] truncate">
+										<span class="text-muted-foreground text-xs truncate">
 											• {meta.tag}
 										</span>
 									</div>
@@ -374,9 +374,9 @@
 							</div>
 
 							<!-- Status Badge with Dot -->
-							<Badge variant={stateBadgeVariant(banner.state)} class="capitalize text-[11px] gap-1.5 shrink-0">
+							<Badge variant={stateBadgeVariant(banner.state)} class="capitalize text-xs gap-1.5 shrink-0">
 								{#if starting}
-									<Loader2Icon class="size-3 animate-spin text-amber-500" />
+									<Loader2Icon class="size-3 animate-spin text-warning" />
 								{:else}
 									<span class={["size-2 rounded-full shrink-0", stateDotClass(banner.state)].join(" ")}></span>
 								{/if}
@@ -390,8 +390,8 @@
 						</p>
 
 						<!-- Transport & Uptime Info -->
-						<div class="flex items-center justify-between text-[11px] font-mono border-t border-border/50 pt-2.5">
-							<Badge variant="outline" class="font-mono text-[10px] px-1.5 py-0">
+						<div class="flex items-center justify-between text-xs font-mono border-t border-border/50 pt-2.5">
+							<Badge variant="outline" class="font-mono text-xs px-1.5 py-0">
 								{meta.proto}
 							</Badge>
 							<span class="text-muted-foreground">
@@ -400,20 +400,20 @@
 						</div>
 
 						{#if degradedReason(banner.detail)}
-							<p class="text-[11px] text-amber-500 pt-0.5">{degradedReason(banner.detail)}</p>
+							<p class="text-xs text-warning pt-0.5">{degradedReason(banner.detail)}</p>
 						{/if}
 						{#if banner.summary}
-							<p class="font-mono text-[11px] text-foreground pt-0.5">{banner.summary}</p>
+							<p class="font-mono text-xs text-foreground pt-0.5">{banner.summary}</p>
 						{/if}
 
 						<!-- Transport Telemetry -->
 						{#if banner.transport && (banner.transport.rx_packets > 0 || banner.transport.tx_packets > 0 || banner.transport.errors > 0 || banner.transport.rate_limited > 0 || banner.transport.dropped > 0)}
-							<div class="flex flex-wrap items-center gap-2 pt-1 border-t border-border/40 text-[10px] font-mono">
+							<div class="flex flex-wrap items-center gap-2 pt-1 border-t border-border/40 text-xs font-mono">
 								<span class="text-muted-foreground">Traffic:</span>
 								<span class="text-foreground font-medium">↓ {formatBytes(banner.transport.rx_bytes)}</span>
 								<span class="text-foreground font-medium">↑ {formatBytes(banner.transport.tx_bytes)}</span>
 								{#if banner.transport.rate_limited > 0}
-									<span class="text-amber-500 font-medium">{banner.transport.rate_limited} limited</span>
+									<span class="text-warning font-medium">{banner.transport.rate_limited} limited</span>
 								{/if}
 								{#if banner.transport.dropped > 0}
 									<span class="text-destructive font-medium">{banner.transport.dropped} dropped</span>
@@ -454,7 +454,7 @@
 											e.stopPropagation();
 											executeAction(svcId, "Start");
 										}}
-										class="text-xs gap-1.5 h-8 bg-emerald-600 hover:bg-emerald-700 text-white"
+										class="text-xs gap-1.5 h-8 bg-success hover:bg-success/90 text-white"
 									>
 										{#if isBusy && currentAction === "Start"}
 											<Loader2Icon class="size-3.5 animate-spin" />
@@ -525,7 +525,7 @@
 								{/if}
 							{:else}
 								<!-- Core Subsystem Badge -->
-								<Badge variant="secondary" class="text-[10px] font-mono gap-1 text-muted-foreground">
+								<Badge variant="secondary" class="text-xs font-mono gap-1 text-muted-foreground">
 									<ShieldIcon class="size-3 text-muted-foreground" />
 									Core Task
 								</Badge>

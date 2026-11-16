@@ -21,10 +21,10 @@
 		<AlertDialog.Header>
 			<AlertDialog.Title class="flex items-center gap-2">
 				{#if result?.total_success}
-					<CheckCircleIcon class="size-5 text-emerald-500" />
+					<CheckCircleIcon class="size-5 text-success" />
 					<span>Configuration Restored</span>
 				{:else}
-					<AlertTriangleIcon class="size-5 text-amber-500" />
+					<AlertTriangleIcon class="size-5 text-warning" />
 					<span>Restore Completed with Warnings</span>
 				{/if}
 			</AlertDialog.Title>
@@ -39,7 +39,7 @@
 					<div class="flex items-center justify-between rounded-md border p-2 text-xs">
 						<span class="font-mono font-medium">{res.section}</span>
 						{#if res.success}
-							<Badge variant="outline" class="border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+							<Badge variant="outline" class="border-success/25 bg-success/10 text-success">
 								<CheckIcon class="size-3 mr-1" />
 								{res.count} imported
 							</Badge>

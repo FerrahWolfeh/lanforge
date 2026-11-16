@@ -43,7 +43,7 @@
 			</Card.Header>
 			<Card.Content class="pt-0 space-y-3">
 				{#if lastPruneTime}
-					<p class="text-[11px] text-emerald-500 flex items-center gap-1 font-medium">
+					<p class="text-xs text-success flex items-center gap-1 font-medium">
 						<CheckIcon class="size-3" />
 						Executed {formatTimeAgo(lastPruneTime)}
 					</p>
@@ -74,7 +74,7 @@
 			</Card.Header>
 			<Card.Content class="pt-0 space-y-3">
 				{#if lastLogCleanTime}
-					<p class="text-[11px] text-emerald-500 flex items-center gap-1 font-medium">
+					<p class="text-xs text-success flex items-center gap-1 font-medium">
 						<CheckIcon class="size-3" />
 						Executed {formatTimeAgo(lastLogCleanTime)}
 					</p>

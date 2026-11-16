@@ -43,7 +43,7 @@
 
 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 	<!-- Integration Quick Guide -->
-	<Card.Root class="rounded-2xl border-border/70 bg-card shadow-xs">
+	<Card.Root class="rounded-lg border-border/70 bg-card">
 		<Card.Header class="pb-3">
 			<Card.Title class="text-sm font-bold flex items-center gap-2 text-foreground">
 				<TerminalIcon class="size-4 text-primary" />
@@ -55,16 +55,16 @@
 		</Card.Header>
 		<Card.Content class="flex flex-col gap-3">
 			<div class="flex flex-col gap-1">
-				<span class="text-[11px] font-semibold text-muted-foreground">cURL HTTP Example:</span>
-				<div class="p-2.5 rounded-xl bg-muted/40 border border-border/60 font-mono text-[11px] text-foreground break-all select-all">
+				<span class="text-xs font-semibold text-muted-foreground">cURL HTTP Example:</span>
+				<div class="p-2.5 rounded-lg bg-muted/40 border border-border/60 font-mono text-xs text-foreground break-all select-all">
 					curl -H "Authorization: Bearer lf_ak_..." \
 					<br />&nbsp;&nbsp;http://&lt;lanforge-ip&gt;:3000/api/v1/status
 				</div>
 			</div>
 
 			<div class="flex flex-col gap-1">
-				<span class="text-[11px] font-semibold text-muted-foreground">Lanforge CLI Example:</span>
-				<div class="p-2.5 rounded-xl bg-muted/40 border border-border/60 font-mono text-[11px] text-foreground break-all select-all">
+				<span class="text-xs font-semibold text-muted-foreground">Lanforge CLI Example:</span>
+				<div class="p-2.5 rounded-lg bg-muted/40 border border-border/60 font-mono text-xs text-foreground break-all select-all">
 					lanforge --token lf_ak_... status
 				</div>
 			</div>
@@ -72,7 +72,7 @@
 	</Card.Root>
 
 	<!-- Token Tester / Validator -->
-	<Card.Root class="rounded-2xl border-border/70 bg-card shadow-xs">
+	<Card.Root class="rounded-lg border-border/70 bg-card">
 		<Card.Header class="pb-3">
 			<Card.Title class="text-sm font-bold flex items-center gap-2 text-foreground">
 				<ShieldCheckIcon class="size-4 text-primary" />
@@ -87,7 +87,7 @@
 				<Input
 					placeholder="Paste token (lf_ak_... or JWT) to test..."
 					bind:value={testTokenInput}
-					class="text-xs font-mono rounded-xl h-9 bg-background"
+					class="text-xs font-mono rounded-md h-9 bg-background"
 				/>
 			</div>
 
@@ -95,7 +95,7 @@
 				<Button
 					variant="outline"
 					size="sm"
-					class="rounded-xl cursor-pointer text-xs"
+					class="rounded-md cursor-pointer text-xs"
 					onclick={handleValidateToken}
 					disabled={isValidating || !testTokenInput.trim()}
 				>
@@ -110,7 +110,7 @@
 
 				{#if validationResult?.checked}
 					{#if validationResult.valid}
-						<Badge variant="outline" class="text-xs text-emerald-600 dark:text-emerald-400 border-emerald-500/30 bg-emerald-500/10">
+						<Badge variant="outline" class="text-xs text-success border-success/30 bg-success/10">
 							<CheckCircle2Icon class="size-3.5 mr-1" />
 							Valid Token
 						</Badge>

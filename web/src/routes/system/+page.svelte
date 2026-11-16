@@ -150,8 +150,8 @@
 
 	function stateColor(state: string) {
 		const s = (state || "").toLowerCase();
-		if (s === "online" || s === "active") return "text-emerald-500";
-		if (s === "starting") return "text-amber-500";
+		if (s === "online" || s === "active") return "text-success";
+		if (s === "starting") return "text-warning";
 		if (s === "inactive" || s === "offline") return "text-muted-foreground";
 		return "text-destructive";
 	}
@@ -247,7 +247,7 @@
 	<Card.Root>
 		<Card.Header class="pb-2">
 			<Card.Title class="flex items-center gap-2 text-sm font-medium">
-				<ZapIcon class="text-green-400 size-4" />
+				<ZapIcon class="text-muted-foreground size-4" />
 				Daemon
 			</Card.Title>
 		</Card.Header>
@@ -272,7 +272,7 @@
 	<Card.Root>
 		<Card.Header class="pb-2">
 			<Card.Title class="flex items-center gap-2 text-sm font-medium">
-				<NetworkIcon class="text-blue-400 size-4" />
+				<NetworkIcon class="text-muted-foreground size-4" />
 				Network
 			</Card.Title>
 		</Card.Header>
@@ -327,7 +327,7 @@
 	<Card.Root>
 		<Card.Header class="pb-2">
 			<Card.Title class="flex items-center gap-2 text-sm font-medium">
-				<HardDriveIcon class="text-indigo-400 size-4" />
+				<HardDriveIcon class="text-muted-foreground size-4" />
 				Database
 			</Card.Title>
 		</Card.Header>
@@ -367,7 +367,7 @@
 	<Card.Root>
 		<Card.Header class="pb-2">
 			<Card.Title class="flex items-center gap-2 text-sm font-medium">
-				<CpuIcon class="text-orange-400 size-4" />
+				<CpuIcon class="text-muted-foreground size-4" />
 				Memory & Footprint
 			</Card.Title>
 		</Card.Header>
@@ -486,11 +486,11 @@
 												{meta.name}
 											</span>
 											{#if svc.id}
-												<span class="bg-muted text-muted-foreground rounded px-1.5 py-0.5 font-mono text-[10px]">
+												<span class="bg-muted text-muted-foreground rounded px-1.5 py-0.5 font-mono text-xs">
 													{svc.id}
 												</span>
 											{/if}
-											<span class="text-muted-foreground text-[10px] hidden sm:inline">
+											<span class="text-muted-foreground text-xs hidden sm:inline">
 												• {meta.tag}
 											</span>
 										</div>
@@ -528,7 +528,7 @@
 												size="sm"
 												disabled={isBusy}
 												onclick={() => executeServiceAction(svcId, "Start")}
-												class="text-xs gap-1 h-7 px-2.5 bg-emerald-600 hover:bg-emerald-700 text-white"
+												class="text-xs gap-1 h-7 px-2.5 bg-success hover:bg-success/90 text-white"
 											>
 												{#if isBusy && currentAct === "Start"}
 													<Loader2Icon class="size-3 animate-spin" />
@@ -572,10 +572,10 @@
 							</div>
 
 							{#if degradedReason(svc.detail)}
-								<p class="text-[11px] text-amber-500 pt-1">{degradedReason(svc.detail)}</p>
+								<p class="text-xs text-warning pt-1">{degradedReason(svc.detail)}</p>
 							{/if}
 							{#if svc.summary}
-								<p class="font-mono text-[11px] text-foreground pt-1">{svc.summary}</p>
+								<p class="font-mono text-xs text-foreground pt-1">{svc.summary}</p>
 							{/if}
 						</div>
 					{/each}
@@ -595,7 +595,7 @@
 					<Card.Description>Compiled feature flags vs. runtime enabled capabilities</Card.Description>
 				</div>
 				{#if capabilitiesState.debugMode}
-					<Badge variant="outline" class="border-amber-500/40 text-amber-500 font-mono text-xs">
+					<Badge variant="outline" class="border-warning/40 text-warning font-mono text-xs">
 						Dev Override Active
 					</Badge>
 				{/if}
@@ -603,14 +603,14 @@
 		</Card.Header>
 		<Card.Content class="flex flex-col gap-4">
 			{#if capabilitiesState.debugMode}
-				<div class="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-900 dark:text-amber-200 flex items-center justify-between gap-3">
+				<div class="rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-foreground flex items-center justify-between gap-3">
 					<p>
 						<strong class="font-semibold">Vite Dev Capabilities Override:</strong> All navigation menus and sub-features are forced visible. Click the button or use Topbar to restore live filtering.
 					</p>
 					<Button
 						variant="outline"
 						size="sm"
-						class="h-7 text-xs border-amber-500/40 text-amber-600 dark:text-amber-300 hover:bg-amber-500/20 shrink-0"
+						class="h-7 text-xs border-warning/40 text-warning hover:bg-warning/20 shrink-0"
 						onclick={() => capabilitiesState.setDebugMode(false)}
 					>
 						Restore Live Filtering
@@ -620,7 +620,7 @@
 			{#if serverCaps}
 				<div>
 					<p
-						class="text-muted-foreground mb-2 text-xs font-medium uppercase tracking-wide"
+						class="text-muted-foreground mb-2 text-xs font-medium"
 					>
 						Enabled
 					</p>
@@ -635,7 +635,7 @@
 				<Separator />
 				<div>
 					<p
-						class="text-muted-foreground mb-2 text-xs font-medium uppercase tracking-wide"
+						class="text-muted-foreground mb-2 text-xs font-medium"
 					>
 						Compiled (not enabled)
 					</p>

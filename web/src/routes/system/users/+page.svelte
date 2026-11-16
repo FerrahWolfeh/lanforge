@@ -67,7 +67,7 @@
 			<Button
 				variant="outline"
 				size="sm"
-				class="rounded-xl cursor-pointer text-xs"
+				class="rounded-md cursor-pointer text-xs"
 				onclick={() => loadUsers(true)}
 				disabled={isRefreshing}
 			>
@@ -80,7 +80,7 @@
 
 			<Button
 				size="sm"
-				class="rounded-xl cursor-pointer text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm"
+				class="rounded-md cursor-pointer text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90"
 				onclick={() => (isCreateOpen = true)}
 			>
 				<UserPlusIcon data-icon="inline-start" />

@@ -89,12 +89,12 @@
 
 	<!-- Centered Main Auth Card -->
 	<div
-		class="relative z-10 w-full max-w-[420px] rounded-2xl sm:rounded-3xl border border-border/80 bg-card/95 p-6 sm:p-8 shadow-2xl backdrop-blur-xl transition-all"
+		class="relative z-10 w-full max-w-[420px] rounded-lg  border border-border/80 bg-card/95 p-6 sm:p-8 backdrop-blur-xl transition-all"
 	>
 		<!-- Header: Branding integrated inside the card -->
 		<div class="flex flex-col items-center text-center gap-3 pb-6">
 			<div
-				class="flex size-13 items-center justify-center rounded-2xl bg-primary/10 border border-primary/20 text-primary shadow-xs transition-transform duration-300 hover:scale-105"
+				class="flex size-13 items-center justify-center rounded-lg bg-primary/10 border border-primary/20 text-primary transition-transform duration-300 hover:scale-105"
 			>
 				<WifiIcon class="size-6 text-primary" />
 			</div>
@@ -110,13 +110,13 @@
 
 		<div class="space-y-5">
 			<!-- Auth Mode Switcher Tabs -->
-			<div class="bg-muted/60 border border-border/50 grid grid-cols-2 rounded-xl p-1 gap-1">
+			<div class="bg-muted/60 border border-border/50 grid grid-cols-2 rounded-lg p-1 gap-1">
 				<button
 					type="button"
 					class={[
 						"flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-medium transition-all duration-200",
 						mode === "password"
-							? "bg-background text-foreground shadow-xs"
+							? "bg-background text-foreground"
 							: "text-muted-foreground hover:text-foreground",
 					].join(" ")}
 					onclick={() => (mode = "password")}
@@ -129,7 +129,7 @@
 					class={[
 						"flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-medium transition-all duration-200",
 						mode === "apikey"
-							? "bg-background text-foreground shadow-xs"
+							? "bg-background text-foreground"
 							: "text-muted-foreground hover:text-foreground",
 					].join(" ")}
 					onclick={() => (mode = "apikey")}
@@ -142,7 +142,7 @@
 			<!-- Error Alert Banner -->
 			{#if errorMsg}
 				<div
-					class="flex items-start gap-2.5 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
+					class="flex items-start gap-2.5 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
 				>
 					<ShieldAlertIcon class="size-4 shrink-0 mt-0.5" />
 					<span class="leading-relaxed">{errorMsg}</span>
@@ -166,7 +166,7 @@
 									id="username"
 									type="text"
 									placeholder="admin"
-									class="h-11 rounded-xl pl-10 bg-muted/30 border-border/70 focus-visible:ring-primary/40 text-sm"
+									class="h-11 rounded-md pl-10 bg-muted/30 border-border/70 focus-visible:ring-primary/40 text-sm"
 									bind:value={username}
 									required
 									autocomplete="username"
@@ -188,7 +188,7 @@
 									id="password"
 									type={showPassword ? "text" : "password"}
 									placeholder="••••••••"
-									class="h-11 rounded-xl pl-10 pr-10 bg-muted/30 border-border/70 focus-visible:ring-primary/40 text-sm"
+									class="h-11 rounded-md pl-10 pr-10 bg-muted/30 border-border/70 focus-visible:ring-primary/40 text-sm"
 									bind:value={password}
 									required
 									autocomplete="current-password"
@@ -222,13 +222,13 @@
 								id="apikey"
 								type="password"
 								placeholder="lf_sec_..."
-								class="font-mono h-11 rounded-xl pl-10 bg-muted/30 border-border/70 focus-visible:ring-primary/40 text-xs"
+								class="font-mono h-11 rounded-md pl-10 bg-muted/30 border-border/70 focus-visible:ring-primary/40 text-xs"
 								bind:value={apiKey}
 								required
 								disabled={loading}
 							/>
 						</div>
-						<p class="text-[11px] text-muted-foreground">
+						<p class="text-xs text-muted-foreground">
 							Bearer token generated via Lanforge CLI or configuration
 						</p>
 					</div>
@@ -253,7 +253,7 @@
 				<!-- Submit Button -->
 				<Button
 					type="submit"
-					class="h-11 w-full rounded-xl text-sm font-semibold shadow-md gap-2 mt-2 transition-all hover:opacity-95"
+					class="h-11 w-full rounded-md text-sm font-semibold gap-2 mt-2 transition-all hover:opacity-95"
 					disabled={loading || (mode === "password" ? (!username || !password) : !apiKey)}
 				>
 					{#if loading}
@@ -269,9 +269,9 @@
 
 		<!-- Footer Card Note -->
 		<div
-			class="mt-6 pt-4 border-t border-border/50 flex items-center justify-center gap-2 text-[11px] text-muted-foreground/80"
+			class="mt-6 pt-4 border-t border-border/50 flex items-center justify-center gap-2 text-xs text-muted-foreground/80"
 		>
-			<span class="size-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+			<span class="size-1.5 rounded-full bg-success"></span>
 			<span>Lanforge &bull; LAN Orchestrator</span>
 		</div>
 	</div>

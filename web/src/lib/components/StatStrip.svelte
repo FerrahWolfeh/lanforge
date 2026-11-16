@@ -29,7 +29,7 @@
 	let { items, class: className = "" }: { items: StatStripItem[]; class?: string } = $props();
 
 	const cols = $derived(
-		items.length >= 4 ? "sm:grid-cols-4" : items.length === 3 ? "sm:grid-cols-3" : items.length === 2 ? "sm:grid-cols-2" : "sm:grid-cols-1"
+		items.length >= 5 ? "sm:grid-cols-5" : items.length === 4 ? "sm:grid-cols-4" : items.length === 3 ? "sm:grid-cols-3" : items.length === 2 ? "sm:grid-cols-2" : "sm:grid-cols-1"
 	);
 	const fmt = (v: string | number) => (typeof v === "number" ? v.toLocaleString() : v);
 </script>

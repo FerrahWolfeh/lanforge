@@ -307,14 +307,14 @@
 <div class="relative flex min-h-screen w-full items-center justify-center bg-background p-4 sm:p-8">
 	<!-- Background glow / pattern -->
 	<div class="pointer-events-none absolute inset-0 overflow-hidden opacity-25">
-		<div class="absolute -top-[25%] -left-[10%] h-[500px] w-[500px] rounded-full bg-cyan-500/20 blur-[120px]"></div>
-		<div class="absolute -bottom-[20%] -right-[10%] h-[500px] w-[500px] rounded-full bg-blue-600/20 blur-[120px]"></div>
+		<div class="absolute -top-[25%] -left-[10%] h-[500px] w-[500px] rounded-full bg-primary/20 blur-[120px]"></div>
+		<div class="absolute -bottom-[20%] -right-[10%] h-[500px] w-[500px] rounded-full bg-primary/10 blur-[120px]"></div>
 	</div>
 
 	<div class="relative w-full max-w-2xl">
 		<!-- Header / Logo -->
 		<div class="mb-8 text-center">
-			<div class="inline-flex items-center gap-2 rounded-full border border-cyan-500/20 bg-cyan-500/10 px-3 py-1 text-xs font-medium text-cyan-400">
+			<div class="inline-flex items-center gap-2 rounded-full border border-border bg-muted px-3 py-1 text-xs font-medium text-muted-foreground">
 				<SparklesIcon class="h-3.5 w-3.5" />
 				First-Run Onboarding Wizard
 			</div>
@@ -324,8 +324,8 @@
 
 		{#if setupStatus && (!setupStatus.first_run || setupStatus.is_provisioned)}
 			<!-- Already Provisioned Locked Card -->
-			<Card.Root class="border-border/60 bg-card/80 backdrop-blur-sm shadow-xl text-center p-8">
-				<div class="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-400 mb-4">
+			<Card.Root class="border-border/60 bg-card/80 backdrop-blur-sm text-center p-8">
+				<div class="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-success/10 text-success mb-4">
 					<ShieldCheckIcon class="h-8 w-8" />
 				</div>
 				<h2 class="text-2xl font-bold text-foreground">Lanforge is Operational</h2>
@@ -346,40 +346,40 @@
 					<div class="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-all {step >= 1 ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}">
 						{#if step > 1}<CheckIcon class="h-4 w-4" />{:else}1{/if}
 					</div>
-					<span class="text-[11px] sm:text-xs font-medium {step >= 1 ? 'text-foreground' : 'text-muted-foreground'}">Admin</span>
+					<span class="text-xs sm:text-xs font-medium {step >= 1 ? 'text-foreground' : 'text-muted-foreground'}">Admin</span>
 				</div>
 				<div class="h-0.5 flex-1 mx-1.5 sm:mx-2 transition-all {step >= 2 ? 'bg-primary' : 'bg-muted'}"></div>
 				<div class="flex flex-col items-center gap-1">
 					<div class="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-all {step >= 2 ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}">
 						{#if step > 2}<CheckIcon class="h-4 w-4" />{:else}2{/if}
 					</div>
-					<span class="text-[11px] sm:text-xs font-medium {step >= 2 ? 'text-foreground' : 'text-muted-foreground'}">Uplink</span>
+					<span class="text-xs sm:text-xs font-medium {step >= 2 ? 'text-foreground' : 'text-muted-foreground'}">Uplink</span>
 				</div>
 				<div class="h-0.5 flex-1 mx-1.5 sm:mx-2 transition-all {step >= 3 ? 'bg-primary' : 'bg-muted'}"></div>
 				<div class="flex flex-col items-center gap-1">
 					<div class="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-all {step >= 3 ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}">
 						{#if step > 3}<CheckIcon class="h-4 w-4" />{:else}3{/if}
 					</div>
-					<span class="text-[11px] sm:text-xs font-medium {step >= 3 ? 'text-foreground' : 'text-muted-foreground'}">LAN</span>
+					<span class="text-xs sm:text-xs font-medium {step >= 3 ? 'text-foreground' : 'text-muted-foreground'}">LAN</span>
 				</div>
 				<div class="h-0.5 flex-1 mx-1.5 sm:mx-2 transition-all {step >= 4 ? 'bg-primary' : 'bg-muted'}"></div>
 				<div class="flex flex-col items-center gap-1">
 					<div class="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-all {step >= 4 ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}">
 						{#if step > 4}<CheckIcon class="h-4 w-4" />{:else}4{/if}
 					</div>
-					<span class="text-[11px] sm:text-xs font-medium {step >= 4 ? 'text-foreground' : 'text-muted-foreground'}">Firewall</span>
+					<span class="text-xs sm:text-xs font-medium {step >= 4 ? 'text-foreground' : 'text-muted-foreground'}">Firewall</span>
 				</div>
 				<div class="h-0.5 flex-1 mx-1.5 sm:mx-2 transition-all {step >= 5 ? 'bg-primary' : 'bg-muted'}"></div>
 				<div class="flex flex-col items-center gap-1">
 					<div class="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-all {step >= 5 ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}">
 						5
 					</div>
-					<span class="text-[11px] sm:text-xs font-medium {step >= 5 ? 'text-foreground' : 'text-muted-foreground'}">Launch</span>
+					<span class="text-xs sm:text-xs font-medium {step >= 5 ? 'text-foreground' : 'text-muted-foreground'}">Launch</span>
 				</div>
 			</div>
 
 			<!-- Card Content -->
-			<Card.Root class="border-border/60 bg-card/80 backdrop-blur-sm shadow-xl">
+			<Card.Root class="border-border/60 bg-card/80 backdrop-blur-sm">
 				{#if errorMsg}
 					<div class="m-6 mb-0 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
 						{errorMsg}

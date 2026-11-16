@@ -61,7 +61,7 @@
 </script>
 
 <Dialog.Root bind:open>
-	<Dialog.Content class="sm:max-w-md rounded-2xl">
+	<Dialog.Content class="sm:max-w-md rounded-lg">
 		<Dialog.Header>
 			<Dialog.Title class="text-base font-bold flex items-center gap-2">
 				<KeyIcon class="size-5 text-primary" />
@@ -90,7 +90,7 @@
 						type="password"
 						placeholder="New password"
 						bind:value={newPassword}
-						class="text-xs rounded-xl h-9 bg-background"
+						class="text-xs rounded-md h-9 bg-background"
 					/>
 				</Field.Field>
 
@@ -104,7 +104,7 @@
 						type="password"
 						placeholder="Repeat new password"
 						bind:value={confirmPassword}
-						class="text-xs rounded-xl h-9 bg-background"
+						class="text-xs rounded-md h-9 bg-background"
 					/>
 				</Field.Field>
 			</Field.FieldGroup>
@@ -113,7 +113,7 @@
 				<Button
 					type="button"
 					variant="outline"
-					class="rounded-xl cursor-pointer text-xs"
+					class="rounded-md cursor-pointer text-xs"
 					onclick={() => (open = false)}
 				>
 					Cancel
@@ -121,7 +121,7 @@
 
 				<Button
 					type="submit"
-					class="rounded-xl cursor-pointer text-xs bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm"
+					class="rounded-md cursor-pointer text-xs bg-primary text-primary-foreground hover:bg-primary/90"
 					disabled={isSubmitting || !newPassword}
 				>
 					{#if isSubmitting}

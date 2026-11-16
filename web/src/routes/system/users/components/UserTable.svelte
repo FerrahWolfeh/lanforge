@@ -167,12 +167,12 @@
 						<div class="flex items-center gap-1.5">
 							<span class="text-xs font-bold text-foreground">{user.username}</span>
 							{#if isSelf}
-								<Badge variant="outline" class="text-[10px] px-1.5 py-0 border-primary/30 text-primary bg-primary/10">
+								<Badge variant="outline" class="text-xs px-1.5 py-0 border-primary/30 text-primary bg-primary/10">
 									You
 								</Badge>
 							{/if}
 						</div>
-						<span class="text-[11px] font-mono text-muted-foreground">
+						<span class="text-xs font-mono text-muted-foreground">
 							ID: #{user.id}
 						</span>
 					</div>
@@ -182,15 +182,15 @@
 			<!-- Role -->
 			<Table.Cell class="py-3 font-sans">
 				{#if user.role === "admin"}
-					<Badge variant="default" class="text-[10px] px-2 py-0.5">
+					<Badge variant="default" class="text-xs px-2 py-0.5">
 						Administrator
 					</Badge>
 				{:else if user.role === "operator"}
-					<Badge variant="secondary" class="text-[10px] px-2 py-0.5">
+					<Badge variant="secondary" class="text-xs px-2 py-0.5">
 						Operator
 					</Badge>
 				{:else}
-					<Badge variant="outline" class="text-[10px] px-2 py-0.5 text-muted-foreground">
+					<Badge variant="outline" class="text-xs px-2 py-0.5 text-muted-foreground">
 						Viewer
 					</Badge>
 				{/if}
@@ -241,7 +241,7 @@
 
 <!-- AlertDialog for User Deletion -->
 <AlertDialog.Root bind:open={isDeleteOpen}>
-	<AlertDialog.Content class="rounded-xl">
+	<AlertDialog.Content class="rounded-lg">
 		<AlertDialog.Header>
 			<AlertDialog.Title class="text-base font-bold text-foreground">
 				Delete User?

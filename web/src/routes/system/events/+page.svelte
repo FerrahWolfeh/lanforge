@@ -169,10 +169,10 @@
 				class="gap-1.5 text-xs"
 			>
 				{#if isLive}
-					<PauseIcon class="size-3.5 text-amber-500" />
+					<PauseIcon class="size-3.5 text-warning" />
 					<span>Pause Feed</span>
 				{:else}
-					<PlayIcon class="size-3.5 text-emerald-500" />
+					<PlayIcon class="size-3.5 text-success" />
 					<span>Live Stream</span>
 				{/if}
 			</Button>

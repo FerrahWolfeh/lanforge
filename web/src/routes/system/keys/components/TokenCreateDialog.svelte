@@ -150,7 +150,7 @@
 </script>
 
 <Dialog.Root bind:open>
-	<Dialog.Content class="sm:max-w-lg rounded-2xl">
+	<Dialog.Content class="sm:max-w-lg rounded-lg">
 		<Dialog.Header>
 			<Dialog.Title class="text-base font-bold flex items-center gap-2">
 				<KeyRoundIcon class="size-5 text-primary" />
@@ -178,9 +178,9 @@
 						id="token-name"
 						placeholder="e.g. Home Assistant, Prometheus, Backup Script"
 						bind:value={formName}
-						class="text-xs rounded-xl h-9 bg-background"
+						class="text-xs rounded-md h-9 bg-background"
 					/>
-					<Field.FieldDescription class="text-[11px] text-muted-foreground">
+					<Field.FieldDescription class="text-xs text-muted-foreground">
 						A descriptive label to recognize where this key is configured.
 					</Field.FieldDescription>
 				</Field.Field>
@@ -193,7 +193,7 @@
 					<select
 						id="token-expiry"
 						bind:value={formExpiryPreset}
-						class="w-full h-9 text-xs rounded-xl bg-background border border-input px-3 text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+						class="w-full h-9 text-xs rounded-md bg-background border border-input px-3 text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
 					>
 						<option value="7d">7 days</option>
 						<option value="30d">30 days (Recommended)</option>
@@ -208,17 +208,17 @@
 					<Field.FieldLegend class="text-xs font-semibold">
 						Permissions & Scopes
 					</Field.FieldLegend>
-					<div class="flex flex-col gap-2 rounded-xl border border-border/60 p-3 bg-muted/20">
+					<div class="flex flex-col gap-2 rounded-lg border border-border/60 p-3 bg-muted/20">
 						{#each availableScopes as sc}
 							<div class="flex items-start justify-between gap-3 py-1">
 								<div class="flex flex-col gap-0.5">
 									<span class="text-xs font-semibold text-foreground flex items-center gap-1.5">
 										{sc.label}
 										{#if sc.id === 'admin'}
-											<Badge variant="default" class="text-[9px] px-1 py-0">Recommended</Badge>
+											<Badge variant="default" class="text-xs px-1 py-0">Recommended</Badge>
 										{/if}
 									</span>
-									<span class="text-[11px] text-muted-foreground leading-tight">
+									<span class="text-xs text-muted-foreground leading-tight">
 										{sc.desc}
 									</span>
 								</div>
@@ -250,7 +250,7 @@
 				<Button
 					type="button"
 					variant="outline"
-					class="rounded-xl cursor-pointer text-xs"
+					class="rounded-md cursor-pointer text-xs"
 					onclick={() => (open = false)}
 				>
 					Cancel
@@ -258,7 +258,7 @@
 
 				<Button
 					type="submit"
-					class="rounded-xl cursor-pointer text-xs bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm"
+					class="rounded-md cursor-pointer text-xs bg-primary text-primary-foreground hover:bg-primary/90"
 					disabled={isSubmitting || !formName.trim()}
 				>
 					{#if isSubmitting}

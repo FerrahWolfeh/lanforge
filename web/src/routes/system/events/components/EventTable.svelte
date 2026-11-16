@@ -64,22 +64,22 @@
 	function getTopicBadgeClass(topic?: string): string {
 		switch (topic?.toLowerCase()) {
 			case "firewall":
-				return "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20";
+				return "bg-muted text-muted-foreground border-border";
 			case "device":
 			case "dhcp":
-				return "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20";
+				return "bg-muted text-muted-foreground border-border";
 			case "pppoe":
-				return "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20";
+				return "bg-muted text-muted-foreground border-border";
 			case "traffic":
-				return "bg-teal-500/10 text-teal-600 dark:text-teal-400 border-teal-500/20";
+				return "bg-muted text-muted-foreground border-border";
 			case "network":
-				return "bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/20";
+				return "bg-muted text-muted-foreground border-border";
 			case "storage":
 			case "db":
-				return "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/20";
+				return "bg-muted text-muted-foreground border-border";
 			case "system":
 			default:
-				return "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20";
+				return "bg-muted text-muted-foreground border-border";
 		}
 	}
 
@@ -258,7 +258,7 @@
 			}}
 			title={showActivity ? "Hide transient ARP/NDP activity events" : "Show transient ARP/NDP activity events"}
 		>
-			<ActivityIcon class="size-3.5 {showActivity ? 'text-emerald-500' : 'text-muted-foreground'}" />
+			<ActivityIcon class="size-3.5 {showActivity ? 'text-success' : 'text-muted-foreground'}" />
 			<span>{showActivity ? "Activity: Shown" : "Activity: Hidden"}</span>
 		</Button>
 	{/snippet}
@@ -272,10 +272,10 @@
 			onclick={onToggleLive}
 		>
 			{#if isLive}
-				<PauseIcon class="size-3.5 text-amber-500" />
+				<PauseIcon class="size-3.5 text-warning" />
 				<span>Pause Feed</span>
 			{:else}
-				<PlayIcon class="size-3.5 text-emerald-500" />
+				<PlayIcon class="size-3.5 text-success" />
 				<span>Resume Live</span>
 			{/if}
 		</Button>
@@ -339,7 +339,7 @@
 			<Table.Cell class="whitespace-nowrap w-[95px] sm:w-[110px]">
 				<Badge
 					variant="outline"
-					class="text-[11px] font-mono uppercase tracking-wider {getTopicBadgeClass(ev.topic)}"
+					class="text-xs font-medium {getTopicBadgeClass(ev.topic)}"
 				>
 					{ev.topic || "system"}
 				</Badge>
@@ -360,44 +360,44 @@
 
 					<!-- Context Badges / Sub-details -->
 					{#if ev.device_info}
-						<div class="flex flex-wrap items-center gap-1.5 text-[11px]">
+						<div class="flex flex-wrap items-center gap-1.5 text-xs">
 							{#if ev.device_info.hostname}
 								<span class="text-foreground/90 font-medium">{ev.device_info.hostname}</span>
 							{/if}
 							{#if ev.device_info.ip}
 								<span class="font-mono text-muted-foreground">{ev.device_info.ip}</span>
 							{/if}
-							<span class="font-mono text-[10px] text-muted-foreground/75 bg-muted/60 px-1 py-0.5 rounded">
+							<span class="font-mono text-xs text-muted-foreground/75 bg-muted/60 px-1 py-0.5 rounded">
 								{ev.device_info.mac}
 							</span>
 							{#if ev.device_info.is_static}
-								<Badge variant="outline" class="text-[10px] px-1 py-0 border-amber-500/30 text-amber-500 dark:text-amber-400 bg-amber-500/10">
+								<Badge variant="outline" class="text-xs px-1 py-0 border-warning/30 text-warning bg-warning/10">
 									Static
 								</Badge>
 							{/if}
 							{#if ev.device_info.iface}
-								<Badge variant="secondary" class="text-[10px] px-1 py-0 font-mono">
+								<Badge variant="secondary" class="text-xs px-1 py-0 font-mono">
 									{ev.device_info.iface}
 								</Badge>
 							{/if}
 						</div>
 					{:else if ev.interface_info}
-						<div class="flex flex-wrap items-center gap-1.5 text-[11px]">
+						<div class="flex flex-wrap items-center gap-1.5 text-xs">
 							<span class="font-mono font-medium text-foreground">{ev.interface_info.name || `Index #${ev.interface_info.ifindex}`}</span>
 							{#if ev.interface_info.ipv4}
-								<Badge variant="secondary" class="text-[10px] font-mono px-1 py-0">
+								<Badge variant="secondary" class="text-xs font-mono px-1 py-0">
 									{ev.interface_info.ipv4}
 								</Badge>
 							{/if}
 							{#if ev.interface_info.gua}
-								<span class="font-mono text-[10px] text-muted-foreground truncate max-w-[200px]" title={ev.interface_info.gua}>
+								<span class="font-mono text-xs text-muted-foreground truncate max-w-[200px]" title={ev.interface_info.gua}>
 									{ev.interface_info.gua}
 								</span>
 							{/if}
 						</div>
 					{:else if ev.service_info}
-						<div class="flex items-center gap-1.5 text-[11px]">
-							<Badge variant="secondary" class="text-[10px] px-1 py-0 font-mono">
+						<div class="flex items-center gap-1.5 text-xs">
+							<Badge variant="secondary" class="text-xs px-1 py-0 font-mono">
 								{ev.service_info.id}
 							</Badge>
 							<span class="text-muted-foreground">State: {ev.service_info.state}</span>
