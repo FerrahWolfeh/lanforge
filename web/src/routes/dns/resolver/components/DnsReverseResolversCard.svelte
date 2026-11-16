@@ -5,14 +5,13 @@
 	import * as Empty from "$lib/components/ui/empty";
 	import { Button } from "$lib/components/ui/button";
 	import { Skeleton } from "$lib/components/ui/skeleton";
-	import { toast } from "svelte-sonner";
 	import CpuIcon from "@lucide/svelte/icons/cpu";
 	import PlusIcon from "@lucide/svelte/icons/plus";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
 	import CopyIcon from "@lucide/svelte/icons/copy";
 	import type { ReverseResolverEntry } from "$lib/api/types";
-	import { formatSubnet } from "$lib/utils";
+	import { formatSubnet, copyToClipboard } from "$lib/utils";
 
 	let {
 		loading = true,
@@ -125,12 +124,7 @@
 												onclick={() => {
 													const subnet =
 														formatSubnet(r.subnet);
-													navigator.clipboard.writeText(
-														subnet,
-													);
-													toast.success(
-														`Copied subnet ${subnet}`,
-													);
+													copyToClipboard(subnet, `subnet ${subnet}`);
 												}}
 												class="gap-2"
 											>
@@ -143,12 +137,7 @@
 												onclick={() => {
 													const uri =
 														formatResolverUri(r);
-													navigator.clipboard.writeText(
-														uri,
-													);
-													toast.success(
-														`Copied resolver URI ${uri}`,
-													);
+													copyToClipboard(uri, `resolver URI ${uri}`);
 												}}
 												class="gap-2"
 											>

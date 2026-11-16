@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { copyToClipboard, toMillis, createTimers } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import { onDestroy, onMount } from "svelte";
 	import * as Card from "$lib/components/ui/card";
@@ -66,8 +67,7 @@
 
 	function formatTimestamp(ts?: number | null): string {
 		if (!ts) return "Pending";
-		const ms = ts < 1e11 ? ts * 1000 : ts;
-		const date = new Date(ms);
+		const date = new Date(toMillis(ts));
 		return date.toLocaleDateString(undefined, {
 			month: "short",
 			day: "numeric",
@@ -176,15 +176,8 @@
 	}
 
 	// Pending delayed refreshes, cleared on unmount.
-	const timers = new Set<ReturnType<typeof setTimeout>>();
-	function later(fn: () => void, ms: number) {
-		const t = setTimeout(() => {
-			timers.delete(t);
-			fn();
-		}, ms);
-		timers.add(t);
-	}
-	onDestroy(() => timers.forEach(clearTimeout));
+	const { later, clear: clearTimers } = createTimers();
+	onDestroy(clearTimers);
 
 	async function handleRemove(entry: MergedSource) {
 		try {
@@ -217,16 +210,11 @@
 	}
 
 	async function copyUrl(url: string) {
-		try {
-			await navigator.clipboard.writeText(url);
-			copiedUrl = url;
-			toast.success("Copied URL to clipboard");
-			later(() => {
-				copiedUrl = null;
-			}, 2000);
-		} catch {
-			toast.error("Failed to copy URL");
-		}
+		if (!(await copyToClipboard(url, "URL"))) return;
+		copiedUrl = url;
+		later(() => {
+			copiedUrl = null;
+		}, 2000);
 	}
 
 	const filteredSources = $derived.by(() => {

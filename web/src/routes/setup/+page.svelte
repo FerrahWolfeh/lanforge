@@ -8,7 +8,7 @@
 	import { onMount } from "svelte";
 	import { toast } from "svelte-sonner";
 	import { markSetupCompleted } from "$lib/stores/setup.svelte";
-	import { ipv4Schema, ipv6Schema } from "$lib/utils/validation";
+	import { ipv4Schema, ipv6Schema, passwordError } from "$lib/utils/validation";
 
 	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 	import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
@@ -153,12 +153,9 @@
 			errorMsg = "Admin username cannot be empty.";
 			return;
 		}
-		if (admin_password.length < 8) {
-			errorMsg = "Password must be at least 8 characters long.";
-			return;
-		}
-		if (admin_password !== confirm_password) {
-			errorMsg = "Passwords do not match.";
+		const passwordProblem = passwordError(admin_password, confirm_password);
+		if (passwordProblem) {
+			errorMsg = passwordProblem;
 			return;
 		}
 		step = 2;

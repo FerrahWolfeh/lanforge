@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { RECORD_TYPES, cleanDomain, cleanAnswer, getResultBadge, quickDnsRule } from "$lib/components/dns/dnsLog";
+	import { copyToClipboard, formatClockTime, formatLatency } from "$lib/utils";
 	import { goto } from "$app/navigation";
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Table from "$lib/components/ui/table";
@@ -15,9 +17,7 @@
 	import ArrowRightLeftIcon from "@lucide/svelte/icons/arrow-right-left";
 	import LaptopIcon from "@lucide/svelte/icons/laptop";
 	import GlobeIcon from "@lucide/svelte/icons/globe";
-	import { toast } from "svelte-sonner";
-	import { dnsBlock, dnsAllow } from "$lib/api/client";
-	import type { DnsQueryLogEntry, DnsRecordType, FilterMatch } from "$lib/api/types";
+	import type { DnsQueryLogEntry } from "$lib/api/types";
 	import DnsLogDetailDialog from "./DnsLogDetailDialog.svelte";
 	import DataTableCard from "$lib/components/DataTableCard.svelte";
 
@@ -69,20 +69,6 @@
 		return counts;
 	});
 
-	const RECORD_TYPES: DnsRecordType[] = [
-		"A",
-		"AAAA",
-		"CNAME",
-		"PTR",
-		"TXT",
-		"MX",
-		"NS",
-		"SOA",
-		"SRV",
-		"HTTPS",
-		"SVCB",
-	];
-
 	const RESULT_FILTERS = [
 		{ value: "", label: "All Outcomes" },
 		{ value: "blocked", label: "Blocked" },
@@ -110,140 +96,17 @@
 		SVCB: "bg-muted text-muted-foreground border-border",
 	};
 
-	function cleanDomain(raw: string): string {
-		if (!raw) return "";
-		return raw.trim().replace(/\.$/, "");
-	}
-
-	function cleanAnswer(raw?: string | null): string {
-		if (!raw) return "—";
-		return raw
-			.replace(/^"|"$/g, "")
-			.replace(/^(A|AAAA|CNAME|PTR|NS)\((.*)\)$/, "$2")
-			.trim()
-			.replace(/\.$/, "");
-	}
-
-	function formatTime(ts: number): string {
-		if (!ts) return "—";
-		const ms = ts < 1e11 ? ts * 1000 : ts;
-		const d = new Date(ms);
-		return d.toLocaleTimeString(undefined, {
-			hour12: false,
-			hour: "2-digit",
-			minute: "2-digit",
-			second: "2-digit",
-		});
-	}
-
-	function formatLatency(us: number): string {
-		if (us === 0) return "0 ms";
-		if (us < 1000) return `${us} µs`;
-		return `${(us / 1000).toFixed(1)} ms`;
-	}
-
-	async function copyToClipboard(text: string, label: string) {
-		try {
-			await navigator.clipboard.writeText(text);
-			copiedItem = text;
-			toast.success(`Copied ${label} to clipboard`);
-			setTimeout(() => {
-				copiedItem = null;
-			}, 2000);
-		} catch {
-			toast.error("Failed to copy to clipboard");
-		}
+	async function copyItem(text: string, label: string) {
+		if (!(await copyToClipboard(text, label))) return;
+		copiedItem = text;
+		setTimeout(() => {
+			copiedItem = null;
+		}, 2000);
 	}
 
 	function inspectRecord(entry: DnsQueryLogEntry) {
 		selectedRecord = entry;
 		dialogOpen = true;
-	}
-
-	async function handleQuickBlock(domain: string) {
-		const target = cleanDomain(domain);
-		try {
-			await dnsBlock(target);
-			toast.success(`Added ${target} to adblock black list`);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to block domain");
-		}
-	}
-
-	async function handleQuickAllow(domain: string) {
-		const target = cleanDomain(domain);
-		try {
-			await dnsAllow(target);
-			toast.success(`Added ${target} to allowlist`);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to allow domain");
-		}
-	}
-
-	function getResultBadge(result: string, cached: boolean, filter?: FilterMatch | null) {
-		if (filter?.action === "allow") {
-			return {
-				label: "Allowed (@@)",
-				class: "bg-success/10 text-success border-success/20",
-			};
-		}
-		const lower = (result || "").toLowerCase();
-		if (
-			lower === "cachedblock" ||
-			lower === "cached_block" ||
-			(lower.includes("block") && cached)
-		) {
-			return {
-				label: "Cached Block",
-				class: "bg-warning/10 text-warning border-warning/20",
-			};
-		}
-		if (lower.includes("block") || lower.includes("deny")) {
-			return {
-				label: "Blocked",
-				class: "bg-danger/10 text-danger border-danger/20",
-			};
-		}
-		if (lower === "rewritten" || lower.includes("rewrite")) {
-			return {
-				label: "Rewritten",
-				class: "bg-selected text-selected-foreground border-transparent",
-			};
-		}
-		if (lower === "local") {
-			return {
-				label: "Local",
-				class: "bg-muted text-muted-foreground border-border",
-			};
-		}
-		if (lower === "nxdomain") {
-			return {
-				label: "NXDomain",
-				class: "bg-warning/10 text-warning border-warning/20",
-			};
-		}
-		if (lower === "error") {
-			return {
-				label: "Error",
-				class: "bg-danger/10 text-danger border-danger/20",
-			};
-		}
-		if (cached || lower === "cached") {
-			return {
-				label: "Cached",
-				class: "bg-success/10 text-success border-success/20",
-			};
-		}
-		if (lower === "coalesced") {
-			return {
-				label: "Coalesced",
-				class: "bg-info/10 text-info border-info/20",
-			};
-		}
-		return {
-			label: "Forwarded",
-			class: "bg-muted text-muted-foreground border-border",
-		};
 	}
 
 </script>
@@ -279,7 +142,7 @@
 		</DropdownMenu.Item>
 		<DropdownMenu.Item
 			onclick={() =>
-				copyToClipboard(
+				copyItem(
 					domainClean,
 					"domain name",
 				)}
@@ -292,7 +155,7 @@
 		</DropdownMenu.Item>
 		<DropdownMenu.Item
 			onclick={() =>
-				copyToClipboard(
+				copyItem(
 					entry.src_ip,
 					"client IP",
 				)}
@@ -307,7 +170,7 @@
 		<DropdownMenu.Separator />
 		<DropdownMenu.Item
 			onclick={() =>
-				handleQuickBlock(domainClean)}
+				quickDnsRule("block", domainClean)}
 			class="gap-2 text-danger"
 		>
 			<ShieldAlertIcon
@@ -317,7 +180,7 @@
 		</DropdownMenu.Item>
 		<DropdownMenu.Item
 			onclick={() =>
-				handleQuickAllow(domainClean)}
+				quickDnsRule("allow", domainClean)}
 			class="gap-2 text-success"
 		>
 			<ShieldCheckIcon
@@ -432,7 +295,7 @@
 							{/if}
 						</span>
 						<span class="shrink-0 font-mono text-xs text-muted-foreground">
-							{formatTime(entry.timestamp)}
+							{formatClockTime(entry.timestamp)}
 						</span>
 					</span>
 					<span class="flex items-center gap-1.5 flex-wrap text-xs text-muted-foreground">
@@ -502,7 +365,7 @@
 							<Table.Cell
 								class="font-mono text-xs text-muted-foreground"
 							>
-								{formatTime(entry.timestamp)}
+								{formatClockTime(entry.timestamp)}
 							</Table.Cell>
 
 							<!-- Client -->
@@ -591,7 +454,7 @@
 										type="button"
 										onclick={(e) => {
 											e.stopPropagation();
-											copyToClipboard(
+											copyItem(
 												domainClean,
 												"domain name",
 											);

@@ -15,14 +15,9 @@
 
 	import DeviceTable from "./components/DeviceTable.svelte";
 	import MonitorIcon from "@lucide/svelte/icons/monitor";
-	import BookmarkIcon from "@lucide/svelte/icons/bookmark";
-	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import NavTabs from "$lib/components/NavTabs.svelte";
+	import { lanTabs } from "../tabs";
 	import PageHeader from "$lib/components/PageHeader.svelte";
-
-	const lanTabs: NavTabItem[] = [
-		{ label: "Discovered Devices", href: "/network/devices", icon: MonitorIcon },
-		{ label: "Static Hosts", href: "/network/hosts", icon: BookmarkIcon },
-	];
 
 	let devices = $state<DeviceEntry[]>([]);
 	let meta = $state<{ total: number; online: number } | null>(null);

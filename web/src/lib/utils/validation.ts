@@ -59,3 +59,16 @@ export const hostnameSchema = z
 	.min(1, 'Hostname cannot be empty')
 	.max(63, 'Hostname cannot exceed 63 characters')
 	.regex(/^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/, 'Hostname may only contain alphanumeric characters and hyphens');
+
+export const MIN_PASSWORD_LENGTH = 8;
+
+/**
+ * The first problem with a new password and its confirmation, or null when it is acceptable.
+ */
+export function passwordError(password: string, confirm: string): string | null {
+	if (password.length < MIN_PASSWORD_LENGTH) {
+		return `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`;
+	}
+	if (password !== confirm) return "Passwords do not match.";
+	return null;
+}

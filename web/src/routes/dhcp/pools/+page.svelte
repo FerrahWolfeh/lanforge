@@ -4,6 +4,7 @@
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import { toast } from "svelte-sonner";
+	import { toastReconcileResult } from "../reconcile";
 	import HelpPopover from "$lib/components/HelpPopover.svelte";
 
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
@@ -159,24 +160,7 @@
 		reconciling = true;
 		try {
 			const res = await dhcpReconcile();
-			if (res.invalidated_v4_leases.length === 0) {
-				toast.success(
-					`DHCP Reconcile: All leases within range (${res.valid_v4_leases} active, ${res.preserved_static_leases} static preserved)`,
-				);
-			} else {
-				toast.warning(
-					`Reconcile: Invalidated ${res.invalidated_v4_leases.length} out-of-range lease(s). ForceRenew sent.`,
-					{
-						description:
-							res.invalidated_v4_leases
-								.map((l) => `${l.mac} (${l.ip})`)
-								.slice(0, 3)
-								.join(", ") +
-							(res.invalidated_v4_leases.length > 3 ? "..." : ""),
-						duration: 8000,
-					},
-				);
-			}
+			toastReconcileResult(res);
 			await loadAllData(false);
 		} catch (err: any) {
 			toast.error(`Failed to reconcile leases: ${err.message}`);

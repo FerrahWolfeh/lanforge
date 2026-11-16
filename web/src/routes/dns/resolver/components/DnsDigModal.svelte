@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { copyToClipboard } from "$lib/utils";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import * as Field from "$lib/components/ui/field";
 	import { Input } from "$lib/components/ui/input";
@@ -80,11 +81,10 @@
 		}
 	}
 
-	function copyResult() {
+	async function copyResult() {
 		if (!digResult) return;
-		navigator.clipboard.writeText(JSON.stringify(digResult, null, 2));
+		if (!(await copyToClipboard(JSON.stringify(digResult, null, 2), "query output"))) return;
 		copied = true;
-		toast.success("Query output copied to clipboard");
 		setTimeout(() => (copied = false), 2000);
 	}
 </script>

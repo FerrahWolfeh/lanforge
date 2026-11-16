@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { formatClockTime, formatFullDate } from "$lib/utils";
 	import * as Table from "$lib/components/ui/table";
 	import { Button } from "$lib/components/ui/button";
 	import { Badge } from "$lib/components/ui/badge";
@@ -62,31 +63,6 @@
 	];
 
 	const topicBadgeClass = "bg-muted text-muted-foreground border-border";
-
-	function formatTime(ts: number): string {
-		if (!ts) return "—";
-		const date = new Date(ts);
-		return date.toLocaleTimeString(undefined, {
-			hour: "2-digit",
-			minute: "2-digit",
-			second: "2-digit",
-			fractionalSecondDigits: 3,
-			hour12: false,
-		});
-	}
-
-	function formatFullDate(ts: number): string {
-		if (!ts) return "—";
-		return new Date(ts).toLocaleString(undefined, {
-			year: "numeric",
-			month: "2-digit",
-			day: "2-digit",
-			hour: "2-digit",
-			minute: "2-digit",
-			second: "2-digit",
-			hour12: false,
-		});
-	}
 
 	// Lowercased payload per event, built on first search that reaches it: events are immutable.
 	const dataTextCache = new WeakMap<SseEvent, string>();
@@ -326,7 +302,7 @@
 						</Badge>
 						<span class="truncate font-mono text-xs font-medium text-foreground">{ev.kind}</span>
 					</span>
-					<span class="shrink-0 font-mono text-xs text-muted-foreground">{formatTime(ev.ts)}</span>
+					<span class="shrink-0 font-mono text-xs text-muted-foreground">{formatClockTime(ev.ts, true)}</span>
 				</span>
 				<span class="break-words text-xs text-foreground">
 					{formatEventPayload(ev.data, ev.kind, ev.device_info, ev.interface_info, ev.service_info)}
@@ -349,7 +325,7 @@
 			<Table.Cell class="font-mono text-xs whitespace-nowrap w-[95px] sm:w-[105px]" title={formatFullDate(ev.ts)}>
 				<div class="flex items-center gap-1.5 text-muted-foreground">
 					<ClockIcon class="size-3 text-muted-foreground/60 shrink-0" />
-					<span>{formatTime(ev.ts)}</span>
+					<span>{formatClockTime(ev.ts, true)}</span>
 				</div>
 			</Table.Cell>
 

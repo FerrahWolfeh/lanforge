@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { toMillis } from "$lib/utils";
 	import * as Card from "$lib/components/ui/card";
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import * as Chart from "$lib/components/ui/chart/index.js";
@@ -42,14 +43,14 @@
 
 		const ratesMap = new Map<number, (typeof rates)[0]>();
 		for (const r of rates) {
-			const ms = r.timestamp < 10_000_000_000 ? r.timestamp * 1000 : r.timestamp;
+			const ms = toMillis(r.timestamp);
 			const bucketKey = Math.floor(ms / BUCKET_MS) * BUCKET_MS;
 			ratesMap.set(bucketKey, r);
 		}
 
 		const blockedMap = new Map<number, number>();
 		for (const b of blockedRates) {
-			const ms = b.timestamp < 10_000_000_000 ? b.timestamp * 1000 : b.timestamp;
+			const ms = toMillis(b.timestamp);
 			const bucketKey = Math.floor(ms / BUCKET_MS) * BUCKET_MS;
 			blockedMap.set(bucketKey, b.count);
 		}

@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { cleanAnswer } from "$lib/components/dns/dnsLog";
+	import { copyToClipboard } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import { Button } from "$lib/components/ui/button";
@@ -34,26 +36,12 @@
 		return raw.trim().replace(/\.$/, "");
 	}
 
-	function cleanData(raw: string): string {
-		if (!raw) return "—";
-		return raw
-			.replace(/^"|"$/g, "")
-			.replace(/^(A|AAAA|CNAME|PTR|NS)\((.*)\)$/, "$2")
-			.trim()
-			.replace(/\.$/, "");
-	}
-
-	async function copyToClipboard(text: string, field: string) {
-		try {
-			await navigator.clipboard.writeText(text);
-			copiedField = field;
-			toast.success(`Copied ${field} to clipboard`);
-			setTimeout(() => {
-				copiedField = null;
-			}, 2000);
-		} catch {
-			toast.error("Failed to copy");
-		}
+	async function copyItem(text: string, field: string) {
+		if (!(await copyToClipboard(text, field))) return;
+		copiedField = field;
+		setTimeout(() => {
+			copiedField = null;
+		}, 2000);
 	}
 
 	async function handleTestQuery() {
@@ -103,7 +91,7 @@
 	function handleCreateRewrite() {
 		if (!entry) return;
 		const domain = cleanName(entry.name);
-		const target = cleanData(entry.data);
+		const target = cleanAnswer(entry.data);
 		onAddRewrite(
 			domain,
 			target !== "no-data" && target !== "wire-error" ? target : "",
@@ -112,7 +100,7 @@
 	}
 
 	const formattedName = $derived(entry ? cleanName(entry.name) : "");
-	const formattedData = $derived(entry ? cleanData(entry.data) : "");
+	const formattedData = $derived(entry ? cleanAnswer(entry.data) : "");
 </script>
 
 <Dialog.Root bind:open>
@@ -158,7 +146,7 @@
 								size="icon"
 								class="h-6 w-6 shrink-0"
 								onclick={() =>
-									copyToClipboard(
+									copyItem(
 										formattedName,
 										"Domain Name",
 									)}
@@ -194,7 +182,7 @@
 								size="icon"
 								class="h-6 w-6 shrink-0"
 								onclick={() =>
-									copyToClipboard(
+									copyItem(
 										formattedData,
 										"Answer Data",
 									)}

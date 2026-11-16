@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { copyToClipboard } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Card from "$lib/components/ui/card";
 	import { Button } from "$lib/components/ui/button";
@@ -28,16 +29,11 @@
 	let copiedDomain = $state<string | null>(null);
 
 	async function copyText(text: string) {
-		try {
-			await navigator.clipboard.writeText(text);
-			copiedDomain = text;
-			toast.success(`Copied "${text}" to clipboard`);
-			setTimeout(() => {
-				copiedDomain = null;
-			}, 2000);
-		} catch {
-			toast.error("Failed to copy to clipboard");
-		}
+		if (!(await copyToClipboard(text, `"${text}"`))) return;
+		copiedDomain = text;
+		setTimeout(() => {
+			copiedDomain = null;
+		}, 2000);
 	}
 
 	async function handleAllow(domain: string) {

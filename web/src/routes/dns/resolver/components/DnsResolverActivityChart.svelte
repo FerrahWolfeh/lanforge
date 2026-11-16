@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { toMillis } from "$lib/utils";
 	import * as Card from "$lib/components/ui/card";
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import * as Chart from "$lib/components/ui/chart/index.js";
@@ -59,7 +60,7 @@
 		// Index incoming query rates by 15-minute rounded timestamp
 		const ratesMap = new Map<number, (typeof rates)[0]>();
 		for (const r of rates) {
-			const ms = r.timestamp < 10_000_000_000 ? r.timestamp * 1000 : r.timestamp;
+			const ms = toMillis(r.timestamp);
 			const bucketKey = Math.floor(ms / BUCKET_MS) * BUCKET_MS;
 			ratesMap.set(bucketKey, r);
 		}

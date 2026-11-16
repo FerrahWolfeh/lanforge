@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { copyToClipboard, formatFullDate } from "$lib/utils";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import { Button } from "$lib/components/ui/button";
 	import { Badge } from "$lib/components/ui/badge";
@@ -10,7 +11,6 @@
 	import LaptopIcon from "@lucide/svelte/icons/laptop";
 	import NetworkIcon from "@lucide/svelte/icons/network";
 	import ServerIcon from "@lucide/svelte/icons/server";
-	import { toast } from "svelte-sonner";
 	import { formatEventPayload, type SseEvent } from "$lib/api/types";
 
 	let {
@@ -22,21 +22,6 @@
 	} = $props();
 
 	let copied = $state(false);
-
-	function formatTimestamp(ts: number): string {
-		if (!ts) return "—";
-		const date = new Date(ts);
-		return date.toLocaleString(undefined, {
-			year: "numeric",
-			month: "2-digit",
-			day: "2-digit",
-			hour: "2-digit",
-			minute: "2-digit",
-			second: "2-digit",
-			fractionalSecondDigits: 3,
-			hour12: false,
-		});
-	}
 
 	const rawJson = $derived(
 		event ? JSON.stringify(event.raw ?? event, null, 2) : "{}"
@@ -56,16 +41,11 @@
 
 	async function copyRaw() {
 		if (!event) return;
-		try {
-			await navigator.clipboard.writeText(rawJson);
-			copied = true;
-			toast.success("Event JSON copied to clipboard");
-			setTimeout(() => {
-				copied = false;
-			}, 2000);
-		} catch {
-			toast.error("Failed to copy JSON");
-		}
+		if (!(await copyToClipboard(rawJson, "event JSON"))) return;
+		copied = true;
+		setTimeout(() => {
+			copied = false;
+		}, 2000);
 	}
 </script>
 
@@ -96,7 +76,7 @@
 						<span class="font-medium text-foreground text-base">{event.kind}</span>
 						<span class="text-xs text-muted-foreground flex items-center gap-1.5 font-mono">
 							<ClockIcon class="size-3.5" />
-							{formatTimestamp(event.ts)}
+							{formatFullDate(event.ts, true)}
 						</span>
 					</div>
 					<p class="text-xs text-muted-foreground leading-relaxed">

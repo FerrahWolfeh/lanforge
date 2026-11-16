@@ -14,3 +14,5 @@ export type WithElementRef<T, U extends HTMLElement = HTMLElement> = T & { ref?:
 
 export * from "./utils/format";
 export * from "./utils/polling";
+export * from "./utils/timers";
+export * from "./utils/download";

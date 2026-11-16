@@ -11,7 +11,7 @@
 	import CheckIcon from "@lucide/svelte/icons/check";
 	import Loader2Icon from "@lucide/svelte/icons/loader-2";
 	import { deleteToken, renewToken } from "$lib/api/client";
-	import { copyToClipboard } from "$lib/utils";
+	import { copyToClipboard, formatDateTime, formatTimeAgo, toMillis } from "$lib/utils";
 	import type { AuthToken } from "$lib/api/types";
 	import { toast } from "svelte-sonner";
 	import DataTableCard from "$lib/components/DataTableCard.svelte";
@@ -47,31 +47,7 @@
 	function isExpired(t: AuthToken): boolean {
 		if (!t.expires_at) return false;
 		const nowSecs = Math.floor(Date.now() / 1000);
-		const expSecs = t.expires_at > 1e11 ? Math.floor(t.expires_at / 1000) : t.expires_at;
-		return expSecs < nowSecs;
-	}
-
-	function formatDate(ts: number | null | undefined): string {
-		if (!ts) return "Never";
-		const ms = ts > 1e11 ? ts : ts * 1000;
-		const d = new Date(ms);
-		return d.toLocaleDateString(undefined, {
-			year: "numeric",
-			month: "short",
-			day: "2-digit",
-			hour: "2-digit",
-			minute: "2-digit"
-		});
-	}
-
-	function formatRelative(ts: number | null | undefined): string {
-		if (!ts) return "Never used";
-		const ms = ts > 1e11 ? ts : ts * 1000;
-		const diffSecs = Math.round((Date.now() - ms) / 1000);
-		if (diffSecs < 60) return "Just now";
-		if (diffSecs < 3600) return `${Math.floor(diffSecs / 60)}m ago`;
-		if (diffSecs < 86400) return `${Math.floor(diffSecs / 3600)}h ago`;
-		return `${Math.floor(diffSecs / 86400)}d ago`;
+		return toMillis(t.expires_at) / 1000 < nowSecs;
 	}
 
 	function confirmRevoke(token: AuthToken) {
@@ -257,13 +233,13 @@
 
 			<!-- Created At -->
 			<Table.Cell class="py-3 font-sans text-xs text-muted-foreground whitespace-nowrap">
-				{formatDate(token.created_at)}
+				{formatDateTime(token.created_at)}
 			</Table.Cell>
 
 			<!-- Last Used -->
 			<Table.Cell class="py-3 font-sans whitespace-nowrap">
-				<span class="text-xs text-muted-foreground" title={formatDate(token.last_used)}>
-					{formatRelative(token.last_used)}
+				<span class="text-xs text-muted-foreground" title={token.last_used ? formatDateTime(token.last_used) : "Never"}>
+					{token.last_used ? formatTimeAgo(token.last_used) : "Never used"}
 				</span>
 			</Table.Cell>
 
@@ -274,14 +250,14 @@
 						Expired
 					</Badge>
 					<p class="text-xs text-destructive/80 mt-0.5">
-						{formatDate(token.expires_at)}
+						{formatDateTime(token.expires_at)}
 					</p>
 				{:else if token.expires_at}
 					<Badge variant="outline" class="text-xs px-1.5 py-0 font-medium text-success border-success/30 bg-success/10">
 						Active
 					</Badge>
 					<p class="text-xs text-muted-foreground mt-0.5">
-						Expires on {formatDate(token.expires_at)}
+						Expires on {formatDateTime(token.expires_at)}
 					</p>
 				{:else}
 					<Badge variant="outline" class="text-xs px-1.5 py-0 font-medium text-success border-success/30 bg-success/10">

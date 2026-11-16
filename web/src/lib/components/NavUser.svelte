@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { auth } from "$lib/stores/auth.svelte";
 	import { sidebarState } from "$lib/stores/sidebar.svelte";
-	import { logout, changePassword } from "$lib/api/client";
+	import { changePassword } from "$lib/api/client";
 	import { goto } from "$app/navigation";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
@@ -31,12 +31,7 @@
 	const initials = $derived((user?.username ?? "AD").slice(0, 2).toUpperCase());
 
 	async function handleLogout() {
-		try {
-			await logout();
-		} catch {
-			// daemon may be unreachable
-		}
-		auth.clear();
+		await auth.signOut();
 		onNavigate?.();
 		goto("/login");
 	}

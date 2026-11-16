@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { copyToClipboard } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Table from "$lib/components/ui/table";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
@@ -74,17 +75,12 @@
 		return raw.trim().replace(/\.$/, "");
 	}
 
-	async function copyToClipboard(text: string, label: string) {
-		try {
-			await navigator.clipboard.writeText(text);
-			copiedItem = text;
-			toast.success(`Copied ${label} to clipboard`);
-			setTimeout(() => {
-				copiedItem = null;
-			}, 2000);
-		} catch {
-			toast.error("Failed to copy to clipboard");
-		}
+	async function copyItem(text: string, label: string) {
+		if (!(await copyToClipboard(text, label))) return;
+		copiedItem = text;
+		setTimeout(() => {
+			copiedItem = null;
+		}, 2000);
 	}
 
 	async function handleTestResolution(rule: RewriteRule) {
@@ -201,7 +197,7 @@
 										type="button"
 										onclick={(e) => {
 											e.stopPropagation();
-											copyToClipboard(
+											copyItem(
 												domainClean,
 												"domain pattern",
 											);
@@ -274,7 +270,7 @@
 												type="button"
 												onclick={(e) => {
 													e.stopPropagation();
-													copyToClipboard(
+													copyItem(
 														ans,
 														"target answer",
 													);
@@ -325,7 +321,7 @@
 										{/if}
 										<DropdownMenu.Item
 											onclick={() =>
-												copyToClipboard(
+												copyItem(
 													domainClean,
 													"domain pattern",
 												)}
@@ -338,7 +334,7 @@
 										</DropdownMenu.Item>
 										<DropdownMenu.Item
 											onclick={() =>
-												copyToClipboard(
+												copyItem(
 													ans,
 													"target answer",
 												)}

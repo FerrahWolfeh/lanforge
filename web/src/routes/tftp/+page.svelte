@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { createTimers } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import { onDestroy, onMount } from "svelte";
 	import { Button } from "$lib/components/ui/button";
@@ -42,6 +43,12 @@
 	let fullOptions = $state<DhcpOptionsConfig | null>(null);
 	let systemStatus = $state<StatusResponse | null>(null);
 	let tftpBanner = $state<ServiceBanner | null>(null);
+
+	function findTftpBanner(banners: ServiceBanner[]): ServiceBanner | null {
+		return (
+			banners.find((b) => b.id?.toLowerCase() === "tftp" || b.name.toLowerCase().includes("tftp")) ?? null
+		);
+	}
 
 	// TFTP Server form fields
 	let enabled = $state(false);
@@ -147,10 +154,7 @@
 			}
 
 			if (bannersRes.status === "fulfilled") {
-				const list = bannersRes.value;
-				tftpBanner = list.find(
-					(b) => b.id?.toLowerCase() === "tftp" || b.name.toLowerCase().includes("tftp"),
-				) ?? null;
+				tftpBanner = findTftpBanner(bannersRes.value);
 			}
 		} catch (err: unknown) {
 			const msg = err instanceof Error ? err.message : "Failed to load TFTP data.";
@@ -220,10 +224,7 @@
 			// Refresh banners to sync state
 			later(async () => {
 				try {
-					const banners = await serviceBanners();
-					tftpBanner = banners.find(
-						(b) => b.id?.toLowerCase() === "tftp" || b.name.toLowerCase().includes("tftp"),
-					) ?? null;
+					tftpBanner = findTftpBanner(await serviceBanners());
 				} catch {
 					// non-critical
 				}
@@ -237,15 +238,8 @@
 	}
 
 	// Pending banner refreshes, cleared on unmount.
-	const timers = new Set<ReturnType<typeof setTimeout>>();
-	function later(fn: () => void, ms: number) {
-		const t = setTimeout(() => {
-			timers.delete(t);
-			fn();
-		}, ms);
-		timers.add(t);
-	}
-	onDestroy(() => timers.forEach(clearTimeout));
+	const { later, clear: clearTimers } = createTimers();
+	onDestroy(clearTimers);
 
 	async function handleServiceControl(action: "Start" | "Stop" | "Restart") {
 		if (action === "Stop") {
@@ -262,10 +256,7 @@
 			toast.success(`TFTP service received ${action.toLowerCase()} command`);
 			later(async () => {
 				try {
-					const banners = await serviceBanners();
-					tftpBanner = banners.find(
-						(b) => b.id?.toLowerCase() === "tftp" || b.name.toLowerCase().includes("tftp"),
-					) ?? null;
+					tftpBanner = findTftpBanner(await serviceBanners());
 				} catch {
 					// non-critical
 				} finally {

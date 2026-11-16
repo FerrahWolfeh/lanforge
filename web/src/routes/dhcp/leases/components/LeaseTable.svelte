@@ -1,8 +1,8 @@
 <script lang="ts">
+	import { copyToClipboard } from "$lib/utils";
 	import * as Table from "$lib/components/ui/table";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import { Badge } from "$lib/components/ui/badge";
-	import { toast } from "svelte-sonner";
 	import type { LeaseEntry } from "$lib/api/types";
 	import DataTableCard from "$lib/components/DataTableCard.svelte";
 
@@ -90,10 +90,6 @@
 		return `${d}d ${remH}h`;
 	}
 
-	function copyText(text: string, label: string) {
-		navigator.clipboard.writeText(text);
-		toast.success(`Copied ${label}`);
-	}
 </script>
 
 {#snippet actionsMenu(lease: LeaseEntry)}
@@ -124,11 +120,11 @@
 			</DropdownMenu.Item>
 			<DropdownMenu.Separator />
 			{/if}
-			<DropdownMenu.Item onclick={() => copyText(lease.mac, "MAC")} class="gap-2">
+			<DropdownMenu.Item onclick={() => copyToClipboard(lease.mac, "MAC")} class="gap-2">
 				<CopyIcon class="size-3.5 text-muted-foreground" />
 				Copy MAC
 			</DropdownMenu.Item>
-			<DropdownMenu.Item onclick={() => copyText(lease.address, "IP")} class="gap-2">
+			<DropdownMenu.Item onclick={() => copyToClipboard(lease.address, "IP")} class="gap-2">
 				<CopyIcon class="size-3.5 text-muted-foreground" />
 				Copy IP
 			</DropdownMenu.Item>
@@ -273,7 +269,7 @@
 					<span>{lease.mac}</span>
 					<button
 						class="text-muted-foreground hover:text-foreground transition-colors p-0.5 cursor-pointer"
-						onclick={() => copyText(lease.mac, "MAC")}
+						onclick={() => copyToClipboard(lease.mac, "MAC")}
 						title="Copy MAC"
 					>
 						<CopyIcon class="size-3" />
@@ -294,7 +290,7 @@
 					</span>
 					<button
 						class="text-muted-foreground hover:text-foreground transition-colors p-0.5 cursor-pointer"
-						onclick={() => copyText(lease.address, "IP")}
+						onclick={() => copyToClipboard(lease.address, "IP")}
 						title="Copy IP"
 					>
 						<CopyIcon class="size-3" />

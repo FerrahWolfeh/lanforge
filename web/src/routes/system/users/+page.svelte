@@ -4,7 +4,6 @@
 	import UsersIcon from "@lucide/svelte/icons/users";
 	import UserPlusIcon from "@lucide/svelte/icons/user-plus";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
-	import KeyRoundIcon from "@lucide/svelte/icons/key-round";
 	import { userList } from "$lib/api/client";
 	import type { UserInfo } from "$lib/api/types";
 	import { auth } from "$lib/stores/auth.svelte";
@@ -12,13 +11,9 @@
 	import UserTable from "./components/UserTable.svelte";
 	import UserCreateDialog from "./components/UserCreateDialog.svelte";
 	import UserPasswordDialog from "./components/UserPasswordDialog.svelte";
-	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import NavTabs from "$lib/components/NavTabs.svelte";
+	import { accessTabs } from "../tabs";
 	import PageHeader from "$lib/components/PageHeader.svelte";
-
-	const accessTabs: NavTabItem[] = [
-		{ label: "Users", href: "/system/users", icon: UsersIcon },
-		{ label: "API & Auth Keys", href: "/system/keys", icon: KeyRoundIcon },
-	];
 
 	let users = $state<UserInfo[]>([]);
 	let isLoading = $state(true);

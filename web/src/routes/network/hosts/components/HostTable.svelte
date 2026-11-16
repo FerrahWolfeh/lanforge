@@ -1,9 +1,9 @@
 <script lang="ts">
+	import { copyToClipboard } from "$lib/utils";
 	import * as Table from "$lib/components/ui/table";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
-	import { toast } from "svelte-sonner";
 	import type { HostConfigEntry } from "$lib/api/types";
 	import DataTableCard from "$lib/components/DataTableCard.svelte";
 
@@ -73,10 +73,6 @@
 		if (pageIndex > lastPage) pageIndex = lastPage;
 	});
 
-	function copyText(text: string, label: string) {
-		navigator.clipboard.writeText(text);
-		toast.success(`Copied ${label}`);
-	}
 </script>
 
 {#snippet actionsMenu(host: HostConfigEntry)}
@@ -94,12 +90,12 @@
 			</DropdownMenu.Item>
 			<DropdownMenu.Separator />
 			{/if}
-			<DropdownMenu.Item onclick={() => copyText(host.mac, "MAC")} class="gap-2">
+			<DropdownMenu.Item onclick={() => copyToClipboard(host.mac, "MAC")} class="gap-2">
 				<CopyIcon class="size-3.5 text-muted-foreground" />
 				Copy MAC Address
 			</DropdownMenu.Item>
 			{#if host.v4_fixed || host.v4}
-				<DropdownMenu.Item onclick={() => copyText(host.v4_fixed || host.v4 || "", "Fixed IPv4")} class="gap-2">
+				<DropdownMenu.Item onclick={() => copyToClipboard(host.v4_fixed || host.v4 || "", "Fixed IPv4")} class="gap-2">
 					<CopyIcon class="size-3.5 text-muted-foreground" />
 					Copy Fixed IPv4
 				</DropdownMenu.Item>
@@ -253,7 +249,7 @@
 					<span>{host.mac}</span>
 					<button
 						class="text-muted-foreground hover:text-foreground transition-colors p-0.5 cursor-pointer"
-						onclick={() => copyText(host.mac, "MAC")}
+						onclick={() => copyToClipboard(host.mac, "MAC")}
 						title="Copy MAC"
 					>
 						<CopyIcon class="size-3" />
@@ -268,7 +264,7 @@
 						<span class="text-foreground font-medium">{host.v4_fixed || host.v4}</span>
 						<button
 							class="text-muted-foreground hover:text-foreground transition-colors p-0.5 cursor-pointer"
-							onclick={() => copyText(host.v4_fixed || host.v4 || "", "IPv4")}
+							onclick={() => copyToClipboard(host.v4_fixed || host.v4 || "", "IPv4")}
 							title="Copy IPv4"
 						>
 							<CopyIcon class="size-3" />

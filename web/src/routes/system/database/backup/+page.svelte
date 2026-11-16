@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { downloadBlob } from "$lib/utils";
 	import { toast } from "svelte-sonner";
 	import {
 		exportSystemConfig,
@@ -29,17 +30,8 @@
 		exporting = true;
 		try {
 			const config = await exportSystemConfig();
-			const jsonStr = JSON.stringify(config, null, 2);
-			const blob = new Blob([jsonStr], { type: "application/json" });
-			const url = URL.createObjectURL(blob);
-			const a = document.createElement("a");
 			const dateStr = new Date().toISOString().slice(0, 10);
-			a.href = url;
-			a.download = `lanforge-config-${dateStr}.json`;
-			document.body.appendChild(a);
-			a.click();
-			document.body.removeChild(a);
-			URL.revokeObjectURL(url);
+			downloadBlob(JSON.stringify(config, null, 2), `lanforge-config-${dateStr}.json`, "application/json");
 			toast.success("Configuration exported successfully", {
 				description: "Saved aggregated JSON persistence snapshot.",
 			});
@@ -56,16 +48,8 @@
 		exportingToml = true;
 		try {
 			const tomlStr = await exportSystemConfigToml();
-			const blob = new Blob([tomlStr], { type: "text/plain;charset=utf-8" });
-			const url = URL.createObjectURL(blob);
-			const a = document.createElement("a");
 			const dateStr = new Date().toISOString().slice(0, 10);
-			a.href = url;
-			a.download = `lanforge-${dateStr}.toml`;
-			document.body.appendChild(a);
-			a.click();
-			document.body.removeChild(a);
-			URL.revokeObjectURL(url);
+			downloadBlob(tomlStr, `lanforge-${dateStr}.toml`, "text/plain;charset=utf-8");
 			toast.success("TOML configuration exported", {
 				description: "Saved consolidated lanforge.toml file.",
 			});

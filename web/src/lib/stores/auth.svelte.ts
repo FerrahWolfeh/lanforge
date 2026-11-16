@@ -3,7 +3,7 @@
  * Uses Svelte 5 runes wrapped in a reactive class pattern.
  */
 
-import { ApiError, me, setClientToken } from '$lib/api/client';
+import { ApiError, logout, me, setClientToken } from '$lib/api/client';
 import type { Permission, UserInfo } from '$lib/api/types';
 
 const TOKEN_KEY = 'lf_session';
@@ -58,6 +58,16 @@ function createAuthStore() {
 			} finally {
 				loading = false;
 			}
+		},
+
+		/** Ends the session on the daemon (which may be unreachable) and forgets it here. */
+		async signOut() {
+			try {
+				await logout();
+			} catch {
+				// the local session ends either way
+			}
+			this.clear();
 		},
 
 		clear() {

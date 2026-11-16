@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { createTimers } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import ShieldIcon from "@lucide/svelte/icons/shield";
 	import LayoutDashboardIcon from "@lucide/svelte/icons/layout-dashboard";
@@ -88,15 +89,8 @@
 	}
 
 	// Pending delayed refreshes, cleared on unmount.
-	const timers = new Set<ReturnType<typeof setTimeout>>();
-	function later(fn: () => void, ms: number) {
-		const t = setTimeout(() => {
-			timers.delete(t);
-			fn();
-		}, ms);
-		timers.add(t);
-	}
-	onDestroy(() => timers.forEach(clearTimeout));
+	const { later, clear: clearTimers } = createTimers();
+	onDestroy(clearTimers);
 
 	async function handleReloadLists() {
 		reloadingLists = true;

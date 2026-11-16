@@ -7,8 +7,7 @@
 	import { sidebarState } from "$lib/stores/sidebar.svelte";
 	import { auth } from "$lib/stores/auth.svelte";
 	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
-	import { logout } from "$lib/api/client";
-	import type { Component } from "svelte";
+		import type { Component } from "svelte";
 
 	import SearchIcon from "@lucide/svelte/icons/search";
 	import LayoutDashboardIcon from "@lucide/svelte/icons/layout-dashboard";
@@ -32,9 +31,9 @@
 	import SlidersHorizontalIcon from "@lucide/svelte/icons/sliders-horizontal";
 	import BugIcon from "@lucide/svelte/icons/bug";
 	import { commandState } from "$lib/stores/command.svelte";
-	import type { Permission } from "$lib/api/types";
+	import { isNavDebugOnly, isNavVisible, type NavGate } from "$lib/navGate";
 
-	interface CommandItem {
+	interface CommandItem extends NavGate {
 		id: string;
 		title: string;
 		subtitle?: string;
@@ -42,8 +41,6 @@
 		category: "Pages & Navigation" | "Quick Actions";
 		icon: Component<Record<string, unknown>>;
 		action: () => void;
-		cap?: string | string[];
-		perm?: Permission;
 	}
 
 	let search = $state("");
@@ -91,12 +88,8 @@
 			category: "Quick Actions",
 			icon: LogOutIcon,
 			action: async () => {
-				try {
-					await logout();
-				} finally {
-					auth.clear();
-					goto("/login");
-				}
+				await auth.signOut();
+				goto("/login");
 			}
 		},
 
@@ -316,16 +309,7 @@
 		}
 	];
 
-	const availableItems = $derived(
-		items.filter((item) => {
-			if (item.perm && !auth.can(item.perm)) return false;
-			if (!item.cap) return true;
-			if (Array.isArray(item.cap)) {
-				return item.cap.some((c) => capabilitiesState.isEnabled(c));
-			}
-			return capabilitiesState.isEnabled(item.cap);
-		})
-	);
+	const availableItems = $derived(items.filter(isNavVisible));
 
 	const filteredItems = $derived.by(() => {
 		const q = search.trim().toLowerCase();
@@ -416,11 +400,7 @@
 				{#each filteredItems as item, idx (item.id)}
 					{@const isSelected = idx === selectedIndex}
 					{@const Icon = item.icon}
-					{@const isDbgOnly = capabilitiesState.debugMode && item.cap && (
-						Array.isArray(item.cap)
-							? !capabilitiesState.isAnyActualEnabled(item.cap)
-							: !capabilitiesState.isActualEnabled(item.cap)
-					)}
+					{@const isDbgOnly = isNavDebugOnly(item)}
 					<button
 						type="button"
 						class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-md text-left transition-colors cursor-pointer {isSelected

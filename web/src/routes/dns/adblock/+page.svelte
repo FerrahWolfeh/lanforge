@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { originText } from "$lib/components/dns/dnsLog";
 	import { onMount } from "svelte";
 	import { toast } from "svelte-sonner";
 	import SearchIcon from "@lucide/svelte/icons/search";
@@ -264,20 +265,8 @@
 								<span class="text-muted-foreground block text-xs font-medium">
 									Origin
 								</span>
-								<div class="mt-1 font-mono text-xs text-foreground">
-									{#if checkResult.filter.origin.type === 'user_rule'}
-										Custom User Rule
-									{:else if checkResult.filter.origin.type === 'user_allowlist'}
-										Manual Allowlist
-									{:else if checkResult.filter.origin.type === 'list'}
-										Remote Source List #{checkResult.filter.origin.source_id}
-									{:else if checkResult.filter.origin.type === 'group_rule'}
-										Group "{checkResult.filter.origin.group}" Rule
-									{:else if checkResult.filter.origin.type === 'group_allowlist'}
-										Group "{checkResult.filter.origin.group}" Allowlist
-									{:else if checkResult.filter.origin.type === 'group_list'}
-										Group "{checkResult.filter.origin.group}" Source List #{checkResult.filter.origin.source_id}
-									{/if}
+								<div class="mt-1 font-mono text-xs text-foreground first-letter:uppercase">
+									{originText(checkResult.filter.origin, checkResult.source_matches)}
 								</div>
 							</div>
 						</div>

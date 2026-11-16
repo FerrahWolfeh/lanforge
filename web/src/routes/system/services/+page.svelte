@@ -10,26 +10,20 @@
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
 	import { createPolling } from "$lib/utils/polling";
-	import { formatBytes, createSequence } from "$lib/utils";
+	import { formatBytes, createSequence, createTimers } from "$lib/utils";
 
-	import ServerIcon from "@lucide/svelte/icons/server";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import RotateCwIcon from "@lucide/svelte/icons/rotate-cw";
 	import PlayIcon from "@lucide/svelte/icons/play";
 	import SquareIcon from "@lucide/svelte/icons/square";
 	import SlidersIcon from "@lucide/svelte/icons/sliders";
 	import SearchIcon from "@lucide/svelte/icons/search";
-	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import LayersIcon from "@lucide/svelte/icons/layers";
-	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import NavTabs from "$lib/components/NavTabs.svelte";
+	import { systemTabs } from "../tabs";
 	import PageHeader from "$lib/components/PageHeader.svelte";
 	import StatusBadge from "$lib/components/StatusBadge.svelte";
 
-	const systemTabs: NavTabItem[] = [
-		{ label: "System Status", href: "/system", icon: ServerIcon },
-		{ label: "Services & Daemons", href: "/system/services", icon: LayersIcon },
-		{ label: "Event Stream", href: "/system/events", icon: ActivityIcon },
-	];
 	import Loader2Icon from "@lucide/svelte/icons/loader-2";
 	import CpuIcon from "@lucide/svelte/icons/cpu";
 
@@ -50,7 +44,7 @@
 	let actionLoading = $state<Record<string, string | null>>({});
 
 	const fetchSeq = createSequence();
-	const settleTimers = new Set<ReturnType<typeof setTimeout>>();
+	const { later, clear: clearTimers } = createTimers();
 
 	async function fetchBanners(showSpinner = true) {
 		// A poll that started before an action's refresh must not land after it.
@@ -118,12 +112,10 @@
 			await controlService(id, action);
 			toast.success(`Service '${id}' received ${action.toLowerCase()} signal`);
 			// Re-fetch service state after brief settling time
-			const timer = setTimeout(async () => {
-				settleTimers.delete(timer);
+			later(async () => {
 				await fetchBanners(false);
 				actionLoading[id] = null;
 			}, 750);
-			settleTimers.add(timer);
 		} catch (err) {
 			actionLoading[id] = null;
 			toast.error(`Failed to ${action.toLowerCase()} service: ${err instanceof Error ? err.message : String(err)}`);
@@ -135,8 +127,7 @@
 		const stopPolling = createPolling(() => fetchBanners(false), 6000);
 		return () => {
 			stopPolling();
-			settleTimers.forEach(clearTimeout);
-			settleTimers.clear();
+			clearTimers();
 		};
 	});
 

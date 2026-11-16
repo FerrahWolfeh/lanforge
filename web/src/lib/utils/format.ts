@@ -29,6 +29,67 @@ export function formatUptime(secs: number | null | undefined): string {
 }
 
 /**
+ * An epoch timestamp in milliseconds, whether the daemon sent seconds or milliseconds.
+ */
+export function toMillis(ts: number): number {
+	return ts < 1e11 ? ts * 1000 : ts;
+}
+
+/**
+ * Formats an epoch timestamp as a short date and time (e.g. "Nov 16, 2026, 09:30"), "—" when unset.
+ */
+export function formatDateTime(ts: number | null | undefined): string {
+	if (!ts) return "—";
+	return new Date(toMillis(ts)).toLocaleDateString(undefined, {
+		year: "numeric",
+		month: "short",
+		day: "2-digit",
+		hour: "2-digit",
+		minute: "2-digit"
+	});
+}
+
+/**
+ * Formats an epoch timestamp as a 24-hour clock time with seconds (optionally with milliseconds), "—" when unset.
+ */
+export function formatClockTime(ts: number | null | undefined, millis = false): string {
+	if (!ts) return "—";
+	return new Date(toMillis(ts)).toLocaleTimeString(undefined, {
+		hour12: false,
+		hour: "2-digit",
+		minute: "2-digit",
+		second: "2-digit",
+		fractionalSecondDigits: millis ? 3 : undefined
+	});
+}
+
+/**
+ * Formats an epoch timestamp as a numeric 24-hour date and time with seconds (optionally with milliseconds), "—" when unset.
+ */
+export function formatFullDate(ts: number | null | undefined, millis = false): string {
+	if (!ts) return "—";
+	return new Date(toMillis(ts)).toLocaleString(undefined, {
+		year: "numeric",
+		month: "2-digit",
+		day: "2-digit",
+		hour: "2-digit",
+		minute: "2-digit",
+		second: "2-digit",
+		fractionalSecondDigits: millis ? 3 : undefined,
+		hour12: false
+	});
+}
+
+/**
+ * Formats a latency in microseconds (e.g. "0 ms", "850 µs", "12.3 ms").
+ */
+export function formatLatency(us: number): string {
+	if (us === 0) return "0 ms";
+	if (us < 1000) return `${us} µs`;
+	return `${(us / 1000).toFixed(1)} ms`;
+}
+
+/**
  * Formats an epoch timestamp or ISO date string into a relative elapsed time string
  * (e.g. "Just now", "45s ago", "12m ago", "3h ago", "2d ago").
  */
@@ -36,8 +97,7 @@ export function formatTimeAgo(ts: number | string | Date | null | undefined): st
 	if (!ts) return "—";
 	let ms: number;
 	if (typeof ts === "number") {
-		// Detect seconds vs milliseconds
-		ms = ts < 10_000_000_000 ? ts * 1000 : ts;
+		ms = toMillis(ts);
 	} else if (typeof ts === "string") {
 		ms = Date.parse(ts);
 	} else if (ts instanceof Date) {
@@ -61,7 +121,7 @@ export function formatTimeAgo(ts: number | string | Date | null | undefined): st
 }
 
 /**
- * Copies a string to the clipboard and shows an optional toast notification.
+ * Copies a string to the clipboard and toasts the outcome. Returns whether the copy succeeded.
  */
 export async function copyToClipboard(text: string, label?: string): Promise<boolean> {
 	if (!navigator?.clipboard) {

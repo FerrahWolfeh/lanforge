@@ -43,16 +43,9 @@ import { formatSubnet } from "$lib/utils";
 	import DnsTuningModal from "./components/DnsTuningModal.svelte";
 	import SlidersIcon from "@lucide/svelte/icons/sliders";
 	import GlobeIcon from "@lucide/svelte/icons/globe";
-	import DatabaseIcon from "@lucide/svelte/icons/database";
-	import BookmarkIcon from "@lucide/svelte/icons/bookmark";
-	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import NavTabs from "$lib/components/NavTabs.svelte";
+	import { dnsTabs } from "../tabs";
 	import PageHeader from "$lib/components/PageHeader.svelte";
-
-	const dnsTabs: NavTabItem[] = [
-		{ label: "Resolver & Analytics", href: "/dns/resolver", icon: GlobeIcon },
-		{ label: "Cache Inspection", href: "/dns/cache", icon: DatabaseIcon },
-		{ label: "Custom Rewrites", href: "/dns/rewrites", icon: BookmarkIcon },
-	];
 
 	let statsData = $state<DnsStatsResponse | null>(null);
 	let analyticsData = $state<DnsAnalyticsResponse | null>(null);

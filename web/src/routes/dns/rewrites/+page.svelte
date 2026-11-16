@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { downloadBlob } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import { Button } from "$lib/components/ui/button";
 	import * as Dialog from "$lib/components/ui/dialog";
@@ -9,19 +10,12 @@
 	import FileUpIcon from "@lucide/svelte/icons/file-up";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import AlertTriangleIcon from "@lucide/svelte/icons/alert-triangle";
-	import GlobeIcon from "@lucide/svelte/icons/globe";
-	import DatabaseIcon from "@lucide/svelte/icons/database";
-	import BookmarkIcon from "@lucide/svelte/icons/bookmark";
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
-	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import NavTabs from "$lib/components/NavTabs.svelte";
+	import { dnsTabs } from "../tabs";
 	import PageHeader from "$lib/components/PageHeader.svelte";
 
-	const dnsTabs: NavTabItem[] = [
-		{ label: "Resolver & Analytics", href: "/dns/resolver", icon: GlobeIcon },
-		{ label: "Cache Inspection", href: "/dns/cache", icon: DatabaseIcon },
-		{ label: "Custom Rewrites", href: "/dns/rewrites", icon: BookmarkIcon },
-	];
 	import {
 		dnsRewriteList,
 		dnsRewriteClear,
@@ -86,14 +80,7 @@
 	async function handleExport() {
 		try {
 			const data = await dnsRewriteExport();
-			const jsonStr = JSON.stringify(data, null, 2);
-			const blob = new Blob([jsonStr], { type: "application/json" });
-			const url = URL.createObjectURL(blob);
-			const a = document.createElement("a");
-			a.href = url;
-			a.download = `lanforge-dns-rewrites-${Date.now()}.json`;
-			a.click();
-			URL.revokeObjectURL(url);
+			downloadBlob(JSON.stringify(data, null, 2), `lanforge-dns-rewrites-${Date.now()}.json`, "application/json");
 			toast.success("Exported DNS rewrite rules to JSON");
 		} catch {
 			toast.error("Failed to export DNS rewrite rules");

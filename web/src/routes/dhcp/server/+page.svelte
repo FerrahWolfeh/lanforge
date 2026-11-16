@@ -3,6 +3,7 @@
 	import { onMount } from "svelte";
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import { toast } from "svelte-sonner";
+	import { toastReconcileResult } from "../reconcile";
 	import { dhcpOptionsGet, dhcpOptionsUpdate, dhcpReconcile } from "$lib/api/client";
 	import { parseCsvList as parseList } from "$lib/utils";
 	import type { DhcpOptionsConfig, TftpOptions } from "$lib/api/types";
@@ -232,24 +233,7 @@
 		reconciling = true;
 		try {
 			const res = await dhcpReconcile();
-			if (res.invalidated_v4_leases.length === 0) {
-				toast.success(
-					`DHCP Sanity Check: All dynamic leases are valid (${res.valid_v4_leases} active, ${res.preserved_static_leases} static preserved)`,
-				);
-			} else {
-				toast.warning(
-					`Sanity Check: Invalidated ${res.invalidated_v4_leases.length} out-of-range dynamic lease(s). ForceRenew sent.`,
-					{
-						description:
-							res.invalidated_v4_leases
-								.map((l) => `${l.mac} (${l.ip})`)
-								.slice(0, 3)
-								.join(", ") +
-							(res.invalidated_v4_leases.length > 3 ? "..." : ""),
-						duration: 8000,
-					},
-				);
-			}
+			toastReconcileResult(res);
 		} catch (err: any) {
 			toast.error(`Failed to reconcile leases: ${err.message}`);
 		} finally {

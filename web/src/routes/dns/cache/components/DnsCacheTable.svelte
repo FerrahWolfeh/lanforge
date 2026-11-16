@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { RECORD_TYPES, cleanDomain, cleanAnswer, quickDnsRule } from "$lib/components/dns/dnsLog";
+	import { copyToClipboard } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Table from "$lib/components/ui/table";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
@@ -12,9 +14,7 @@
 	import ShieldAlertIcon from "@lucide/svelte/icons/shield-alert";
 	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 	import ArrowRightLeftIcon from "@lucide/svelte/icons/arrow-right-left";
-	import { toast } from "svelte-sonner";
-	import { dnsBlock, dnsAllow } from "$lib/api/client";
-	import type { DnsCacheEntry, DnsRecordType } from "$lib/api/types";
+	import type { DnsCacheEntry } from "$lib/api/types";
 	import DnsCacheRecordDialog from "./DnsCacheRecordDialog.svelte";
 	import DataTableCard from "$lib/components/DataTableCard.svelte";
 
@@ -51,20 +51,6 @@
 	let selectedRecord = $state<DnsCacheEntry | null>(null);
 	let dialogOpen = $state(false);
 
-	const RECORD_TYPES: DnsRecordType[] = [
-		"A",
-		"AAAA",
-		"CNAME",
-		"PTR",
-		"TXT",
-		"MX",
-		"NS",
-		"SOA",
-		"SRV",
-		"HTTPS",
-		"SVCB",
-	];
-
 	const typeVariants: Record<string, string> = {
 		A: "bg-muted text-muted-foreground border-border",
 		AAAA: "bg-muted text-muted-foreground border-border",
@@ -79,20 +65,6 @@
 		SVCB: "bg-muted text-muted-foreground border-border",
 	};
 
-	function cleanDomain(raw: string): string {
-		if (!raw) return "";
-		return raw.trim().replace(/\.$/, "");
-	}
-
-	function cleanData(raw: string): string {
-		if (!raw) return "—";
-		return raw
-			.replace(/^"|"$/g, "")
-			.replace(/^(A|AAAA|CNAME|PTR|NS)\((.*)\)$/, "$2")
-			.trim()
-			.replace(/\.$/, "");
-	}
-
 	function formatTtl(secs: number): string {
 		if (secs <= 0) return "Expiring...";
 		const m = Math.floor(secs / 60);
@@ -101,42 +73,17 @@
 		return `${m}m ${s}s`;
 	}
 
-	async function copyToClipboard(text: string, label: string) {
-		try {
-			await navigator.clipboard.writeText(text);
-			copiedItem = text;
-			toast.success(`Copied ${label} to clipboard`);
-			setTimeout(() => {
-				copiedItem = null;
-			}, 2000);
-		} catch {
-			toast.error("Failed to copy to clipboard");
-		}
+	async function copyItem(text: string, label: string) {
+		if (!(await copyToClipboard(text, label))) return;
+		copiedItem = text;
+		setTimeout(() => {
+			copiedItem = null;
+		}, 2000);
 	}
 
 	function inspectRecord(entry: DnsCacheEntry) {
 		selectedRecord = entry;
 		dialogOpen = true;
-	}
-
-	async function handleQuickBlock(domain: string) {
-		const target = cleanDomain(domain);
-		try {
-			await dnsBlock(target);
-			toast.success(`Added ${target} to adblock black list`);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to block domain");
-		}
-	}
-
-	async function handleQuickAllow(domain: string) {
-		const target = cleanDomain(domain);
-		try {
-			await dnsAllow(target);
-			toast.success(`Added ${target} to allowlist`);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to allow domain");
-		}
 	}
 
 </script>
@@ -187,7 +134,7 @@
 
 	{#each entries as entry (entry.name + entry.kind + entry.data)}
 						{@const domainClean = cleanDomain(entry.name)}
-						{@const dataClean = cleanData(entry.data)}
+						{@const dataClean = cleanAnswer(entry.data)}
 						{@const style =
 							typeVariants[entry.kind] ||
 							"bg-secondary text-secondary-foreground border-border"}
@@ -209,7 +156,7 @@
 										type="button"
 										onclick={(e) => {
 											e.stopPropagation();
-											copyToClipboard(
+											copyItem(
 												domainClean,
 												"domain name",
 											);
@@ -268,7 +215,7 @@
 											type="button"
 											onclick={(e) => {
 												e.stopPropagation();
-												copyToClipboard(
+												copyItem(
 													dataClean,
 													"answer value",
 												);
@@ -327,7 +274,7 @@
 										</DropdownMenu.Item>
 										<DropdownMenu.Item
 											onclick={() =>
-												copyToClipboard(
+												copyItem(
 													domainClean,
 													"domain name",
 												)}
@@ -340,7 +287,7 @@
 										</DropdownMenu.Item>
 										<DropdownMenu.Item
 											onclick={() =>
-												copyToClipboard(
+												copyItem(
 													dataClean,
 													"answer value",
 												)}
@@ -355,7 +302,7 @@
 										<DropdownMenu.Separator />
 										<DropdownMenu.Item
 											onclick={() =>
-												handleQuickBlock(domainClean)}
+												quickDnsRule("block", domainClean)}
 											class="gap-2 text-danger"
 										>
 											<ShieldAlertIcon
@@ -365,7 +312,7 @@
 										</DropdownMenu.Item>
 										<DropdownMenu.Item
 											onclick={() =>
-												handleQuickAllow(domainClean)}
+												quickDnsRule("allow", domainClean)}
 											class="gap-2 text-success"
 										>
 											<ShieldCheckIcon

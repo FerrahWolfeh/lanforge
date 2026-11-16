@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { createTimers } from "$lib/utils";
 	import { onDestroy } from "svelte";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import * as Select from "$lib/components/ui/select";
@@ -31,8 +32,8 @@
 	let submitting = $state(false);
 
 	// Pending follow-up refreshes, cleared on unmount.
-	const timers: ReturnType<typeof setTimeout>[] = [];
-	onDestroy(() => timers.forEach(clearTimeout));
+	const { later, clear: clearTimers } = createTimers();
+	onDestroy(clearTimers);
 
 	async function handleSubmit(e: Event) {
 		e.preventDefault();
@@ -67,7 +68,8 @@
 			// The daemon loads a new source on its own (the others are only revalidated); a
 			// forced reload would download every list again.
 			onAdded();
-			timers.push(setTimeout(onAdded, 1500), setTimeout(onAdded, 3500));
+			later(onAdded, 1500);
+			later(onAdded, 3500);
 		} catch (err: any) {
 			toast.error(err?.message ?? "Failed to add source URL");
 		} finally {

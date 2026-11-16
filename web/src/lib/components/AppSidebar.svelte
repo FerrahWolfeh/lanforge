@@ -2,8 +2,7 @@
 	import { page } from "$app/state";
 	import { sidebarState } from "$lib/stores/sidebar.svelte";
 	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
-	import { auth } from "$lib/stores/auth.svelte";
-	import type { Permission } from "$lib/api/types";
+	import { isNavDebugOnly, isNavVisible, type NavGate } from "$lib/navGate";
 	import { formatBuild } from "$lib/utils";
 	import NavUser from "./NavUser.svelte";
 	import type { Component } from "svelte";
@@ -27,13 +26,10 @@
 		onNavigate?: () => void;
 	}
 
-	interface NavItem {
+	interface NavItem extends NavGate {
 		title: string;
 		href: string;
 		icon: Component<Record<string, unknown>>;
-		cap?: string | string[];
-		/** Hidden from sessions the server would refuse the page's reads to. */
-		perm?: Permission;
 	}
 
 	interface NavGroup {
@@ -104,14 +100,7 @@
 		navGroups
 			.map((group) => ({
 				...group,
-				items: group.items.filter((item) => {
-					if (item.perm && !auth.can(item.perm)) return false;
-					if (!item.cap) return true;
-					if (Array.isArray(item.cap)) {
-						return item.cap.some((c) => capabilitiesState.isEnabled(c));
-					}
-					return capabilitiesState.isEnabled(item.cap);
-				}),
+				items: group.items.filter(isNavVisible),
 			}))
 			.filter((group) => group.items.length > 0)
 	);
@@ -205,11 +194,7 @@
 					{#each group.items as item}
 						{@const active = isActive(item.href)}
 						{@const Icon = item.icon}
-						{@const isDbgOnly = capabilitiesState.debugMode && item.cap && (
-							Array.isArray(item.cap)
-								? !capabilitiesState.isAnyActualEnabled(item.cap)
-								: !capabilitiesState.isActualEnabled(item.cap)
-						)}
+						{@const isDbgOnly = isNavDebugOnly(item)}
 
 						<a
 							href={item.href}

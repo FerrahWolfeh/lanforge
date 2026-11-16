@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { passwordError } from "$lib/utils/validation";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import * as Field from "$lib/components/ui/field";
 	import { Button } from "$lib/components/ui/button";
@@ -49,12 +50,9 @@
 			toast.error("Please enter a password.");
 			return;
 		}
-		if (password.length < 8) {
-			toast.error("Password must be at least 8 characters.");
-			return;
-		}
-		if (password !== confirmPassword) {
-			toast.error("Passwords do not match.");
+		const passwordProblem = passwordError(password, confirmPassword);
+		if (passwordProblem) {
+			toast.error(passwordProblem);
 			return;
 		}
 

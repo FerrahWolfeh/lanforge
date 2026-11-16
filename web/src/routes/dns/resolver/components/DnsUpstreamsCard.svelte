@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { copyToClipboard } from "$lib/utils";
 	import * as Card from "$lib/components/ui/card";
 	import * as Table from "$lib/components/ui/table";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
@@ -285,8 +286,7 @@
 											<DropdownMenu.Item
 												onclick={() => {
 													const addr = getUpstreamAddr(item);
-													navigator.clipboard.writeText(addr);
-													toast.success(`Copied upstream address ${addr}`);
+													copyToClipboard(addr, `upstream address ${addr}`);
 												}}
 												class="gap-2 cursor-pointer"
 											>

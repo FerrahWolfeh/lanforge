@@ -28,7 +28,7 @@
 	import { page } from "$app/state";
 	import { goto } from "$app/navigation";
 	import type { AdblockRuleEntry } from "$lib/api/types";
-	import { createSequence } from "$lib/utils";
+	import { createSequence, copyToClipboard } from "$lib/utils";
 	import DnsAdblockImportRulesDialog from "./components/DnsAdblockImportRulesDialog.svelte";
 
 	const canEdit = $derived(auth.can("dns_write"));
@@ -114,17 +114,12 @@
 		}
 	}
 
-	async function copyText(text: string) {
-		try {
-			await navigator.clipboard.writeText(text);
-			copiedDomain = text;
-			toast.success("Copied to clipboard");
-			setTimeout(() => {
-				copiedDomain = null;
-			}, 2000);
-		} catch {
-			toast.error("Failed to copy domain");
-		}
+	async function copyDomain(text: string) {
+		if (!(await copyToClipboard(text))) return;
+		copiedDomain = text;
+		setTimeout(() => {
+			copiedDomain = null;
+		}, 2000);
 	}
 
 	const allowRules = $derived(customRules.filter((r) => r.action === "allow"));
@@ -302,7 +297,7 @@
 												<span class="font-medium text-foreground" title={entry.domain}>{ruleLabel(entry)}</span>
 												<button
 													type="button"
-													onclick={() => copyText(ruleLabel(entry))}
+													onclick={() => copyDomain(ruleLabel(entry))}
 													class="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 hover:text-primary rounded text-muted-foreground"
 													title="Copy domain"
 												>
@@ -398,7 +393,7 @@
 												<span class="font-medium text-foreground" title={entry.domain}>{ruleLabel(entry)}</span>
 												<button
 													type="button"
-													onclick={() => copyText(ruleLabel(entry))}
+													onclick={() => copyDomain(ruleLabel(entry))}
 													class="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 hover:text-primary rounded text-muted-foreground"
 													title="Copy domain"
 												>

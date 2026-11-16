@@ -1,9 +1,10 @@
 <script lang="ts">
+	import { originText } from "$lib/components/dns/dnsLog";
 	import { page } from "$app/state";
 	import { toast } from "svelte-sonner";
 	import { auth } from "$lib/stores/auth.svelte";
 	import { dnsDomain, dnsAdblockCheck, dnsBlock, dnsAllow } from "$lib/api/client";
-	import type { AdblockCheckResponse, DnsDomainResponse, FilterOrigin } from "$lib/api/types";
+	import type { AdblockCheckResponse, DnsDomainResponse } from "$lib/api/types";
 	import { formatTimeAgo } from "$lib/utils/format";
 	import { createSequence } from "$lib/utils";
 	import { Button } from "$lib/components/ui/button";
@@ -106,26 +107,6 @@
 		];
 	});
 
-	/** Where a filter match came from, in words. */
-	function originText(origin: FilterOrigin, v: AdblockCheckResponse): string {
-		switch (origin.type) {
-			case "user_rule":
-				return "your own block rules";
-			case "user_allowlist":
-				return "your own allow rules";
-			case "group_rule":
-				return `the block rules of the group "${origin.group}"`;
-			case "group_allowlist":
-				return `the allow rules of the group "${origin.group}"`;
-			case "list":
-			case "group_list": {
-				const url = v.source_matches.find((m) => m.source_id === origin.source_id)?.url;
-				const where = url ? `the list ${url}` : "an adblock list";
-				return origin.type === "group_list" ? `${where} (group "${origin.group}")` : where;
-			}
-		}
-	}
-
 	const verdictView = $derived.by(() => {
 		const v = verdict;
 		if (!v) return null;
@@ -133,7 +114,7 @@
 		if (!v.matched || !f) {
 			return { tone: "none" as const, title: "Not filtered", text: "No list or rule matches this domain, so it resolves normally." };
 		}
-		const how = originText(f.origin, v);
+		const how = originText(f.origin, v.source_matches);
 		const rule = f.rule ? ` Matching rule: ${f.rule}` : "";
 		if (f.action === "allow") {
 			return { tone: "allow" as const, title: "Allowed", text: `Allowed by ${how}, which overrides any block.${rule}` };

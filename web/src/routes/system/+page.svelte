@@ -21,9 +21,8 @@
 	import CpuIcon from "@lucide/svelte/icons/cpu";
 
 	import ServerIcon from "@lucide/svelte/icons/server";
-	import ActivityIcon from "@lucide/svelte/icons/activity";
-	import LayersIcon from "@lucide/svelte/icons/layers";
-	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import NavTabs from "$lib/components/NavTabs.svelte";
+	import { systemTabs } from "./tabs";
 	import PageHeader from "$lib/components/PageHeader.svelte";
 	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
 	import type { ServerCapabilities } from "$lib/api/types";
@@ -32,12 +31,6 @@
 
 	// Scan, reload and service control are admin-only on the server.
 	const isAdmin = $derived(auth.can("admin"));
-
-	const systemTabs: NavTabItem[] = [
-		{ label: "System Status", href: "/system", icon: ServerIcon },
-		{ label: "Services & Daemons", href: "/system/services", icon: LayersIcon },
-		{ label: "Event Stream", href: "/system/events", icon: ActivityIcon },
-	];
 
 	let data = $state<StatusResponse | null>(null);
 	const serverCaps = $derived<ServerCapabilities | null>(

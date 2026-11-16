@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { cleanDomain, cleanAnswer, getResultBadge, originText, quickDnsRule } from "$lib/components/dns/dnsLog";
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import { Button } from "$lib/components/ui/button";
@@ -16,9 +17,9 @@
 	import BellOffIcon from "@lucide/svelte/icons/bell-off";
 	import LayersIcon from "@lucide/svelte/icons/layers";
 	import { toast } from "svelte-sonner";
-	import { dnsBlock, dnsAllow, dnsQuery, hostSet } from "$lib/api/client";
+	import { dnsQuery, hostSet } from "$lib/api/client";
 	import type { DnsQueryLogEntry } from "$lib/api/types";
-	import { createSequence } from "$lib/utils";
+	import { createSequence, copyToClipboard, formatFullDate, formatLatency } from "$lib/utils";
 
 	let {
 		open = $bindable(false),
@@ -44,52 +45,12 @@
 		testingQuery = false;
 	});
 
-	function cleanDomain(raw: string): string {
-		if (!raw) return "";
-		return raw.trim().replace(/\.$/, "");
-	}
-
-	function cleanAnswer(raw?: string | null): string {
-		if (!raw) return "—";
-		return raw
-			.replace(/^"|"$/g, "")
-			.replace(/^(A|AAAA|CNAME|PTR|NS)\((.*)\)$/, "$2")
-			.trim()
-			.replace(/\.$/, "");
-	}
-
-	function formatLatency(us: number): string {
-		if (us === 0) return "0 ms";
-		if (us < 1000) return `${us} µs`;
-		return `${(us / 1000).toFixed(1)} ms`;
-	}
-
-	function formatTimestamp(ts: number): string {
-		if (!ts) return "—";
-		const ms = ts < 1e11 ? ts * 1000 : ts;
-		const date = new Date(ms);
-		return date.toLocaleString(undefined, {
-			year: "numeric",
-			month: "2-digit",
-			day: "2-digit",
-			hour: "2-digit",
-			minute: "2-digit",
-			second: "2-digit",
-			hour12: false,
-		});
-	}
-
-	async function copyToClipboard(text: string, field: string) {
-		try {
-			await navigator.clipboard.writeText(text);
-			copiedField = field;
-			toast.success(`Copied ${field} to clipboard`);
-			setTimeout(() => {
-				copiedField = null;
-			}, 2000);
-		} catch {
-			toast.error("Failed to copy");
-		}
+	async function copyItem(text: string, field: string) {
+		if (!(await copyToClipboard(text, field))) return;
+		copiedField = field;
+		setTimeout(() => {
+			copiedField = null;
+		}, 2000);
 	}
 
 	async function handleTestQuery() {
@@ -113,29 +74,15 @@
 	async function handleBlockDomain() {
 		if (!entry) return;
 		actionLoading = true;
-		const dom = cleanDomain(entry.domain);
-		try {
-			await dnsBlock(dom);
-			toast.success(`Added ${dom} to adblock black list`);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to block domain");
-		} finally {
-			actionLoading = false;
-		}
+		await quickDnsRule("block", entry.domain);
+		actionLoading = false;
 	}
 
 	async function handleAllowDomain() {
 		if (!entry) return;
 		actionLoading = true;
-		const dom = cleanDomain(entry.domain);
-		try {
-			await dnsAllow(dom);
-			toast.success(`Added ${dom} to allowlist`);
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to allow domain");
-		} finally {
-			actionLoading = false;
-		}
+		await quickDnsRule("allow", entry.domain);
+		actionLoading = false;
 	}
 
 	function handleCreateRewrite() {
@@ -185,68 +132,6 @@
 		if (entry.src_hostname) return `${entry.src_hostname} (${entry.src_ip})`;
 		return entry.src_ip;
 	});
-	function getResultBadge(result: string, cached: boolean, filter?: any) {
-		if (filter?.action === "allow") {
-			return {
-				label: "Allowed (@@)",
-				class: "bg-success/10 text-success border-success/20",
-			};
-		}
-		const lower = (result || "").toLowerCase();
-		if (lower === "cachedblock" || lower === "cached_block" || (lower.includes("block") && cached)) {
-			return {
-				label: "Cached Block",
-				class: "bg-warning/10 text-warning border-warning/20",
-			};
-		}
-		if (lower.includes("block") || lower.includes("deny")) {
-			return {
-				label: "Blocked",
-				class: "bg-danger/10 text-danger border-danger/20",
-			};
-		}
-		if (lower === "rewritten" || lower.includes("rewrite")) {
-			return {
-				label: "Rewritten",
-				class: "bg-selected text-selected-foreground border-transparent",
-			};
-		}
-		if (lower === "local") {
-			return {
-				label: "Local",
-				class: "bg-muted text-muted-foreground border-border",
-			};
-		}
-		if (lower === "nxdomain") {
-			return {
-				label: "NXDomain",
-				class: "bg-warning/10 text-warning border-warning/20",
-			};
-		}
-		if (lower === "error") {
-			return {
-				label: "Error",
-				class: "bg-danger/10 text-danger border-danger/20",
-			};
-		}
-		if (cached || lower === "cached") {
-			return {
-				label: "Cached",
-				class: "bg-success/10 text-success border-success/20",
-			};
-		}
-		if (lower === "coalesced") {
-			return {
-				label: "Coalesced",
-				class: "bg-info/10 text-info border-info/20",
-			};
-		}
-		return {
-			label: "Forwarded",
-			class: "bg-muted text-muted-foreground border-border",
-		};
-	}
-
 	const badgeInfo = $derived(
 		entry ? getResultBadge(entry.result, entry.cached, entry.filter) : { label: "—", class: "" }
 	);
@@ -289,7 +174,7 @@
 								variant="ghost"
 								size="icon"
 								class="h-6 w-6 shrink-0 mt-0.5"
-								onclick={() => copyToClipboard(domainClean, "Domain Name")}
+								onclick={() => copyItem(domainClean, "Domain Name")}
 							>
 								{#if copiedField === "Domain Name"}
 									<CheckIcon class="h-3 w-3 text-success" />
@@ -327,7 +212,7 @@
 								variant="ghost"
 								size="icon"
 								class="h-6 w-6 shrink-0"
-								onclick={() => copyToClipboard(entry.src_ip, "Client IP")}
+								onclick={() => copyItem(entry.src_ip, "Client IP")}
 							>
 								{#if copiedField === "Client IP"}
 									<CheckIcon class="h-3 w-3 text-success" />
@@ -360,7 +245,7 @@
 									variant="ghost"
 									size="icon"
 									class="h-6 w-6 shrink-0 mt-0.5"
-									onclick={() => copyToClipboard(answerClean, "Answer")}
+									onclick={() => copyItem(answerClean, "Answer")}
 								>
 									{#if copiedField === "Answer"}
 										<CheckIcon class="h-3 w-3 text-success" />
@@ -376,7 +261,7 @@
 					<div class="flex items-center justify-between gap-2 pt-2 border-t border-border/50 text-xs min-w-0">
 						<div class="flex items-center gap-1.5 text-muted-foreground min-w-0">
 							<ClockIcon class="h-3.5 w-3.5 shrink-0" />
-							<span class="truncate font-mono">{formatTimestamp(entry.timestamp)}</span>
+							<span class="truncate font-mono">{formatFullDate(entry.timestamp)}</span>
 						</div>
 						<div class="flex items-center gap-1.5 text-muted-foreground shrink-0">
 							<GaugeIcon class="h-3.5 w-3.5 shrink-0" />
@@ -430,20 +315,8 @@
 
 							<div>
 								<span class="text-xs text-muted-foreground block">Rule Origin</span>
-								<div class="font-mono text-xs text-foreground mt-0.5">
-									{#if entry.filter.origin.type === 'user_rule'}
-										Custom User Rule
-									{:else if entry.filter.origin.type === 'user_allowlist'}
-										Manual Allowlist
-									{:else if entry.filter.origin.type === 'list'}
-										Source List #{entry.filter.origin.source_id}
-									{:else if entry.filter.origin.type === 'group_rule'}
-										Group "{entry.filter.origin.group}" Rule
-									{:else if entry.filter.origin.type === 'group_allowlist'}
-										Group "{entry.filter.origin.group}" Allowlist
-									{:else if entry.filter.origin.type === 'group_list'}
-										Group "{entry.filter.origin.group}" Source List #{entry.filter.origin.source_id}
-									{/if}
+								<div class="font-mono text-xs text-foreground mt-0.5 first-letter:uppercase">
+									{originText(entry.filter.origin)}
 								</div>
 							</div>
 						</div>

@@ -15,7 +15,7 @@
 	import ChevronDownIcon from "@lucide/svelte/icons/chevron-down";
 	import ArrowDownIcon from "@lucide/svelte/icons/arrow-down";
 	import ArrowUpIcon from "@lucide/svelte/icons/arrow-up";
-	import { formatBps } from "$lib/utils";
+	import { formatBps, toMillis } from "$lib/utils";
 	import type {
 		DnsAnalyticsResponse,
 		StatusResponse,
@@ -187,7 +187,7 @@
 		untrack(() => {
 			if (data.history && data.history.length > 0) {
 				const fresh: TelemetrySample[] = data.history.map((s) => {
-					const ms = s.timestamp < 10_000_000_000 ? s.timestamp * 1000 : s.timestamp;
+					const ms = toMillis(s.timestamp);
 					return {
 						date: new Date(ms),
 						timestamp: ms,
@@ -339,7 +339,7 @@
 
 		const ratesMap = new Map<number, (typeof rates)[0]>();
 		for (const r of rates) {
-			const ms = r.timestamp < 10_000_000_000 ? r.timestamp * 1000 : r.timestamp;
+			const ms = toMillis(r.timestamp);
 			const bucketKey = Math.floor(ms / BUCKET_MS) * BUCKET_MS;
 			ratesMap.set(bucketKey, r);
 		}

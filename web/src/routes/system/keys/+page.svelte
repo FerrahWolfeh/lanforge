@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { Button } from "$lib/components/ui/button";
 	import KeyRoundIcon from "@lucide/svelte/icons/key-round";
-	import UsersIcon from "@lucide/svelte/icons/users";
 	import PlusIcon from "@lucide/svelte/icons/plus";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 
@@ -13,13 +12,9 @@
 	import TokenValidatorCard from "./components/TokenValidatorCard.svelte";
 	import TokenCreateDialog from "./components/TokenCreateDialog.svelte";
 	import TokenSecretModal from "./components/TokenSecretModal.svelte";
-	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import NavTabs from "$lib/components/NavTabs.svelte";
+	import { accessTabs } from "../tabs";
 	import PageHeader from "$lib/components/PageHeader.svelte";
-
-	const accessTabs: NavTabItem[] = [
-		{ label: "Users", href: "/system/users", icon: UsersIcon },
-		{ label: "API & Auth Keys", href: "/system/keys", icon: KeyRoundIcon },
-	];
 
 	let tokens = $state<AuthToken[]>([]);
 	let isLoading = $state(true);

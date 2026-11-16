@@ -9,7 +9,7 @@
 	import { Switch } from "$lib/components/ui/switch";
 	import { dnsQueryLog, dnsLogSseUrl, hostSet } from "$lib/api/client";
 	import type { DnsQueryLogEntry } from "$lib/api/types";
-	import { createSequence } from "$lib/utils";
+	import { createSequence, toMillis } from "$lib/utils";
 
 	/** The device's latest DNS queries, then live ones as they arrive. */
 	let {
@@ -116,7 +116,7 @@
 	onDestroy(stop);
 
 	const time = (ts: number) =>
-		new Date((ts < 10_000_000_000 ? ts * 1000 : ts)).toLocaleTimeString([], {
+		new Date(toMillis(ts)).toLocaleTimeString([], {
 			hour: "2-digit",
 			minute: "2-digit",
 			second: "2-digit",
