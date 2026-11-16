@@ -6,6 +6,7 @@
 	import ListFilterIcon from "@lucide/svelte/icons/list-filter";
 	import HistoryIcon from "@lucide/svelte/icons/history";
 	import RadioIcon from "@lucide/svelte/icons/radio";
+	import XIcon from "@lucide/svelte/icons/x";
 	import { toast } from "svelte-sonner";
 	import { onMount, onDestroy } from "svelte";
 	import { page } from "$app/state";
@@ -28,6 +29,8 @@
 	let searchQuery = $state("");
 	let selectedType = $state("");
 	let selectedResult = $state("");
+	/** Set from `?client=` (a device's MAC link); empty means all clients. */
+	let selectedClient = $state("");
 	let limit = $state(50);
 	let offset = $state(0);
 	let searchDebounce: ReturnType<typeof setTimeout> | null = null;
@@ -49,6 +52,7 @@
 		historyLoading = true;
 		try {
 			const res = await dnsQueryLog({
+				client: selectedClient || undefined,
 				domain: searchQuery.trim() || undefined,
 				qtype: selectedType || undefined,
 				result: selectedResult || undefined,
@@ -92,11 +96,22 @@
 		loadHistoricalLogs();
 	}
 
+	/** Filters both tabs by one client; the live stream restarts with the new filter. */
+	function clearClient() {
+		selectedClient = "";
+		offset = 0;
+		loadHistoricalLogs();
+		if (eventSource) {
+			liveEntries = [];
+			startLiveStream();
+		}
+	}
+
 	// --- Live SSE Stream Life-cycle ---
 	function startLiveStream() {
 		stopLiveStream();
 		try {
-			const url = dnsLogSseUrl();
+			const url = dnsLogSseUrl({ client: selectedClient || undefined });
 			eventSource = new EventSource(url);
 			isLiveConnected = true;
 
@@ -199,6 +214,7 @@
 		if (resultParam) {
 			selectedResult = resultParam;
 		}
+		selectedClient = page.url.searchParams.get("client") ?? "";
 		loadHistoricalLogs();
 	});
 
@@ -239,6 +255,22 @@
 			</Button>
 		{/snippet}
 	</PageHeader>
+
+	{#if selectedClient}
+		<div>
+			<span class="inline-flex items-center gap-1.5 rounded-full bg-selected py-1 pr-1 pl-3 text-xs text-selected-foreground">
+				Client: <span class="font-mono">{selectedClient}</span>
+				<button
+					type="button"
+					class="inline-flex size-5 items-center justify-center rounded-full hover:bg-muted"
+					aria-label="Clear client filter"
+					onclick={clearClient}
+				>
+					<XIcon class="size-3" />
+				</button>
+			</span>
+		</div>
+	{/if}
 
 
 	<!-- Tabbed Rules View (Consistent with Adblock rules & SQM tabs style) -->
