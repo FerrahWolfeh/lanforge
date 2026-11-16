@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use super::common::{HttpDataResponse, HttpPaginatedResponse, HttpWrappedResponse};
+use super::dns::TopDomainEntry;
 use lanforge_types::{
     device::{
         DeviceClass, DeviceStatus, IpClassification, Ipv6AddrOrSuffix, LearningMethod, Origin,
@@ -167,6 +168,37 @@ pub struct WhoisResponse {
     pub entry: DeviceEntry,
 }
 
+/// A device's DNS activity over the last day, all its addresses (linked ones included)
+/// together.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DeviceDnsResponse {
+    /// Start of the window, Unix seconds.
+    pub since: u64,
+    /// Width of each `rate` bucket, seconds.
+    pub bucket_secs: u64,
+    /// Queries in the window (blocked ones included).
+    pub total: u64,
+    /// Blocked queries in the window.
+    pub blocked: u64,
+    /// Every bucket of the window, oldest first.
+    pub rate: Vec<DeviceDnsBucket>,
+    /// Answered domains, busiest first.
+    pub top_domains: Vec<TopDomainEntry>,
+    /// Blocked domains, busiest first.
+    pub top_blocked_domains: Vec<TopDomainEntry>,
+    /// The device's queries are not logged (`ignore_dns_log`), so there is nothing to count.
+    pub logging_off: bool,
+}
+
+/// Queries of one `DeviceDnsResponse` bucket.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct DeviceDnsBucket {
+    /// Bucket start, Unix seconds.
+    pub timestamp: u64,
+    pub total: u64,
+    pub blocked: u64,
+}
+
 /// A single entry in the transient hosts list.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TransientHostEntry {
@@ -221,6 +253,18 @@ impl HttpWrappedResponse for DevicesResponse {
 
 impl HttpWrappedResponse for HostsResponse {
     type Wrapper = HttpDataResponse<HostsResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for DeviceDnsResponse {
+    type Wrapper = HttpDataResponse<DeviceDnsResponse>;
 
     fn wrap(self) -> Self::Wrapper {
         HttpDataResponse { data: self }

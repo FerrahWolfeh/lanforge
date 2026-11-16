@@ -152,4 +152,6 @@ pub enum Response {
     ServiceStopImpact(ServiceStopImpactResponse),
     /// The daemon's log filter and where it comes from.
     LogLevel(Box<LogLevelStatus>),
+    /// One device's DNS activity over the last day.
+    DeviceDns(Box<DeviceDnsResponse>),
 }

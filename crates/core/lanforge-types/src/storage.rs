@@ -69,6 +69,19 @@ impl DnsQueryRateBucket {
     }
 }
 
+/// One client's DNS activity over a window of the query log.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DnsClientActivity {
+    pub total: u64,
+    pub blocked: u64,
+    /// `(bucket start, queries, blocked)` for every bucket of the window, oldest first.
+    pub rate: Vec<(u64, u64, u64)>,
+    /// Answered (not blocked) domains, busiest first.
+    pub top_domains: Vec<(String, u64)>,
+    /// Blocked domains, busiest first.
+    pub top_blocked_domains: Vec<(String, u64)>,
+}
+
 /// Consolidated DNS analytics snapshot returned by the storage layer.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DnsAnalyticsData {

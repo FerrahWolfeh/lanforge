@@ -36,6 +36,7 @@ use lanforge_types::device::{Device, DeviceClass, IPv4State, Ipv6AddrOrSuffix, O
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
+use lanforge_types::network::dns::QueryResult;
 use lanforge_types::network::dns::adblock::{
     AdblockDbConfig, AdblockRuleAction, AdblockRuleEntry, AdblockSourceFormat, AdblockUrlKind,
     BlockingMode, RewriteAnswer, RewriteRule, TimeOfDay,
@@ -2156,4 +2157,111 @@ async fn linked_addresses_count_as_their_device() {
         stats.top_clients[0].hostname.as_deref(),
         Some("S26-Ultra-de-Pedro")
     );
+}
+
+/// Publishes one query line as the DNS service does: `repeats` queries from `src` (carrying
+/// `mac` when the DNS knew it) for `domain`, with `result`.
+fn query_line(
+    client: &ClientContext,
+    src: &str,
+    mac: Option<MacAddr>,
+    domain: &str,
+    result: QueryResult,
+    repeats: u32,
+) {
+    use lanforge_types::network::dns::{QueryLogEntry, TransportProtocol};
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let _ = client
+        .ctx
+        .bus()
+        .publish(LanforgeEvent::Dns(DnsEvent::QueryResolved(Arc::new(
+            QueryLogEntry {
+                timestamp: now,
+                src_ip: src.parse().unwrap(),
+                domain: Arc::from(domain),
+                upstream_us: 0,
+                qtype: DnsRecordType::A,
+                result,
+                cached: false,
+                src_mac: mac,
+                answer: None,
+                protocol: TransportProtocol::Udp,
+                filter: None,
+                coalesce_id: None,
+                repeats,
+                upstream: None,
+            },
+        ))));
+}
+
+/// The device DNS view counts every line of the device: by its MAC, by its LAN address and by
+/// its linked addresses; a line carrying another device's MAC is not the device's even from an
+/// address it holds. Repeats count as queries, blocked lines apart.
+#[tokio::test]
+async fn device_dns_counts_all_addresses_of_the_device() {
+    use QueryResult::{Blocked, Forwarded};
+    let client = served_client().await;
+    let phone = MacAddr::parse("02:00:00:00:00:61").unwrap();
+    let other = MacAddr::parse("02:00:00:00:00:80").unwrap();
+    leased_device(&client, phone, "192.168.1.61", "phone");
+    leased_device(&client, other, "192.168.1.80", "pc");
+    let res = client
+        .handle_device_linked_addresses_set(phone, vec!["100.64.0.6".parse().unwrap()])
+        .await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+
+    query_line(&client, "192.168.1.61", None, "a.example", Forwarded, 3);
+    query_line(&client, "100.64.0.6", None, "a.example", Forwarded, 2);
+    query_line(
+        &client,
+        "192.168.1.61",
+        Some(phone),
+        "b.example",
+        Forwarded,
+        1,
+    );
+    query_line(&client, "192.168.1.61", None, "ads.example", Blocked, 4);
+    // Another device: by address, and by MAC from the phone's address.
+    query_line(&client, "192.168.1.80", None, "a.example", Forwarded, 7);
+    query_line(
+        &client,
+        "192.168.1.61",
+        Some(other),
+        "c.example",
+        Forwarded,
+        5,
+    );
+    sleep(Duration::from_millis(50)).await;
+
+    let Response::DeviceDns(dns) = client.handle_device_dns(phone).await else {
+        panic!("device dns");
+    };
+    assert_eq!((dns.total, dns.blocked), (10, 4));
+    let top: Vec<(&str, u64)> = dns
+        .top_domains
+        .iter()
+        .map(|d| (d.domain.as_str(), d.count))
+        .collect();
+    assert_eq!(top, [("a.example", 5), ("b.example", 1)]);
+    assert_eq!(dns.top_blocked_domains.len(), 1);
+    assert_eq!(dns.top_blocked_domains[0].domain, "ads.example");
+    assert!(!dns.logging_off);
+    // Hourly buckets over the whole day; the queries land in the last one.
+    assert_eq!(dns.bucket_secs, 3600);
+    assert!((24..=25).contains(&dns.rate.len()), "{}", dns.rate.len());
+    assert!(
+        dns.rate
+            .windows(2)
+            .all(|w| w[1].timestamp == w[0].timestamp + 3600)
+    );
+    let last = dns.rate.last().unwrap();
+    assert_eq!((last.total, last.blocked), (10, 4));
+    assert_eq!(dns.rate.iter().map(|b| b.total).sum::<u64>(), 10);
+
+    let unknown = MacAddr::parse("02:00:00:00:00:99").unwrap();
+    let res = client.handle_device_dns(unknown).await;
+    assert!(matches!(res, Response::NotFound { .. }), "{res:?}");
 }

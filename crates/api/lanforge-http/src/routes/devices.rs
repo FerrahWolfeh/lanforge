@@ -31,6 +31,7 @@ pub fn router() -> Router<AppState> {
         .route("/transient", get(handle_transient_devices))
         .route("/{target}", get(handle_whois).delete(handle_purge))
         .route("/{target}/wol", post(handle_wake))
+        .route("/{mac}/dns", get(handle_device_dns))
         .route("/{mac}/linked", put(handle_linked_set))
 }
 
@@ -90,6 +91,14 @@ async fn handle_whois(
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(ctx.handle_whois(target).await, Whois)
+}
+
+async fn handle_device_dns(
+    State(state): State<AppState>,
+    Path(mac): Path<MacAddr>,
+) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(ctx.handle_device_dns(mac).await, DeviceDns)
 }
 
 async fn handle_purge(
