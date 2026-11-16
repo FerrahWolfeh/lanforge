@@ -1,20 +1,32 @@
 <script lang="ts">
 	import { onDestroy } from "svelte";
+	import { toast } from "svelte-sonner";
 	import ActivityIcon from "@lucide/svelte/icons/activity";
+	import XIcon from "@lucide/svelte/icons/x";
+	import { Button } from "$lib/components/ui/button";
+	import { Input } from "$lib/components/ui/input";
+	import * as Popover from "$lib/components/ui/popover";
 	import { Switch } from "$lib/components/ui/switch";
-	import { dnsQueryLog, dnsLogSseUrl } from "$lib/api/client";
+	import { dnsQueryLog, dnsLogSseUrl, hostSet } from "$lib/api/client";
 	import type { DnsQueryLogEntry } from "$lib/api/types";
 
 	/** The device's latest DNS queries, then live ones as they arrive. */
 	let {
 		mac,
 		loggingOff = false,
-		mutedDomains = 0,
+		ignoredDomains = [],
+		canEdit = false,
+		onChanged,
 		onToggleLogging,
 	}: {
 		mac: string;
 		loggingOff?: boolean;
-		mutedDomains?: number;
+		/** Domains whose queries are not logged for this device. */
+		ignoredDomains?: string[];
+		/** Absent or false when the session may not change them: the list is read-only. */
+		canEdit?: boolean;
+		/** Called after a muted domain was added or removed. */
+		onChanged?: () => void;
 		/** Absent when the session may not change it. */
 		onToggleLogging?: (off: boolean) => void;
 	} = $props();
@@ -23,6 +35,25 @@
 	let entries = $state<DnsQueryLogEntry[]>([]);
 	let live = $state(false);
 	let source: EventSource | null = null;
+	let newDomain = $state("");
+
+	async function changeIgnored(field: "add_ignored_log_domain" | "remove_ignored_log_domain", domain: string) {
+		try {
+			await hostSet(mac, field, domain);
+			onChanged?.();
+			return true;
+		} catch (err: any) {
+			toast.error(err?.message ?? "Failed to change the muted domains");
+			return false;
+		}
+	}
+
+	async function addDomain(e: SubmitEvent) {
+		e.preventDefault();
+		const domain = newDomain.trim().toLowerCase();
+		if (!domain) return;
+		if (await changeIgnored("add_ignored_log_domain", domain)) newDomain = "";
+	}
 
 	function stop() {
 		source?.close();
@@ -127,8 +158,50 @@
 			/>
 			Don't log this device
 		</label>
-		{#if mutedDomains > 0}
-			<span>{mutedDomains} {mutedDomains === 1 ? "domain" : "domains"} not logged</span>
-		{/if}
+		<div class="flex items-center gap-3">
+			{#if canEdit || ignoredDomains.length > 0}
+				<Popover.Root>
+					<Popover.Trigger>
+						{#snippet child({ props })}
+							<Button variant="ghost" size="xs" {...props}>Muted domains ({ignoredDomains.length})</Button>
+						{/snippet}
+					</Popover.Trigger>
+					<Popover.Content align="end" class="flex w-64 flex-col gap-2 p-3 text-xs">
+						<p class="font-semibold text-foreground">Queries to these domains are not logged</p>
+						{#if ignoredDomains.length === 0}
+							<p class="text-muted-foreground">No muted domains.</p>
+						{:else}
+							<ul class="flex max-h-48 flex-col gap-1 overflow-y-auto">
+								{#each ignoredDomains as d (d)}
+									<li class="flex items-center justify-between gap-2">
+										<span class="truncate font-mono" title={d}>{d}</span>
+										{#if canEdit}
+											<Button
+												variant="ghost"
+												size="icon-xs"
+												aria-label="Stop muting {d}"
+												onclick={() => changeIgnored("remove_ignored_log_domain", d)}
+											>
+												<XIcon />
+											</Button>
+										{/if}
+									</li>
+								{/each}
+							</ul>
+						{/if}
+						{#if canEdit}
+							<form class="flex items-center gap-2" onsubmit={addDomain}>
+								<Input bind:value={newDomain} placeholder="example.com" class="h-7 text-xs" aria-label="Domain to mute" />
+								<Button type="submit" variant="outline" size="xs" disabled={!newDomain.trim()}>Add</Button>
+							</form>
+						{/if}
+					</Popover.Content>
+				</Popover.Root>
+			{/if}
+			<a
+				href={`/dns/log?client=${encodeURIComponent(mac)}`}
+				class="font-medium text-selected-foreground hover:underline">All queries →</a
+			>
+		</div>
 	</footer>
 </section>

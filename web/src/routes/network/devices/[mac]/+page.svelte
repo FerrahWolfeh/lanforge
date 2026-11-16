@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from "$app/state";
 	import { goto } from "$app/navigation";
-	import { onDestroy, onMount } from "svelte";
+	import { onDestroy, onMount, type Snippet } from "svelte";
 	import { toast } from "svelte-sonner";
 	import { auth } from "$lib/stores/auth.svelte";
 	import {
@@ -12,9 +12,13 @@
 		firewallConfig,
 		dnsRewriteList,
 		dnsAdblockGroups,
+		dnsBlock,
+		dnsAllow,
 		hostList,
 		hostSet,
 		eventsUrl,
+		leaseRenew,
+		leaseRelease,
 	} from "$lib/api/client";
 	import {
 		formatRewriteAnswer,
@@ -67,6 +71,7 @@
 	let adblockOpen = $state(false);
 	let linkedOpen = $state(false);
 	let eventSource: EventSource | null = null;
+	let dnsTimer: ReturnType<typeof setInterval> | undefined;
 
 	async function loadDevice() {
 		try {
@@ -78,14 +83,15 @@
 		}
 	}
 
-	async function loadDns() {
-		dnsLoading = true;
+	/** `quiet` refreshes in place: no skeleton, and the last data is kept on failure. */
+	async function loadDns(quiet = false) {
+		if (!quiet) dnsLoading = true;
 		try {
 			dns = await deviceDns(mac);
 		} catch {
-			dns = null;
+			if (!quiet) dns = null;
 		} finally {
-			dnsLoading = false;
+			if (!quiet) dnsLoading = false;
 		}
 	}
 
@@ -123,15 +129,20 @@
 	onMount(() => {
 		try {
 			eventSource = new EventSource(eventsUrl({ filter: "device" }));
-			eventSource.onmessage = () => debouncedDevice();
+			eventSource.onmessage = (event) => {
+				// Other devices' events are not for this page.
+				if (String(event.data).toLowerCase().includes(mac.toLowerCase())) debouncedDevice();
+			};
 		} catch {
 			// no live updates
 		}
+		dnsTimer = setInterval(() => loadDns(true), 60_000);
 	});
 	onDestroy(() => {
 		debouncedDevice.cancel();
 		eventSource?.close();
 		eventSource = null;
+		clearInterval(dnsTimer);
 	});
 
 	$effect(() => {
@@ -308,6 +319,39 @@
 		}
 	}
 
+	const dynamicLease = $derived(Boolean(device?.v4) && !v4Reserved && Number(device?.v4?.expires ?? 0) > 0);
+
+	async function leaseAction(kind: "renew" | "release") {
+		if (kind === "release" && !confirm(`Release the IPv4 lease of ${name}? The device loses the address until it asks again.`)) return;
+		try {
+			if (kind === "renew") {
+				await leaseRenew(mac, "V4");
+				toast.success(`IPv4 lease of ${name} renewed`);
+			} else {
+				await leaseRelease(mac, "V4");
+				toast.success(`IPv4 lease of ${name} released`);
+			}
+			await loadDevice();
+		} catch (err: any) {
+			toast.error(err?.message ?? `Failed to ${kind} the IPv4 lease`);
+		}
+	}
+
+	async function dnsRule(domain: string, action: "block" | "allow") {
+		try {
+			if (action === "block") {
+				await dnsBlock(domain);
+				toast.success(`${domain} blocked for every device`);
+			} else {
+				await dnsAllow(domain);
+				toast.success(`${domain} allowed for every device`);
+			}
+			await loadDns();
+		} catch (err: any) {
+			toast.error(err?.message ?? `Failed to ${action} ${domain}`);
+		}
+	}
+
 	const canDevice = $derived(auth.can("device_write"));
 	const canDns = $derived(auth.can("dns_write"));
 	const kindLabel: Record<string, string> = { Gua: "global", Ula: "local", LinkLocal: "link-local" };
@@ -317,14 +361,20 @@
 	<title>{name} — Devices — Lanforge</title>
 </svelte:head>
 
-{#snippet row(key: string, value: string, sub?: string, mono = false)}
+{#snippet row(key: string, value: string, sub?: string, mono = false, actions?: Snippet)}
 	<div class="grid grid-cols-[96px_minmax(0,1fr)] items-start gap-3 px-3 py-2 text-sm">
 		<span class="pt-0.5 text-xs text-muted-foreground">{key}</span>
 		<span class="min-w-0 break-words">
 			<span class={mono ? "font-mono text-xs" : ""}>{value}</span>
 			{#if sub}<span class="block text-xs text-muted-foreground">{sub}</span>{/if}
+			{#if actions}<span class="mt-1 flex gap-1">{@render actions()}</span>{/if}
 		</span>
 	</div>
+{/snippet}
+
+{#snippet leaseActions()}
+	<Button variant="ghost" size="xs" onclick={() => leaseAction("renew")}>Renew</Button>
+	<Button variant="ghost" size="xs" onclick={() => leaseAction("release")}>Release</Button>
 {/snippet}
 
 <div class="flex flex-col gap-4">
@@ -422,7 +472,7 @@
 					</header>
 					<div class="divide-y divide-border">
 						{#if v4}
-							{@render row("IPv4", v4, leaseText(), true)}
+							{@render row("IPv4", v4, leaseText(), true, canDevice && dynamicLease ? leaseActions : undefined)}
 						{/if}
 						{#each device.ipv6_addrs ?? [] as a (a.addr)}
 							{@render row(`IPv6 ${kindLabel[a.kind] ?? a.kind.toLowerCase()}`, a.addr, undefined, true)}
@@ -521,11 +571,14 @@
 					loading={dnsLoading}
 					{adblock}
 					onEditAdblock={canDns ? () => (adblockOpen = true) : undefined}
+					onRule={canDns ? dnsRule : undefined}
 				/>
 				<DeviceRecentQueries
 					{mac}
 					loggingOff={Boolean(device.ignore_dns_log)}
-					mutedDomains={device.ignored_log_domains?.length ?? 0}
+					ignoredDomains={device.ignored_log_domains ?? []}
+					canEdit={canDevice}
+					onChanged={loadDevice}
 					onToggleLogging={canDevice ? setLogging : undefined}
 				/>
 			</div>

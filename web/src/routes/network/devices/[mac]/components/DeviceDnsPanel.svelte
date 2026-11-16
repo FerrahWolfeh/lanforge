@@ -11,12 +11,15 @@
 		loading = false,
 		adblock,
 		onEditAdblock,
+		onRule,
 	}: {
 		dns: DeviceDnsResponse | null;
 		loading?: boolean;
 		/** What adblock does to this device, e.g. "kids", "global lists only", "bypassed". */
 		adblock: string | null;
 		onEditAdblock?: () => void;
+		/** Absent when the session may not change adblock rules. */
+		onRule?: (domain: string, action: "block" | "allow") => void;
 	} = $props();
 
 	const W = 600;
@@ -39,12 +42,22 @@
 	const blockedMax = $derived(Math.max(1, ...(dns?.top_blocked_domains ?? []).map((d) => d.count)));
 </script>
 
-{#snippet domainList(rows: { domain: string; count: number }[], max: number, tone: "brand" | "danger")}
+{#snippet domainList(rows: { domain: string; count: number }[], max: number, tone: "brand" | "danger", ruleAction: "block" | "allow")}
 	<ul class="flex flex-col gap-2">
 		{#each rows as row (row.domain)}
 			<li class="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1">
 				<span class="truncate font-mono text-xs" title={row.domain}>{row.domain}</span>
-				<span class="text-xs tabular-nums text-muted-foreground">{row.count.toLocaleString()}</span>
+				<span class="flex items-center gap-1.5 text-xs tabular-nums text-muted-foreground">
+					{row.count.toLocaleString()}
+					{#if onRule}
+						<Button
+							variant="ghost"
+							size="xs"
+							title="Adds a rule for every device"
+							onclick={() => onRule(row.domain, ruleAction)}
+						>{ruleAction === "block" ? "Block" : "Allow"}</Button>
+					{/if}
+				</span>
 				<span class="col-span-2 block h-1 overflow-hidden rounded-full bg-muted" aria-hidden="true">
 					<span
 						class="block h-full rounded-full {tone === 'danger' ? 'bg-danger' : 'bg-brand-gradient'}"
@@ -116,13 +129,13 @@
 			{#if dns.top_domains.length}
 				<div class="flex flex-col gap-2">
 					<h3 class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Most asked</h3>
-					{@render domainList(dns.top_domains.slice(0, 5), topMax, "brand")}
+					{@render domainList(dns.top_domains.slice(0, 5), topMax, "brand", "block")}
 				</div>
 			{/if}
 			{#if dns.top_blocked_domains.length}
 				<div class="flex flex-col gap-2">
 					<h3 class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Blocked</h3>
-					{@render domainList(dns.top_blocked_domains.slice(0, 5), blockedMax, "danger")}
+					{@render domainList(dns.top_blocked_domains.slice(0, 5), blockedMax, "danger", "allow")}
 				</div>
 			{/if}
 		</div>
