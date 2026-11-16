@@ -27,13 +27,14 @@
 	});
 </script>
 
-<!-- Phones: one swipeable row with the next card peeking, so the cards do not push
-     the page content several screens down. -->
+<!-- Phones: three or more cards become one swipeable row with the next card peeking, so they
+     do not push the page content several screens down; two cards simply stack. -->
 <div
 	class={cn(
 		"grid gap-3.5 sm:gap-4",
 		gridColsClass,
-		"max-sm:-mx-3 max-sm:flex max-sm:snap-x max-sm:snap-mandatory max-sm:overflow-x-auto max-sm:scroll-px-3 max-sm:px-3 max-sm:pb-1 max-sm:[scrollbar-width:none] max-sm:*:w-[85%] max-sm:*:shrink-0 max-sm:*:snap-start",
+		cols >= 3 &&
+			"max-sm:-mx-3 max-sm:flex max-sm:snap-x max-sm:snap-mandatory max-sm:overflow-x-auto max-sm:scroll-px-3 max-sm:px-3 max-sm:pb-1 max-sm:[scrollbar-width:none] max-sm:*:w-[85%] max-sm:*:shrink-0 max-sm:*:snap-start",
 		className
 	)}
 >
