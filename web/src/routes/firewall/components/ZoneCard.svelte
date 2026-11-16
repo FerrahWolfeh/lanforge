@@ -179,7 +179,7 @@
             {iface}
             <button
               type="button"
-              class="rounded-full p-0.5 hover:bg-muted focus-visible:outline-none focus-visible:ring-1 cursor-pointer"
+              class="rounded-full p-0.5 max-sm:-m-1.5 max-sm:p-2 hover:bg-muted focus-visible:outline-none focus-visible:ring-1 cursor-pointer"
               onclick={() => removeInterface(iface)}
               aria-label="Remove {iface}"
             >
@@ -192,7 +192,7 @@
           <Button
             variant="outline"
             size="icon"
-            class="size-6"
+            class="size-6 max-sm:size-8"
             aria-label="Add interface"
             onclick={() => {
               addingInterface = true;
@@ -296,9 +296,9 @@
         value={zone.input_policy}
         onValueChange={setInputPolicy}
       >
-        <ToggleGroup.Item value="Accept" class="data-[state=on]:bg-success/15 data-[state=on]:text-success">Accept</ToggleGroup.Item>
-        <ToggleGroup.Item value="Drop" class="data-[state=on]:bg-danger/15 data-[state=on]:text-danger">Drop</ToggleGroup.Item>
-        <ToggleGroup.Item value="Reject" class="data-[state=on]:bg-danger/15 data-[state=on]:text-danger">Reject</ToggleGroup.Item>
+        <ToggleGroup.Item value="Accept" class="max-sm:min-h-8 max-sm:min-w-8 data-[state=on]:bg-success/15 data-[state=on]:text-success">Accept</ToggleGroup.Item>
+        <ToggleGroup.Item value="Drop" class="max-sm:min-h-8 max-sm:min-w-8 data-[state=on]:bg-danger/15 data-[state=on]:text-danger">Drop</ToggleGroup.Item>
+        <ToggleGroup.Item value="Reject" class="max-sm:min-h-8 max-sm:min-w-8 data-[state=on]:bg-danger/15 data-[state=on]:text-danger">Reject</ToggleGroup.Item>
       </ToggleGroup.Root>
     </div>
 
@@ -314,9 +314,9 @@
         value={zone.forward_policy}
         onValueChange={setForwardPolicy}
       >
-        <ToggleGroup.Item value="Accept" class="data-[state=on]:bg-success/15 data-[state=on]:text-success">Accept</ToggleGroup.Item>
-        <ToggleGroup.Item value="Drop" class="data-[state=on]:bg-danger/15 data-[state=on]:text-danger">Drop</ToggleGroup.Item>
-        <ToggleGroup.Item value="Reject" class="data-[state=on]:bg-danger/15 data-[state=on]:text-danger">Reject</ToggleGroup.Item>
+        <ToggleGroup.Item value="Accept" class="max-sm:min-h-8 max-sm:min-w-8 data-[state=on]:bg-success/15 data-[state=on]:text-success">Accept</ToggleGroup.Item>
+        <ToggleGroup.Item value="Drop" class="max-sm:min-h-8 max-sm:min-w-8 data-[state=on]:bg-danger/15 data-[state=on]:text-danger">Drop</ToggleGroup.Item>
+        <ToggleGroup.Item value="Reject" class="max-sm:min-h-8 max-sm:min-w-8 data-[state=on]:bg-danger/15 data-[state=on]:text-danger">Reject</ToggleGroup.Item>
       </ToggleGroup.Root>
     </div>
 
