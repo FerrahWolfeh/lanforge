@@ -53,7 +53,7 @@
 >
 	<!-- Left: Record summary -->
 	<div class="flex items-center gap-2">
-		<span class="text-[11px]">
+		<span class="text-xs">
 			Showing <strong class="text-foreground font-semibold">{startItem}–{endItem}</strong> of{" "}
 			<strong class="text-foreground font-semibold">{totalItems}</strong> {itemName}
 		</span>
@@ -62,7 +62,7 @@
 	<!-- Right: Controls -->
 	<div class="flex flex-wrap items-center gap-3">
 		{#if showPageSize && totalItems > pageSizeOptions[0]}
-			<div class="flex items-center gap-1.5 text-[11px]">
+			<div class="flex items-center gap-1.5 text-xs">
 				<span>Rows:</span>
 				<select
 					value={pageSize}
@@ -77,7 +77,7 @@
 			</div>
 		{/if}
 
-		<span class="text-[11px] font-medium whitespace-nowrap">
+		<span class="text-xs font-medium whitespace-nowrap">
 			Page {pageIndex + 1} of {totalPages}
 		</span>
 

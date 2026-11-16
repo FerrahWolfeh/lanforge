@@ -65,7 +65,7 @@
 
 <header
 	id="app-topbar"
-	class="gpu-accelerated sticky top-0 z-30 flex h-16 w-full shrink-0 items-center justify-between border-b border-border/70 bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60 lg:px-6 lg:rounded-t-2xl"
+	class="gpu-accelerated sticky top-0 z-30 flex h-16 w-full shrink-0 items-center justify-between border-b border-border/70 bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60 lg:px-6 lg:rounded-t-xl"
 >
 	<div class="flex items-center gap-3 min-w-0">
 		<!-- Desktop Sidebar Toggle Button -->
@@ -119,18 +119,15 @@
 		<Tooltip.Provider>
 			<Tooltip.Root>
 				<Tooltip.Trigger
-					class="flex items-center gap-2 px-2.5 py-1 rounded-lg hover:bg-accent/60 transition-colors border border-border/40"
+					class="flex items-center gap-2 px-2.5 py-1 rounded-md hover:bg-accent/60 transition-colors border border-border"
 				>
 					<span class="relative flex size-2 shrink-0">
-						{#if uptime > 0}
-							<span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
-						{/if}
 						<span
 							class={[
 								"relative inline-flex size-2 rounded-full transition-all",
 								uptime > 0
-									? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.9)]"
-									: "bg-zinc-500",
+									? "bg-success ring-3 ring-success/20"
+									: "bg-muted-foreground/50",
 							].join(" ")}
 						></span>
 					</span>
@@ -187,13 +184,13 @@
 		<!-- Quick Search / Command Palette trigger -->
 		<button
 			type="button"
-			class="hidden md:flex items-center gap-2 h-8 px-2.5 rounded-xl border border-border/70 bg-muted/40 hover:bg-muted/80 text-muted-foreground hover:text-foreground text-xs transition-colors cursor-pointer"
+			class="hidden md:flex items-center gap-2 h-8 px-2.5 rounded-md border border-border bg-muted/60 hover:bg-muted text-muted-foreground hover:text-foreground text-xs transition-colors cursor-pointer"
 			onclick={() => commandState.open()}
 			aria-label="Search or execute command (Ctrl+K)"
 		>
 			<SearchIcon class="size-3.5" />
 			<span>Search...</span>
-			<kbd class="pointer-events-none inline-flex h-4.5 select-none items-center gap-0.5 rounded border border-border/80 bg-background px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
+			<kbd class="pointer-events-none inline-flex h-4.5 select-none items-center gap-0.5 rounded border border-border/80 bg-background px-1.5 font-mono text-[11px] font-medium text-muted-foreground">
 				<span>⌘</span>K
 			</kbd>
 		</button>
@@ -201,7 +198,7 @@
 		<!-- Mobile Search Icon Button -->
 		<button
 			type="button"
-			class="flex md:hidden items-center justify-center size-8 rounded-xl border border-border/70 text-muted-foreground hover:text-foreground hover:bg-muted/50 cursor-pointer"
+			class="flex md:hidden items-center justify-center size-8 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-muted/50 cursor-pointer"
 			onclick={() => commandState.open()}
 			aria-label="Search (Ctrl+K)"
 		>

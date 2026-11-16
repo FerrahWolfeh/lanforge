@@ -143,7 +143,7 @@
 			aria-label="Lanforge Home"
 		>
 			<div class="size-10 shrink-0 flex items-center justify-center">
-				<div class="size-8 rounded-xl bg-primary flex items-center justify-center text-primary-foreground shadow-xs">
+				<div class="size-8 rounded-lg bg-brand-gradient flex items-center justify-center text-white">
 					<WifiIcon class="size-4.5" />
 				</div>
 			</div>
@@ -155,7 +155,7 @@
 				<span class="text-sm font-bold tracking-tight text-foreground flex items-center font-sans">
 					Lanforge
 				</span>
-				<span class="text-[10px] text-muted-foreground font-normal">
+				<span class="text-xs text-muted-foreground font-normal">
 					Network Orchestrator
 				</span>
 			</div>
@@ -172,7 +172,7 @@
 						? 'opacity-0 max-h-0 mb-0 pointer-events-none'
 						: 'opacity-100 max-h-8 mb-1.5 px-2'}"
 				>
-					<div class="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase whitespace-nowrap font-mono">
+					<div class="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase whitespace-nowrap">
 						{group.header}
 					</div>
 				</div>
@@ -199,18 +199,15 @@
 							href={item.href}
 							onclick={onNavigate}
 							title={isCollapsed ? (isDbgOnly ? `${item.title} (Debug: Disabled on daemon)` : item.title) : undefined}
-							class="group relative flex items-center h-10 w-full rounded-xl text-xs font-medium overflow-hidden transition-all duration-200 ease-out active:scale-[0.98] transform-gpu {active
-								? 'bg-primary text-primary-foreground font-semibold shadow-xs shadow-primary/20'
+							class="group relative flex items-center h-9 w-full rounded-md text-[13px] font-medium overflow-hidden transition-colors duration-200 ease-out {active
+								? 'bg-selected text-selected-foreground font-semibold'
 								: 'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'}"
 							aria-label={item.title}
 						>
-							{#if active}
-								<span class="absolute left-1 top-2.5 bottom-2.5 w-1 rounded-full bg-primary-foreground/90 transition-all duration-200"></span>
-							{/if}
-							<div class="size-10 shrink-0 flex items-center justify-center">
+							<div class="size-9 shrink-0 flex items-center justify-center">
 								<Icon
-									class="size-4 shrink-0 transition-transform duration-200 ease-out group-hover:scale-110 {active
-										? 'text-primary-foreground'
+									class="size-4 shrink-0 {active
+										? 'text-selected-foreground'
 										: 'text-muted-foreground group-hover:text-sidebar-accent-foreground'}"
 								/>
 							</div>

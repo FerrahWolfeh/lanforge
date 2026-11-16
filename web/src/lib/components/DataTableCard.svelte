@@ -119,7 +119,7 @@
 <Card.Root
 	bind:ref={cardEl}
 	class={cn(
-		"flex flex-col overflow-hidden border shadow-sm",
+		"flex flex-col overflow-hidden",
 		containerHeight,
 		className
 	)}
@@ -223,7 +223,7 @@
 		{:else}
 			<Table.Root class={minTableWidth}>
 				<Table.Header
-					class="sticky top-0 z-10 bg-card/95 backdrop-blur-md border-b shadow-xs"
+					class="sticky top-0 z-10 bg-card border-b"
 				>
 					<Table.Row class="hover:bg-transparent">
 						{#if header}
