@@ -7,7 +7,7 @@ use lanforge_types::device::Device;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::{DnsLifetimeStats, DnsRecordType};
 use lanforge_types::network::{QueryLogEntry, QueryResult, TrafficHistorySample};
-use lanforge_types::storage::DnsClientActivity;
+use lanforge_types::storage::{DnsClientActivity, DnsDomainActivity};
 use std::env;
 use std::ffi::CString;
 use std::io::Error as IoError;
@@ -260,6 +260,17 @@ impl LogStore for LogDb {
     ) -> Result<DnsClientActivity, DbError> {
         self.inner
             .get_dns_client_activity(since_secs, now_secs, bucket_secs, limit, is_client)
+    }
+
+    fn get_dns_domain_activity(
+        &self,
+        since_secs: u64,
+        now_secs: u64,
+        bucket_secs: u64,
+        domain: &str,
+    ) -> Result<DnsDomainActivity, DbError> {
+        self.inner
+            .get_dns_domain_activity(since_secs, now_secs, bucket_secs, domain)
     }
 
     fn load_dns_lifetime_stats(&self) -> Result<DnsLifetimeStats, DbError> {

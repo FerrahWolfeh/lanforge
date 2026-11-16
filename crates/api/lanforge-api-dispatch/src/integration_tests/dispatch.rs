@@ -2159,6 +2159,14 @@ async fn linked_addresses_count_as_their_device() {
         stats.top_clients[0].hostname.as_deref(),
         Some("S26-Ultra-de-Pedro")
     );
+    assert_eq!(
+        stats.top_clients[0].mac.as_deref(),
+        Some("02:00:00:00:00:61")
+    );
+    assert_eq!(
+        stats.top_clients[1].mac, None,
+        "an unknown address has no MAC"
+    );
 }
 
 /// Publishes one query line as the DNS service does: `repeats` queries from `src` (carrying
@@ -2266,6 +2274,87 @@ async fn device_dns_counts_all_addresses_of_the_device() {
     let unknown = MacAddr::parse("02:00:00:00:00:99").unwrap();
     let res = client.handle_device_dns(unknown).await;
     assert!(matches!(res, Response::NotFound { .. }), "{res:?}");
+}
+
+/// The domain view folds a device's lines (MAC, LAN address, linked address) into one row,
+/// counts repeats, keeps blocked apart, ignores other domains and matches `Example.COM.` to the
+/// log's `example.com`.
+#[tokio::test]
+async fn dns_domain_has_one_row_per_device() {
+    use QueryResult::{Blocked, Forwarded};
+    let client = served_client().await;
+    let phone = MacAddr::parse("02:00:00:00:00:61").unwrap();
+    let other = MacAddr::parse("02:00:00:00:00:80").unwrap();
+    leased_device(&client, phone, "192.168.1.61", "phone");
+    leased_device(&client, other, "192.168.1.80", "pc");
+    let res = client
+        .handle_device_linked_addresses_set(phone, vec!["fd00::61".parse().unwrap()])
+        .await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+
+    query_line(
+        &client,
+        "192.168.1.61",
+        Some(phone),
+        "example.com",
+        Forwarded,
+        5,
+    );
+    query_line(&client, "fd00::61", None, "example.com", Forwarded, 2);
+    query_line(
+        &client,
+        "192.168.1.80",
+        Some(other),
+        "example.com",
+        Blocked,
+        1,
+    );
+    query_line(
+        &client,
+        "192.168.1.80",
+        Some(other),
+        "other.example",
+        Forwarded,
+        9,
+    );
+    sleep(Duration::from_millis(50)).await;
+
+    let Response::DnsDomain(dns) = client.handle_dns_domain("Example.COM.".into()).await else {
+        panic!("dns domain");
+    };
+    assert_eq!(dns.domain, "example.com");
+    assert_eq!((dns.total, dns.blocked), (8, 1));
+    assert!(dns.last_seen.is_some());
+    assert_eq!(dns.bucket_secs, 3600);
+    assert_eq!(dns.rate.iter().map(|b| b.total).sum::<u64>(), 8);
+    assert_eq!(dns.rate.iter().map(|b| b.blocked).sum::<u64>(), 1);
+    assert_eq!(dns.clients.len(), 2);
+    let phone_row = &dns.clients[0];
+    assert_eq!(phone_row.mac.as_deref(), Some("02:00:00:00:00:61"));
+    assert_eq!(phone_row.name.as_deref(), Some("phone"));
+    assert_eq!((phone_row.total, phone_row.blocked), (7, 0));
+    assert_eq!(phone_row.addresses, ["192.168.1.61", "fd00::61"]);
+    let pc_row = &dns.clients[1];
+    assert_eq!(pc_row.mac.as_deref(), Some("02:00:00:00:00:80"));
+    assert_eq!((pc_row.total, pc_row.blocked), (1, 1));
+    assert_eq!(pc_row.addresses, ["192.168.1.80"]);
+    assert!(pc_row.last_seen > 0);
+}
+
+#[tokio::test]
+async fn dns_domain_unseen_is_empty_and_a_bad_name_is_refused() {
+    let client = served_client().await;
+    let Response::DnsDomain(dns) = client.handle_dns_domain("never.example".into()).await else {
+        panic!("dns domain");
+    };
+    assert_eq!((dns.total, dns.blocked, dns.last_seen), (0, 0, None));
+    assert!(dns.clients.is_empty());
+    assert!(!dns.rate.is_empty());
+
+    for bad in ["", ".", "a b"] {
+        let res = client.handle_dns_domain(bad.into()).await;
+        assert!(matches!(res, Response::Rejected { .. }), "{bad:?}: {res:?}");
+    }
 }
 
 fn forward_to(target: ForwardTarget, port: u16) -> PortForwardRule {

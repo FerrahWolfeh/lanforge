@@ -5,6 +5,7 @@ use std::sync::Arc;
 use super::common::{
     CacheMeta, HttpDataResponse, HttpPaginatedResponse, HttpWrappedResponse, LogMeta,
 };
+use super::devices::DeviceDnsBucket;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::adblock::rules_file::RulesImport;
 pub use lanforge_types::network::dns::adblock::{
@@ -91,6 +92,57 @@ pub struct TopClientEntry {
     /// linked) make one row.
     #[serde(default)]
     pub addresses: Vec<String>,
+    /// The device's MAC when the row is a known device.
+    #[serde(default)]
+    pub mac: Option<String>,
+}
+
+/// One domain's DNS activity over the last day, by device.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DnsDomainResponse {
+    /// The domain as the query log stores it: lowercase, no trailing dot.
+    pub domain: String,
+    /// Start of the window, Unix seconds.
+    pub since: u64,
+    /// Width of each `rate` bucket, seconds.
+    pub bucket_secs: u64,
+    /// Queries in the window (blocked ones included).
+    pub total: u64,
+    /// Blocked queries in the window.
+    pub blocked: u64,
+    /// Unix seconds of the latest query, `None` when the window has none.
+    pub last_seen: Option<u64>,
+    /// Every bucket of the window, oldest first.
+    pub rate: Vec<DeviceDnsBucket>,
+    /// Who asked, busiest first: one row per device, one per address of an unknown one.
+    pub clients: Vec<DnsDomainClient>,
+}
+
+/// One device (or unknown address) that asked for a `DnsDomainResponse` domain.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DnsDomainClient {
+    /// The device's MAC when known.
+    pub mac: Option<String>,
+    /// The device's display name when known.
+    pub name: Option<String>,
+    /// Addresses counted in this row, busiest first.
+    pub addresses: Vec<String>,
+    pub total: u64,
+    pub blocked: u64,
+    /// Unix seconds of the row's latest query.
+    pub last_seen: u64,
+}
+
+impl HttpWrappedResponse for DnsDomainResponse {
+    type Wrapper = HttpDataResponse<DnsDomainResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
 }
 
 /// A response containing status for all configured DNS upstreams.

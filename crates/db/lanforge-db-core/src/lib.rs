@@ -11,7 +11,7 @@ use lanforge_types::network::dns::{DnsLifetimeStats, DnsRecordType};
 use lanforge_types::network::{
     Hostname, Ipv6AddrOrSuffix, QueryLogEntry, QueryResult, TrafficHistorySample,
 };
-use lanforge_types::storage::{DnsAnalyticsData, DnsClientActivity};
+use lanforge_types::storage::{DnsAnalyticsData, DnsClientActivity, DnsDomainActivity};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
@@ -547,6 +547,16 @@ pub trait LogStore: Send + Sync {
         limit: usize,
         is_client: &mut dyn FnMut(IpAddr, Option<MacAddr>) -> bool,
     ) -> Result<DnsClientActivity, DbError>;
+
+    /// One domain's activity in the query log from `since_secs` on, in `bucket_secs` buckets up
+    /// to `now_secs`. `domain` is as the log stores it (lowercase, no trailing dot).
+    fn get_dns_domain_activity(
+        &self,
+        since_secs: u64,
+        now_secs: u64,
+        bucket_secs: u64,
+        domain: &str,
+    ) -> Result<DnsDomainActivity, DbError>;
 
     /// Loads persistent cumulative DNS lifetime statistics.
     fn load_dns_lifetime_stats(&self) -> Result<DnsLifetimeStats, DbError> {
