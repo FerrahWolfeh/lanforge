@@ -85,6 +85,10 @@ pub fn patch_sections(
             }
         } else {
             let mut table = parsed.into_table();
+            if sec == Section::Pppoe {
+                // The password lives in secrets.toml: never written to the config file.
+                table.remove("password");
+            }
             // A section with only subtables (e.g. [dhcp] holding [dhcp.v4] and [dhcp.v6]) is
             // implicit, so toml_edit does not emit an empty, dead `[dhcp]` header.
             if table

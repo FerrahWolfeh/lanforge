@@ -12,7 +12,7 @@ use std::path::Path;
 
 use lanforge_api::api::{Response, SimpleSuccess};
 use lanforge_api::config_file::{
-    ConfigFile, RaInputs, Section, effective_ra, log_issues, set_aside_issues,
+    ConfigFile, RaInputs, Section, SecretsFile, effective_ra, log_issues, set_aside_issues,
 };
 use lanforge_core::context::ConfigPatch;
 use lanforge_types::config::SiteDomains;
@@ -35,7 +35,7 @@ impl ClientContext {
                 };
             }
         };
-        let (file, set_aside) = match ConfigFile::parse_lenient(&content) {
+        let (mut file, set_aside) = match ConfigFile::parse_lenient(&content) {
             Ok(parsed) => parsed,
             Err(e) => {
                 return Response::Error {
@@ -45,6 +45,14 @@ impl ClientContext {
         };
 
         let mut issues = set_aside_issues(&set_aside);
+        let secrets = SecretsFile::load(&path);
+        issues.extend(log_issues(file.apply_secrets(&secrets)));
+        if secrets.is_set_aside() {
+            // A refused secrets file keeps the password that runs, never an empty one.
+            if let Some(live) = self.ctx.get_pppoe_config() {
+                file.pppoe.password = live.password;
+            }
+        }
         self.reload_file_owned(&path, &file, &set_aside, &mut issues);
         self.ctx.set_config_issues(issues);
 

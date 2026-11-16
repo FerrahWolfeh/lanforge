@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use lanforge_api::api::Response;
 use lanforge_api::config_file::{
     AdblockFile, AdblockGroup, AdblockSettings, ConfigFile, DhcpSettings, DnsFile, DnsSettings,
-    FirewallFile, NamedUpstream, RaFile, SectionSet, persist_sections, write_toml_atomically,
+    FirewallFile, NamedUpstream, RaFile, SecretsFile, SecretsState, SectionSet, persist_sections,
+    without_secrets, write_toml_atomically,
 };
 use lanforge_core::context::ConfigPatch;
 use lanforge_crypto::stable_id_or_hash;
@@ -15,6 +16,7 @@ use lanforge_types::device::{Origin, StaticHost};
 use lanforge_types::identifiers::DeviceIdentifier;
 use lanforge_types::network::dns::adblock::{ClientSelector, RewriteAnswer};
 use lanforge_types::network::firewall::{FirewallConfig, ForwardTarget};
+use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::RaServerConfig;
 
 use crate::ClientContext;
@@ -114,9 +116,46 @@ impl ClientContext {
         let mut cfg = ConfigFile::default();
         fill(&mut cfg);
         let _file_guard = self.ctx.config_file_lock();
+        if sections.contains(SectionSet::PPPOE) {
+            // The password goes to secrets.toml first: if the config file then fails to write,
+            // the old inline value is shadowed by the new secret, never the other way round.
+            Self::persist_pppoe_password(&path, &cfg.pppoe.password)?;
+        }
         persist_sections(&path, &cfg, sections)
             .map(|()| Persisted::File)
             .map_err(|e| ChangeError::Failed(format!("cannot write {}: {e}", path.display())))
+    }
+
+    /// Writes the `PPPoE` password to `secrets.toml` next to the config file at `path`. A secrets
+    /// file that was refused at load is never written over.
+    fn persist_pppoe_password(path: &Path, password: &str) -> Result<(), ChangeError> {
+        let mut secrets = match SecretsFile::load(path) {
+            SecretsState::SetAside(reason) => {
+                return Err(ChangeError::Rejected(format!(
+                    "secrets file refused, fix it first: {reason}"
+                )));
+            }
+            SecretsState::Missing if password.is_empty() => return Ok(()),
+            SecretsState::Missing => SecretsFile::default(),
+            SecretsState::Loaded(file) => file,
+        };
+        secrets.pppoe.password = Some(password.to_string());
+        secrets.write(path).map_err(|e| {
+            ChangeError::Failed(format!(
+                "cannot write {}: {e}",
+                SecretsFile::path_for(path).display()
+            ))
+        })
+    }
+
+    /// Changes the `PPPoE` client configuration: the password is written to `secrets.toml`, the
+    /// rest to `[pppoe]` (see [`Self::persist_config_sections`]), then applied.
+    pub fn change_pppoe(&self, cfg: PppoeConfig) -> Result<Persisted, ChangeError> {
+        let _serial = self.ctx.config_change_lock();
+        let persisted =
+            self.persist_config_sections(SectionSet::PPPOE, |file| file.pppoe = cfg.clone())?;
+        self.ctx.apply_config(ConfigPatch::new().with_pppoe(cfg));
+        Ok(persisted)
     }
 
     /// Writes `fw` to `[firewall]` (see [`Self::persist_config_sections`]). Zones are keyed by
@@ -640,7 +679,9 @@ impl ClientContext {
         let path = self
             .resolve_config_path()
             .ok_or_else(|| "no configuration file".to_string())?;
-        fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))
+        fs::read_to_string(&path)
+            .map(|text| without_secrets(&text))
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))
     }
 
     /// The configuration file the API writes, `None` when it keeps changes in memory (no file,

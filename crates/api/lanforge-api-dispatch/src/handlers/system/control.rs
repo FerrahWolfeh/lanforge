@@ -143,13 +143,10 @@ impl ClientContext {
                 error: format!("PPPoE configuration not saved: {}", issues.join("; ")),
             };
         }
-        let persisted = match self
-            .persist_config_sections(SectionSet::PPPOE, |file| file.pppoe = cfg.clone())
-        {
+        let persisted = match self.change_pppoe(cfg) {
             Ok(p) => p,
             Err(e) => return e.response_in("PPPoE configuration not saved"),
         };
-        self.ctx.apply_config(ConfigPatch::new().with_pppoe(cfg));
 
         Response::Success(SimpleSuccess {
             message: persisted.message("PPPoE configuration"),

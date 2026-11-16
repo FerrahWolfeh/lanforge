@@ -14,6 +14,7 @@ pub mod duration;
 pub mod effective;
 pub mod hosts;
 pub mod patch;
+pub mod secrets;
 pub mod section;
 pub mod sections;
 
@@ -30,6 +31,7 @@ pub use effective::{
 };
 pub use hosts::StaticHost;
 pub use patch::patch_sections;
+pub use secrets::{SECRETS_FILE_NAME, SecretsFile, SecretsState, without_secrets};
 pub use section::{Section, SectionSet};
 pub use sections::*;
 pub use toml_edit;
@@ -134,7 +136,8 @@ impl ConfigFile {
             "# Lanforge Configuration File\n# Automatically synchronized by Lanforge\n\n",
         );
         let content = toml::to_string(self)?;
-        out.push_str(&content);
+        // The PPPoE password lives in secrets.toml, never in the config file.
+        out.push_str(&without_secrets(&content));
         Ok(out)
     }
 }

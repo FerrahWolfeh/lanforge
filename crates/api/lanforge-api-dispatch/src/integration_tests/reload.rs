@@ -1132,3 +1132,123 @@ async fn adblock_groups_change_one_member_at_a_time() {
             .await,
     );
 }
+
+// ---- secrets.toml ----
+
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+
+const PPPOE_INLINE: &str = "[pppoe]\nenabled = true\nusername = \"u\"\npassword = \"inline-pw\"\n";
+
+fn write_secrets(path: &Path, mode: u32, text: &str) -> PathBuf {
+    let secrets = path.with_file_name("secrets.toml");
+    fs::write(&secrets, text).unwrap();
+    fs::set_permissions(&secrets, fs::Permissions::from_mode(mode)).unwrap();
+    secrets
+}
+
+fn live_password(client: &ClientContext) -> String {
+    client.ctx.get_pppoe_config().expect("applied").password
+}
+
+fn pppoe_update(password: &str) -> PppoeConfig {
+    PppoeConfig {
+        enabled: true,
+        username: "u".into(),
+        password: password.into(),
+        ..PppoeConfig::default()
+    }
+}
+
+#[tokio::test]
+async fn reload_secrets_file_password_wins_over_inline() {
+    let (client, _dir, path) = with_file(PPPOE_INLINE);
+    write_secrets(&path, 0o600, "[pppoe]\npassword = \"secret-pw\"\n");
+    reload(&client).await;
+    assert_eq!(live_password(&client), "secret-pw");
+    let issues = client.ctx.config_issues();
+    assert!(
+        issues.iter().any(|i| i.contains("[pppoe] password") && i.contains("secrets.toml")),
+        "{issues:?}"
+    );
+}
+
+#[tokio::test]
+async fn reload_inline_password_still_works_and_is_reported() {
+    let (client, _dir, _) = with_file(PPPOE_INLINE);
+    reload(&client).await;
+    assert_eq!(live_password(&client), "inline-pw");
+    let issues = client.ctx.config_issues();
+    assert!(issues.iter().any(|i| i.contains("move it")), "{issues:?}");
+}
+
+#[tokio::test]
+async fn reload_refuses_a_group_readable_secrets_file_and_keeps_the_live_password() {
+    let (client, _dir, path) = with_file(PPPOE_INLINE);
+    reload(&client).await;
+    assert_eq!(live_password(&client), "inline-pw");
+    write_secrets(&path, 0o640, "[pppoe]\npassword = \"secret-pw\"\n");
+    reload(&client).await;
+    assert_eq!(live_password(&client), "inline-pw");
+    let issues = client.ctx.config_issues();
+    assert!(issues.iter().any(|i| i.contains("secrets.toml") && i.contains("refused")), "{issues:?}");
+
+    // No inline fallback either: the live password is kept, not emptied.
+    fs::write(&path, "[pppoe]\nenabled = true\nusername = \"u\"\n").unwrap();
+    reload(&client).await;
+    assert_eq!(live_password(&client), "inline-pw");
+}
+
+#[tokio::test]
+async fn reload_sets_aside_an_unparseable_secrets_file() {
+    let (client, _dir, path) = with_file(PPPOE_INLINE);
+    reload(&client).await;
+    write_secrets(&path, 0o600, "[pppoe\n");
+    reload(&client).await;
+    assert_eq!(live_password(&client), "inline-pw");
+    assert!(client.ctx.config_issues().iter().any(|i| i.contains("refused")));
+}
+
+#[tokio::test]
+async fn updating_pppoe_writes_a_private_secrets_file_and_strips_the_inline_password() {
+    let (client, _dir, path) = with_file(PPPOE_INLINE);
+    reload(&client).await;
+    let res = client.handle_update_pppoe_config(pppoe_update("new-pw")).await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+
+    let secrets = path.with_file_name("secrets.toml");
+    let mode = fs::metadata(&secrets).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+    assert!(fs::read_to_string(&secrets).unwrap().contains("new-pw"));
+    let main = fs::read_to_string(&path).unwrap();
+    assert!(!main.contains("password") && !main.contains("inline-pw") && !main.contains("new-pw"), "{main}");
+    assert_eq!(live_password(&client), "new-pw");
+
+    // The next reload reads the same password back.
+    reload(&client).await;
+    assert_eq!(live_password(&client), "new-pw");
+    assert!(client.ctx.config_issues().is_empty(), "{:?}", client.ctx.config_issues());
+    // And the TOML export never carries it.
+    let exported = client.export_system_config_toml().unwrap();
+    assert!(!exported.contains("new-pw"));
+}
+
+#[tokio::test]
+async fn updating_pppoe_is_refused_while_the_secrets_file_is_set_aside() {
+    let (client, _dir, path) = with_file(PPPOE_INLINE);
+    reload(&client).await;
+    let secrets = write_secrets(&path, 0o644, "[pppoe]\npassword = \"keep\"\n");
+    let before_main = fs::read_to_string(&path).unwrap();
+    let res = client.handle_update_pppoe_config(pppoe_update("new-pw")).await;
+    assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
+    assert_eq!(fs::read_to_string(&secrets).unwrap(), "[pppoe]\npassword = \"keep\"\n");
+    assert_eq!(fs::read_to_string(&path).unwrap(), before_main);
+    assert_eq!(live_password(&client), "inline-pw");
+}
+
+#[tokio::test]
+async fn the_toml_export_hides_an_inline_pppoe_password() {
+    let (client, _dir, _) = with_file(PPPOE_INLINE);
+    let exported = client.export_system_config_toml().unwrap();
+    assert!(!exported.contains("inline-pw") && exported.contains("username"), "{exported}");
+}

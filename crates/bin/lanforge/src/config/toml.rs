@@ -306,7 +306,7 @@ pub fn apply_tftp_options(cfg: &mut TftpConfig, tftp: &TftpOptions) {
     cfg.max_retries = tftp.max_retries;
 }
 
-use lanforge_api::config_file::set_aside_messages;
+use lanforge_api::config_file::{SecretsFile, set_aside_messages};
 pub use lanforge_api::config_file::{log_issues, set_aside_issues};
 
 pub fn load_toml(path: &str) -> TomlConfig {
@@ -327,11 +327,14 @@ pub fn load_toml(path: &str) -> TomlConfig {
     };
 
     match ConfigFile::parse_lenient(&content) {
-        Ok((file_cfg, set_aside)) => {
+        Ok((mut file_cfg, set_aside)) => {
             info!("Config: Loaded from '{path}' using named-section schema");
+            let secrets = SecretsFile::load(Path::new(path));
+            let secret_issues = file_cfg.apply_secrets(&secrets);
             // Logged once by the bootstrap, after the start-up configs are derived.
             let mut cfg = TomlConfig::from(&file_cfg);
             cfg.config_issues = set_aside_messages(&set_aside);
+            cfg.config_issues.extend(secret_issues);
             cfg.dhcp_set_aside = set_aside.iter().any(|(sec, _)| *sec == Section::Dhcp);
             #[cfg(feature = "nft")]
             cfg.config_issues.extend(file_cfg.firewall.to_config().1);
@@ -440,6 +443,29 @@ mod tests {
             "{:?}",
             cfg.config_issues
         );
+    }
+
+    /// Boot reads the `PPPoE` password from `secrets.toml`, which wins over an inline one; a
+    /// secrets file open to group/others is refused and reported.
+    #[cfg(feature = "pppoe")]
+    #[test]
+    fn boot_reads_the_pppoe_password_from_secrets_toml() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("lanforge.toml");
+        fs::write(&path, "[pppoe]\nusername = \"u\"\npassword = \"inline\"\n").expect("config");
+        let p = path.to_str().expect("utf-8 path");
+        let secrets = dir.path().join("secrets.toml");
+        fs::write(&secrets, "[pppoe]\npassword = \"secret\"\n").expect("secrets");
+        fs::set_permissions(&secrets, fs::Permissions::from_mode(0o600)).expect("chmod");
+        let cfg = load_toml(p);
+        assert_eq!(cfg.pppoe.password, "secret");
+        assert!(cfg.config_issues.iter().any(|i| i.contains("move it")), "{:?}", cfg.config_issues);
+
+        fs::set_permissions(&secrets, fs::Permissions::from_mode(0o644)).expect("chmod");
+        let cfg = load_toml(p);
+        assert_eq!(cfg.pppoe.password, "inline");
+        assert!(cfg.config_issues.iter().any(|i| i.contains("refused")), "{:?}", cfg.config_issues);
     }
 
     #[test]
