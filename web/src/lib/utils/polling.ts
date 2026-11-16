@@ -8,28 +8,37 @@
  * tab is hidden or minimized, and triggers an immediate refresh when the user
  * returns to the tab.
  *
- * @param callback Function to invoke on each tick (and on visibility restore)
+ * @param callback Function to invoke on each tick (and on visibility restore); may return a Promise
  * @param intervalMs Interval in milliseconds
  * @param immediateOnVisible Whether to immediately invoke callback when tab becomes visible (default: true)
  * @returns Cleanup function to be called in onDestroy or $effect cleanup
  */
 export function createPolling(
-	callback: () => void,
+	callback: () => void | Promise<unknown>,
 	intervalMs: number,
 	immediateOnVisible: boolean = true
 ): () => void {
 	if (typeof window === "undefined") return () => {};
 
+	// A tick is skipped while the previous callback's promise is still pending.
+	let pending = false;
+	const run = () => {
+		if (pending) return;
+		pending = true;
+		Promise.resolve()
+			.then(callback)
+			.catch(() => {})
+			.finally(() => {
+				pending = false;
+			});
+	};
+
 	const id = setInterval(() => {
-		if (!document.hidden) {
-			callback();
-		}
+		if (!document.hidden) run();
 	}, intervalMs);
 
 	const handleVisibilityChange = () => {
-		if (immediateOnVisible && !document.hidden) {
-			callback();
-		}
+		if (immediateOnVisible && !document.hidden) run();
 	};
 
 	document.addEventListener("visibilitychange", handleVisibilityChange);
@@ -68,4 +77,17 @@ export function createDebounce<T extends (...args: any[]) => void>(
 	};
 
 	return debounced;
+}
+
+/**
+ * Request-sequence guard: take an id before an `await`, and drop the response
+ * if `isCurrent(id)` is false afterwards (a newer request started, or `next()`
+ * was called on destroy / param change).
+ */
+export function createSequence() {
+	let current = 0;
+	return {
+		next: () => ++current,
+		isCurrent: (id: number) => id === current
+	};
 }

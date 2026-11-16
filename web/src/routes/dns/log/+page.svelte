@@ -14,6 +14,7 @@
 	import { dnsQueryLog, dnsLogSseUrl } from "$lib/api/client";
 	import type { DnsQueryLogEntry } from "$lib/api/types";
 	import PageHeader from "$lib/components/PageHeader.svelte";
+	import { createSequence } from "$lib/utils";
 
 	// Child components
 	import DnsLogTable from "./components/DnsLogTable.svelte";
@@ -51,7 +52,10 @@
 	let rewriteDialogOpen = $state(false);
 	let rewritePrefill = $state<{ domain: string; answer: string } | null>(null);
 
+	const historySeq = createSequence();
+
 	async function loadHistoricalLogs() {
+		const seq = historySeq.next();
 		historyLoading = true;
 		try {
 			const res = await dnsQueryLog({
@@ -62,15 +66,16 @@
 				limit,
 				offset,
 			});
+			if (!historySeq.isCurrent(seq)) return;
 			if (res) {
 				historyEntries = res.entries;
 				historyTotal = res.total;
 			}
 		} catch {
+			if (!historySeq.isCurrent(seq)) return;
 			toast.error("Failed to load historical DNS query logs");
-		} finally {
-			historyLoading = false;
 		}
+		historyLoading = false;
 	}
 
 	function dropParam(name: string) {
@@ -139,9 +144,12 @@
 		try {
 			const url = dnsLogSseUrl({ client: selectedClient || undefined });
 			eventSource = new EventSource(url);
-			isLiveConnected = true;
+			eventSource.onopen = () => {
+				isLiveConnected = true;
+			};
 
 			eventSource.onmessage = (event) => {
+				isLiveConnected = true;
 				if (isLivePaused) return;
 				try {
 					const parsed = JSON.parse(event.data);
@@ -222,6 +230,8 @@
 			if (!eventSource) {
 				startLiveStream();
 			}
+		} else {
+			stopLiveStream();
 		}
 	});
 
@@ -247,6 +257,7 @@
 	});
 
 	onDestroy(() => {
+		if (searchDebounce) clearTimeout(searchDebounce);
 		stopLiveStream();
 	});
 </script>

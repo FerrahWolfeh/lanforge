@@ -11,7 +11,7 @@
 		dnsAnalytics,
 	} from "$lib/api/client";
 	import type { DeviceEntry, TopClientEntry } from "$lib/api/types";
-	import { createDebounce } from "$lib/utils";
+	import { createDebounce, createPolling } from "$lib/utils";
 
 	import DeviceTable from "./components/DeviceTable.svelte";
 	import MonitorIcon from "@lucide/svelte/icons/monitor";
@@ -33,7 +33,7 @@
 
 	// The daemon's DNS analytics, one row per client device, over its hourly stats (about 7 days).
 	let dnsRows = $state<TopClientEntry[]>([]);
-	let dnsTimer: ReturnType<typeof setInterval> | null = null;
+	let stopDnsPolling: (() => void) | null = null;
 
 	/** Maps each device to its DNS counts: a row matches a device when any address is the device's. */
 	function dnsByDevice(list: DeviceEntry[], rows: TopClientEntry[]) {
@@ -141,7 +141,7 @@
 	onMount(() => {
 		loadDevices();
 		loadDns();
-		dnsTimer = setInterval(loadDns, 60_000);
+		stopDnsPolling = createPolling(loadDns, 60_000);
 
 		try {
 			const url = eventsUrl({ filter: "device" });
@@ -176,10 +176,8 @@
 
 	onDestroy(() => {
 		debouncedLoad.cancel();
-		if (dnsTimer) {
-			clearInterval(dnsTimer);
-			dnsTimer = null;
-		}
+		stopDnsPolling?.();
+		stopDnsPolling = null;
 		if (eventSource) {
 			eventSource.close();
 			eventSource = null;

@@ -10,7 +10,7 @@
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
 	import { createPolling } from "$lib/utils/polling";
-	import { formatBytes } from "$lib/utils";
+	import { formatBytes, createSequence } from "$lib/utils";
 
 	import ServerIcon from "@lucide/svelte/icons/server";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
@@ -49,24 +49,31 @@
 	let statusFilter = $state<"all" | "online" | "inactive" | "error">("all");
 	let actionLoading = $state<Record<string, string | null>>({});
 
+	const fetchSeq = createSequence();
+	const settleTimers = new Set<ReturnType<typeof setTimeout>>();
+
 	async function fetchBanners(showSpinner = true) {
+		// A poll that started before an action's refresh must not land after it.
+		const seq = fetchSeq.next();
 		if (showSpinner) isRefreshing = true;
 		try {
 			// Prefer dedicated /service_banners endpoint with fallback to normalizeServices(status)
 			try {
 				const list = await serviceBanners();
 				if (Array.isArray(list) && list.length > 0) {
-					banners = list.map((b) => ({
-						...b,
-						id: b.id || b.name.toLowerCase().replace(/\s+/g, "_")
-					}));
+					if (fetchSeq.isCurrent(seq)) {
+						banners = list.map((b) => ({
+							...b,
+							id: b.id || b.name.toLowerCase().replace(/\s+/g, "_")
+						}));
+					}
 					return;
 				}
 			} catch {
 				// Fallback to /status
 			}
 			const st = await status();
-			banners = normalizeServices(st);
+			if (fetchSeq.isCurrent(seq)) banners = normalizeServices(st);
 		} catch {
 			if (showSpinner) toast.error("Could not fetch service banners");
 		} finally {
@@ -111,10 +118,12 @@
 			await controlService(id, action);
 			toast.success(`Service '${id}' received ${action.toLowerCase()} signal`);
 			// Re-fetch service state after brief settling time
-			setTimeout(async () => {
+			const timer = setTimeout(async () => {
+				settleTimers.delete(timer);
 				await fetchBanners(false);
 				actionLoading[id] = null;
 			}, 750);
+			settleTimers.add(timer);
 		} catch (err) {
 			actionLoading[id] = null;
 			toast.error(`Failed to ${action.toLowerCase()} service: ${err instanceof Error ? err.message : String(err)}`);
@@ -123,11 +132,11 @@
 
 	onMount(() => {
 		fetchBanners(true);
-		const stopPolling = createPolling(() => {
-			fetchBanners(false);
-		}, 6000);
+		const stopPolling = createPolling(() => fetchBanners(false), 6000);
 		return () => {
 			stopPolling();
+			settleTimers.forEach(clearTimeout);
+			settleTimers.clear();
 		};
 	});
 

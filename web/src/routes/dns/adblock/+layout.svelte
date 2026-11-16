@@ -19,7 +19,7 @@
 	import { Switch } from "$lib/components/ui/switch";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import { toast } from "svelte-sonner";
-	import { onMount } from "svelte";
+	import { onDestroy, onMount } from "svelte";
 	import { createPolling } from "$lib/utils/polling";
 	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
 	import PageHeader from "$lib/components/PageHeader.svelte";
@@ -87,16 +87,27 @@
 		}
 	}
 
+	// Pending delayed refreshes, cleared on unmount.
+	const timers = new Set<ReturnType<typeof setTimeout>>();
+	function later(fn: () => void, ms: number) {
+		const t = setTimeout(() => {
+			timers.delete(t);
+			fn();
+		}, ms);
+		timers.add(t);
+	}
+	onDestroy(() => timers.forEach(clearTimeout));
+
 	async function handleReloadLists() {
 		reloadingLists = true;
 		try {
 			await dnsAdblockReload();
 			toast.success("Triggered background blocklist compilation & reload");
-			setTimeout(fetchStatus, 1500);
+			later(fetchStatus, 1500);
 		} catch (err: any) {
 			toast.error(err?.message ?? "Failed to reload blocklists");
 		} finally {
-			setTimeout(() => {
+			later(() => {
 				reloadingLists = false;
 			}, 1000);
 		}

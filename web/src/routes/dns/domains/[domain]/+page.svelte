@@ -5,6 +5,7 @@
 	import { dnsDomain, dnsAdblockCheck, dnsBlock, dnsAllow } from "$lib/api/client";
 	import type { AdblockCheckResponse, DnsDomainResponse, FilterOrigin } from "$lib/api/types";
 	import { formatTimeAgo } from "$lib/utils/format";
+	import { createSequence } from "$lib/utils";
 	import { Button } from "$lib/components/ui/button";
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import StatusLine from "$lib/components/StatusLine.svelte";
@@ -29,26 +30,36 @@
 	let verdict = $state<AdblockCheckResponse | null>(null);
 	let verdictFailed = $state(false);
 
+	const statsSeq = createSequence();
+	const verdictSeq = createSequence();
+
 	async function loadStats() {
+		const seq = statsSeq.next();
 		loading = true;
 		failed = null;
 		notFound = false;
 		try {
-			stats = await dnsDomain(domain);
+			const res = await dnsDomain(domain);
+			if (!statsSeq.isCurrent(seq)) return;
+			stats = res;
 		} catch (err: any) {
+			if (!statsSeq.isCurrent(seq)) return;
 			stats = null;
 			if (err?.status === 404) notFound = true;
 			else failed = err?.message ?? "Failed to load the domain";
-		} finally {
-			loading = false;
 		}
+		loading = false;
 	}
 
 	async function loadVerdict() {
+		const seq = verdictSeq.next();
 		try {
-			verdict = await dnsAdblockCheck(domain);
+			const res = await dnsAdblockCheck(domain);
+			if (!verdictSeq.isCurrent(seq)) return;
+			verdict = res;
 			verdictFailed = false;
 		} catch {
+			if (!verdictSeq.isCurrent(seq)) return;
 			verdict = null;
 			verdictFailed = true;
 		}
@@ -58,6 +69,7 @@
 		if (!domain) return;
 		stats = null;
 		verdict = null;
+		verdictFailed = false;
 		loadStats();
 		loadVerdict();
 	});

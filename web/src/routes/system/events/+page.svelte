@@ -2,7 +2,7 @@
 	import { onMount, onDestroy } from "svelte";
 	import { Button } from "$lib/components/ui/button";
 	import { toast } from "svelte-sonner";
-	import { eventsUrl, eventsHistory } from "$lib/api/client";
+	import { eventsUrl, eventsHistory, me } from "$lib/api/client";
 	import { parseTimedEvent, type SseEvent } from "$lib/api/types";
 	import EventTable from "./components/EventTable.svelte";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
@@ -31,6 +31,7 @@
 	let eventSource: EventSource | null = null;
 	let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 	let reconnectAttempts = 0;
+	let destroyed = false;
 
 	async function loadHistoricalEvents() {
 		loading = true;
@@ -67,13 +68,9 @@
 					const parsed = JSON.parse(msgEvent.data);
 					const newEvent = parseTimedEvent(parsed, msgEvent.lastEventId);
 
-					// Avoid inserting duplicates if the event was already in initial history
-					events = [newEvent, ...events.filter((e) => e.id !== newEvent.id)];
-
-					// Enforce FIFO buffer limit
-					if (events.length > bufferLimit) {
-						events = events.slice(0, bufferLimit);
-					}
+					// The daemon sends no SSE ids, so events cannot be deduplicated by id; the stream is
+					// stopped while history reloads instead. Enforce the FIFO buffer limit.
+					events = [newEvent, ...events].slice(0, bufferLimit);
 				} catch {
 					// Ignore malformed JSON chunks
 				}
@@ -87,8 +84,15 @@
 				const delay = Math.min(1000 * Math.pow(1.5, reconnectAttempts), 15000);
 				reconnectAttempts++;
 
-				reconnectTimeout = setTimeout(() => {
-					if (isLive) {
+				reconnectTimeout = setTimeout(async () => {
+					reconnectTimeout = null;
+					// EventSource cannot see a 401: probe the session first (a 401 redirects to login).
+					try {
+						await me();
+					} catch (err: any) {
+						if (err?.status === 401) return;
+					}
+					if (isLive && !destroyed) {
 						startSseStream();
 					}
 				}, delay);
@@ -127,8 +131,10 @@
 	}
 
 	async function refreshAll() {
+		// Keep the stream closed while history loads, so no event lands in the buffer being replaced.
+		stopSseStream();
 		await loadHistoricalEvents();
-		if (isLive) {
+		if (isLive && !destroyed) {
 			startSseStream();
 		}
 		toast.success("Event history reloaded");
@@ -136,10 +142,11 @@
 
 	onMount(async () => {
 		await loadHistoricalEvents();
-		startSseStream();
+		if (!destroyed) startSseStream();
 	});
 
 	onDestroy(() => {
+		destroyed = true;
 		stopSseStream();
 	});
 </script>

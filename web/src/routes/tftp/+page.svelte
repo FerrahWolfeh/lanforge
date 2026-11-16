@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { auth } from "$lib/stores/auth.svelte";
-	import { onMount } from "svelte";
+	import { onDestroy, onMount } from "svelte";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
@@ -187,7 +187,7 @@
 			toast.success("TFTP and PXE server settings saved successfully");
 
 			// Refresh banners to sync state
-			setTimeout(async () => {
+			later(async () => {
 				try {
 					const banners = await serviceBanners();
 					tftpBanner = banners.find(
@@ -205,6 +205,17 @@
 		}
 	}
 
+	// Pending banner refreshes, cleared on unmount.
+	const timers = new Set<ReturnType<typeof setTimeout>>();
+	function later(fn: () => void, ms: number) {
+		const t = setTimeout(() => {
+			timers.delete(t);
+			fn();
+		}, ms);
+		timers.add(t);
+	}
+	onDestroy(() => timers.forEach(clearTimeout));
+
 	async function handleServiceControl(action: "Start" | "Stop" | "Restart") {
 		if (action === "Stop") {
 			try {
@@ -218,12 +229,17 @@
 		try {
 			await controlService("tftp", action);
 			toast.success(`TFTP service received ${action.toLowerCase()} command`);
-			setTimeout(async () => {
-				const banners = await serviceBanners();
-				tftpBanner = banners.find(
-					(b) => b.id?.toLowerCase() === "tftp" || b.name.toLowerCase().includes("tftp"),
-				) ?? null;
-				serviceActionLoading = null;
+			later(async () => {
+				try {
+					const banners = await serviceBanners();
+					tftpBanner = banners.find(
+						(b) => b.id?.toLowerCase() === "tftp" || b.name.toLowerCase().includes("tftp"),
+					) ?? null;
+				} catch {
+					// non-critical
+				} finally {
+					serviceActionLoading = null;
+				}
 			}, 750);
 		} catch (err: unknown) {
 			serviceActionLoading = null;

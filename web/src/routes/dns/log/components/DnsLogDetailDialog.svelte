@@ -18,6 +18,7 @@
 	import { toast } from "svelte-sonner";
 	import { dnsBlock, dnsAllow, dnsQuery, hostSet } from "$lib/api/client";
 	import type { DnsQueryLogEntry } from "$lib/api/types";
+	import { createSequence } from "$lib/utils";
 
 	let {
 		open = $bindable(false),
@@ -33,6 +34,15 @@
 	let actionLoading = $state(false);
 	let testQueryResult = $state<string | null>(null);
 	let testingQuery = $state(false);
+	const testSeq = createSequence();
+
+	// The dialog is reused per row: a new entry drops the old result and any in-flight test.
+	$effect(() => {
+		void entry;
+		testSeq.next();
+		testQueryResult = null;
+		testingQuery = false;
+	});
 
 	function cleanDomain(raw: string): string {
 		if (!raw) return "";
@@ -84,18 +94,20 @@
 
 	async function handleTestQuery() {
 		if (!entry) return;
+		const seq = testSeq.next();
 		testingQuery = true;
 		testQueryResult = null;
 		try {
 			const res = await dnsQuery(cleanDomain(entry.domain), entry.qtype);
+			if (!testSeq.isCurrent(seq)) return;
 			testQueryResult = JSON.stringify(res, null, 2);
 			toast.success("Diagnostic query test executed");
 		} catch (err: any) {
+			if (!testSeq.isCurrent(seq)) return;
 			testQueryResult = `Error: ${err?.message ?? "Query failed"}`;
 			toast.error("Diagnostic query failed");
-		} finally {
-			testingQuery = false;
 		}
+		testingQuery = false;
 	}
 
 	async function handleBlockDomain() {

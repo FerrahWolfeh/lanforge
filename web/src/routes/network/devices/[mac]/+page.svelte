@@ -28,7 +28,7 @@
 		type DeviceRulesResponse,
 		type PortForwardRule,
 	} from "$lib/api/types";
-	import { createDebounce, formatTimeAgo, copyToClipboard } from "$lib/utils";
+	import { createDebounce, createPolling, formatTimeAgo, copyToClipboard } from "$lib/utils";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import { Button } from "$lib/components/ui/button";
 	import { Skeleton } from "$lib/components/ui/skeleton";
@@ -72,13 +72,18 @@
 	let adblockOpen = $state(false);
 	let linkedOpen = $state(false);
 	let eventSource: EventSource | null = null;
-	let dnsTimer: ReturnType<typeof setInterval> | undefined;
+	let stopDnsPolling: (() => void) | undefined;
 
+	// The component is reused when only `mac` changes: a response for another MAC is dropped.
 	async function loadDevice() {
+		const m = mac;
 		try {
-			device = (await whois(mac)).entry;
+			const res = (await whois(m)).entry;
+			if (m !== mac) return;
+			device = res;
 			notFound = false;
 		} catch (err: any) {
+			if (m !== mac) return;
 			if (err?.status === 404) notFound = true;
 			else toast.error(err?.message ?? "Failed to load the device");
 		}
@@ -86,20 +91,25 @@
 
 	/** `quiet` refreshes in place: no skeleton, and the last data is kept on failure. */
 	async function loadDns(quiet = false) {
+		const m = mac;
 		if (!quiet) dnsLoading = true;
 		try {
-			dns = await deviceDns(mac);
+			const res = await deviceDns(m);
+			if (m !== mac) return;
+			dns = res;
 		} catch {
+			if (m !== mac) return;
 			if (!quiet) dns = null;
-		} finally {
-			if (!quiet) dnsLoading = false;
 		}
+		if (!quiet) dnsLoading = false;
 	}
 
 	async function loadAdblock() {
+		const current = mac;
 		try {
 			const res = await dnsAdblockGroups();
-			const m = mac.toLowerCase();
+			if (current !== mac) return;
+			const m = current.toLowerCase();
 			const has = (clients: { devices: { mac: string }[] }[]) =>
 				clients.some((c) => c.devices.some((d) => d.mac.toLowerCase() === m));
 			if (has(res.bypass)) adblock = "bypassed, never filtered";
@@ -108,15 +118,18 @@
 				adblock = groups.length ? groups.join(", ") : "global lists only";
 			}
 		} catch {
-			adblock = null;
+			if (current === mac) adblock = null;
 		}
 	}
 
 	async function loadRules() {
+		const m = mac;
 		try {
-			rules = await deviceRules(mac);
+			const res = await deviceRules(m);
+			if (m !== mac) return;
+			rules = res;
 		} catch {
-			rules = null;
+			if (m === mac) rules = null;
 		}
 	}
 
@@ -143,17 +156,28 @@
 		} catch {
 			// no live updates
 		}
-		dnsTimer = setInterval(() => loadDns(true), 60_000);
+		stopDnsPolling = createPolling(() => loadDns(true), 60_000);
 	});
 	onDestroy(() => {
 		debouncedDevice.cancel();
 		eventSource?.close();
 		eventSource = null;
-		clearInterval(dnsTimer);
+		stopDnsPolling?.();
 	});
 
 	$effect(() => {
-		if (mac) loadAll();
+		if (!mac) return;
+		device = null;
+		notFound = false;
+		dns = null;
+		dnsLoading = true;
+		rules = null;
+		adblock = null;
+		hostEntry = null;
+		hostOpen = false;
+		adblockOpen = false;
+		linkedOpen = false;
+		loadAll();
 	});
 
 	// --- what the page shows -------------------------------------------------------------
@@ -273,10 +297,12 @@
 
 	async function openHost() {
 		if (!device) return;
+		const m = mac;
 		let existing: HostConfigEntry | null = null;
 		if (device.origin === "Static") {
 			try {
 				const hosts = await hostList();
+				if (m !== mac) return;
 				existing = hosts.find((h) => h.mac.toLowerCase() === mac.toLowerCase()) ?? null;
 			} catch (err: any) {
 				toast.error(err?.message ?? "Failed to load the static host");

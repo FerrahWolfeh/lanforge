@@ -121,6 +121,8 @@
 		}
 	}
 
+	let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+
 	async function saveScopes() {
 		saving = true;
 		try {
@@ -130,7 +132,7 @@
 				v6_pools: v6Pools,
 			});
 			toast.success("DHCP address scopes and pools saved successfully");
-			setTimeout(() => loadAllData(false), 500);
+			refreshTimer = setTimeout(() => loadAllData(false), 500);
 		} catch (err: any) {
 			toast.error(`Failed to save scopes: ${err.message}`);
 		} finally {
@@ -286,6 +288,7 @@
 
 	onMount(() => {
 		loadAllData(true);
+		return () => clearTimeout(refreshTimer);
 	});
 </script>
 

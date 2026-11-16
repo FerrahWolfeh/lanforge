@@ -137,15 +137,24 @@
 		return `${s}s`;
 	}
 
+	let reloadTimer: ReturnType<typeof setTimeout> | undefined;
+	const counting = $derived(secondsLeft !== null);
+
 	onMount(() => {
 		load();
-		// Counts a temporary filter down, and reads the daemon again once it has ended.
+		return () => clearTimeout(reloadTimer);
+	});
+
+	// Counts a temporary filter down, and reads the daemon again once it has ended. The interval
+	// only runs while a temporary filter is active.
+	$effect(() => {
+		if (!counting) return;
 		const timer = setInterval(() => {
 			if (secondsLeft === null) return;
 			secondsLeft = Math.max(0, secondsLeft - 1);
 			if (secondsLeft === 0) {
 				secondsLeft = null;
-				setTimeout(load, 1500);
+				reloadTimer = setTimeout(load, 1500);
 			}
 		}, 1000);
 		return () => clearInterval(timer);

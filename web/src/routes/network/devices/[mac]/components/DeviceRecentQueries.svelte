@@ -9,6 +9,7 @@
 	import { Switch } from "$lib/components/ui/switch";
 	import { dnsQueryLog, dnsLogSseUrl, hostSet } from "$lib/api/client";
 	import type { DnsQueryLogEntry } from "$lib/api/types";
+	import { createSequence } from "$lib/utils";
 
 	/** The device's latest DNS queries, then live ones as they arrive. */
 	let {
@@ -35,6 +36,8 @@
 	let entries = $state<DnsQueryLogEntry[]>([]);
 	let live = $state(false);
 	let source: EventSource | null = null;
+	/** Bumped by every stop(), so a start() that was awaiting a fetch knows it is no longer wanted. */
+	const generation = createSequence();
 	let newDomain = $state("");
 
 	async function changeIgnored(field: "add_ignored_log_domain" | "remove_ignored_log_domain", domain: string) {
@@ -56,6 +59,7 @@
 	}
 
 	function stop() {
+		generation.next();
 		source?.close();
 		source = null;
 		live = false;
@@ -63,12 +67,16 @@
 
 	async function start(target: string) {
 		stop();
+		const gen = generation.next();
 		entries = [];
 		try {
-			entries = (await dnsQueryLog({ client: target, limit: KEEP })).entries;
+			const res = await dnsQueryLog({ client: target, limit: KEEP });
+			if (!generation.isCurrent(gen)) return;
+			entries = res.entries;
 		} catch {
 			// The live stream still fills the list.
 		}
+		if (!generation.isCurrent(gen)) return;
 		try {
 			source = new EventSource(dnsLogSseUrl({ client: target }));
 			source.onopen = () => (live = true);

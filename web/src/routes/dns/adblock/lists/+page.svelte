@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { auth } from "$lib/stores/auth.svelte";
-	import { onMount } from "svelte";
+	import { onDestroy, onMount } from "svelte";
 	import * as Card from "$lib/components/ui/card";
 	import * as Table from "$lib/components/ui/table";
 	import { Button } from "$lib/components/ui/button";
@@ -160,12 +160,23 @@
 			toast.success(`Added preset "${name}". Compiling rules in background...`);
 			// Loaded by the daemon on its own, like a source added by hand.
 			await loadSources();
-			setTimeout(loadSources, 1500);
-			setTimeout(loadSources, 3500);
+			later(loadSources, 1500);
+			later(loadSources, 3500);
 		} catch (err: any) {
 			toast.error(err?.message ?? `Failed to add "${name}"`);
 		}
 	}
+
+	// Pending delayed refreshes, cleared on unmount.
+	const timers = new Set<ReturnType<typeof setTimeout>>();
+	function later(fn: () => void, ms: number) {
+		const t = setTimeout(() => {
+			timers.delete(t);
+			fn();
+		}, ms);
+		timers.add(t);
+	}
+	onDestroy(() => timers.forEach(clearTimeout));
 
 	async function handleRemove(entry: MergedSource) {
 		try {
@@ -187,13 +198,11 @@
 		try {
 			await dnsAdblockReload();
 			toast.success("Triggered background list download & compilation");
-			setTimeout(async () => {
-				await loadSources();
-			}, 1500);
+			later(loadSources, 1500);
 		} catch (err: any) {
 			toast.error(err?.message ?? "Failed to update lists");
 		} finally {
-			setTimeout(() => {
+			later(() => {
 				updatingAll = false;
 			}, 1200);
 		}
@@ -204,7 +213,7 @@
 			await navigator.clipboard.writeText(url);
 			copiedUrl = url;
 			toast.success("Copied URL to clipboard");
-			setTimeout(() => {
+			later(() => {
 				copiedUrl = null;
 			}, 2000);
 		} catch {

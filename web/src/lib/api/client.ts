@@ -786,7 +786,8 @@ export const trafficStatus = () => get<TrafficStatusResponse>('/traffic/status')
  */
 export function trafficTelemetryFeed() {
 	let since: number | undefined;
-	return async () => {
+	let inflight: Promise<TrafficTelemetryResponse> | null = null;
+	const fetchOnce = async () => {
 		const t = await get<TrafficTelemetryResponse>('/traffic/telemetry', { since });
 		const last = t.history?.at(-1)?.timestamp;
 		if (since !== undefined && t.timestamp < since) {
@@ -797,6 +798,8 @@ export function trafficTelemetryFeed() {
 		}
 		return t;
 	};
+	// Overlapping callers share one request so the cursor never moves twice for the same samples.
+	return () => (inflight ??= fetchOnce().finally(() => (inflight = null)));
 }
 export const trafficConfig = () => get<TrafficConfig>('/traffic/config');
 export const trafficUpdateConfig = (config: TrafficConfig) =>

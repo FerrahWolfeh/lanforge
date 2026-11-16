@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from "svelte";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import { Button } from "$lib/components/ui/button";
 	import { Switch } from "$lib/components/ui/switch";
@@ -49,7 +50,11 @@
 	}
 
 	$effect(() => {
-		if (open && device) load(device);
+		// `device` is replaced on every page reload: read it untracked so an open dialog keeps its edits.
+		if (open) {
+			const dev = untrack(() => device);
+			if (dev) load(dev);
+		}
 	});
 
 	function toggle(name: string, on: boolean) {

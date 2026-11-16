@@ -139,6 +139,8 @@
 		toast.info("Changes discarded");
 	}
 
+	let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+
 	async function handleSave() {
 		if (!isDirty || !serverConfig) return;
 		saving = true;
@@ -163,7 +165,7 @@
 			syncFormFromConfig(payload);
 			toast.success("Hardware NIC tuning applied successfully");
 
-			setTimeout(async () => {
+			refreshTimer = setTimeout(async () => {
 				const s = await trafficStatus().catch(() => null);
 				if (s) status = s;
 			}, 600);
@@ -176,6 +178,7 @@
 
 	onMount(() => {
 		loadAll(false);
+		return () => clearTimeout(refreshTimer);
 	});
 </script>
 

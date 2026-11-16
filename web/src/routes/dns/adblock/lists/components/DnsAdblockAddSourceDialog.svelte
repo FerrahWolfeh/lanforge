@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onDestroy } from "svelte";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import * as Select from "$lib/components/ui/select";
 	import { Input } from "$lib/components/ui/input";
@@ -28,6 +29,10 @@
 	let kind = $state<"blocklist" | "allowlist">("blocklist");
 	let format = $state<AdblockSourceFormat>("auto");
 	let submitting = $state(false);
+
+	// Pending follow-up refreshes, cleared on unmount.
+	const timers: ReturnType<typeof setTimeout>[] = [];
+	onDestroy(() => timers.forEach(clearTimeout));
 
 	async function handleSubmit(e: Event) {
 		e.preventDefault();
@@ -62,8 +67,7 @@
 			// The daemon loads a new source on its own (the others are only revalidated); a
 			// forced reload would download every list again.
 			onAdded();
-			setTimeout(onAdded, 1500);
-			setTimeout(onAdded, 3500);
+			timers.push(setTimeout(onAdded, 1500), setTimeout(onAdded, 3500));
 		} catch (err: any) {
 			toast.error(err?.message ?? "Failed to add source URL");
 		} finally {

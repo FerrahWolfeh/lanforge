@@ -29,6 +29,7 @@
 	import { page } from "$app/state";
 	import { goto } from "$app/navigation";
 	import type { AdblockRuleEntry } from "$lib/api/types";
+	import { createSequence } from "$lib/utils";
 	import DnsAdblockImportRulesDialog from "./components/DnsAdblockImportRulesDialog.svelte";
 
 	const canEdit = $derived(auth.can("dns_write"));
@@ -46,15 +47,20 @@
 	let groupNames = $state<string[]>([]);
 
 	// Both tabs list one rules file, disabled rules included; a rule is addressed by its text.
+	const loadSeq = createSequence();
+
 	async function loadAll() {
+		const seq = loadSeq.next();
 		loading = true;
 		try {
-			customRules = (await dnsAdblockRules(group)) ?? [];
+			const rules = (await dnsAdblockRules(group)) ?? [];
+			if (!loadSeq.isCurrent(seq)) return;
+			customRules = rules;
 		} catch {
+			if (!loadSeq.isCurrent(seq)) return;
 			toast.error("Failed to load DNS rules");
-		} finally {
-			loading = false;
 		}
+		loading = false;
 	}
 
 	async function handleAddDomain(e: Event) {

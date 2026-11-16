@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from "svelte";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import { Button } from "$lib/components/ui/button";
 	import { Input } from "$lib/components/ui/input";
@@ -24,9 +25,12 @@
 	let submitting = $state(false);
 
 	$effect(() => {
-		if (open && device) {
-			addresses = [...(device.linked_addresses ?? [])];
-			draft = "";
+		// `device` is replaced on every page reload: read it untracked so an open dialog keeps its edits.
+		if (open) {
+			untrack(() => {
+				addresses = [...(device?.linked_addresses ?? [])];
+				draft = "";
+			});
 		}
 	});
 

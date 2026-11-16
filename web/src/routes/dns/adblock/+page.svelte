@@ -71,6 +71,7 @@
 
 	async function handleCheckDomain(e?: Event) {
 		if (e) e.preventDefault();
+		if (checking) return;
 		const domain = checkDomainInput.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/\.$/, "");
 		if (!domain) {
 			toast.error("Please enter a domain to check");
@@ -164,24 +165,27 @@
 				<span>Quick test:</span>
 				<button
 					type="button"
+					disabled={checking}
 					onclick={() => setQuickCheck("doubleclick.net")}
-					class="underline hover:text-foreground font-mono"
+					class="underline hover:text-foreground font-mono disabled:opacity-50"
 				>
 					doubleclick.net
 				</button>
 				<span>•</span>
 				<button
 					type="button"
+					disabled={checking}
 					onclick={() => setQuickCheck("google-analytics.com")}
-					class="underline hover:text-foreground font-mono"
+					class="underline hover:text-foreground font-mono disabled:opacity-50"
 				>
 					google-analytics.com
 				</button>
 				<span>•</span>
 				<button
 					type="button"
+					disabled={checking}
 					onclick={() => setQuickCheck("github.com")}
-					class="underline hover:text-foreground font-mono"
+					class="underline hover:text-foreground font-mono disabled:opacity-50"
 				>
 					github.com
 				</button>

@@ -155,6 +155,8 @@
 		toast.info("Changes discarded");
 	}
 
+	let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+
 	async function handleSave() {
 		if (!isDirty || !serverConfig) return;
 		saving = true;
@@ -180,7 +182,7 @@
 			syncFormFromConfig(payload);
 			toast.success("SQM CAKE configuration applied successfully");
 
-			setTimeout(async () => {
+			refreshTimer = setTimeout(async () => {
 				const [s, t] = await Promise.all([
 					trafficStatus().catch(() => null),
 					trafficTelemetry().catch(() => null),
@@ -197,14 +199,17 @@
 
 	onMount(() => {
 		loadAll(false);
-		const stopPolling = createPolling(() => {
-			Promise.allSettled([trafficStatus(), trafficTelemetry()]).then(([sRes, tRes]) => {
-				if (sRes.status === "fulfilled") status = sRes.value;
-				if (tRes.status === "fulfilled") telemetry = tRes.value;
-			});
-		}, 3000);
+		const stopPolling = createPolling(
+			() =>
+				Promise.allSettled([trafficStatus(), trafficTelemetry()]).then(([sRes, tRes]) => {
+					if (sRes.status === "fulfilled") status = sRes.value;
+					if (tRes.status === "fulfilled") telemetry = tRes.value;
+				}),
+			3000
+		);
 		return () => {
 			stopPolling();
+			clearTimeout(refreshTimer);
 		};
 	});
 </script>
