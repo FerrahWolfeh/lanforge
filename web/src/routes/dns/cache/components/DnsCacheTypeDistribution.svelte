@@ -18,17 +18,17 @@
 	} = $props();
 
 	const typeVariants: Record<string, string> = {
-		A: "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20 hover:bg-blue-500/20",
-		AAAA: "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20 hover:bg-purple-500/20",
-		CNAME: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20 hover:bg-amber-500/20",
-		PTR: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20",
-		TXT: "bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20 hover:bg-slate-500/20",
-		MX: "bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20 hover:bg-rose-500/20",
-		NS: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border-cyan-500/20 hover:bg-cyan-500/20",
-		SOA: "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/20 hover:bg-indigo-500/20",
-		SRV: "bg-teal-500/10 text-teal-600 dark:text-teal-400 border-teal-500/20 hover:bg-teal-500/20",
-		HTTPS: "bg-violet-500/10 text-violet-600 dark:text-violet-400 border-violet-500/20 hover:bg-violet-500/20",
-		SVCB: "bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-400 border-fuchsia-500/20 hover:bg-fuchsia-500/20",
+		A: "bg-muted text-muted-foreground border-border hover:bg-muted/70",
+		AAAA: "bg-muted text-muted-foreground border-border hover:bg-muted/70",
+		CNAME: "bg-muted text-muted-foreground border-border hover:bg-muted/70",
+		PTR: "bg-muted text-muted-foreground border-border hover:bg-muted/70",
+		TXT: "bg-muted text-muted-foreground border-border hover:bg-muted/70",
+		MX: "bg-muted text-muted-foreground border-border hover:bg-muted/70",
+		NS: "bg-muted text-muted-foreground border-border hover:bg-muted/70",
+		SOA: "bg-muted text-muted-foreground border-border hover:bg-muted/70",
+		SRV: "bg-muted text-muted-foreground border-border hover:bg-muted/70",
+		HTTPS: "bg-muted text-muted-foreground border-border hover:bg-muted/70",
+		SVCB: "bg-muted text-muted-foreground border-border hover:bg-muted/70",
 	};
 
 	const sortedTypes = $derived.by(() => {
@@ -106,7 +106,7 @@
 								: 'opacity-90 hover:opacity-100'}"
 						>
 							<span>{kind}</span>
-							<span class="opacity-75 font-normal text-[11px]"
+							<span class="opacity-75 font-normal text-xs"
 								>({count.toLocaleString()})</span
 							>
 						</Badge>

@@ -169,7 +169,7 @@
 
 <Dialog.Root bind:open>
 	<Dialog.Content
-		class="w-[95vw] max-w-lg sm:max-w-lg overflow-visible border shadow-lg"
+		class="w-[95vw] max-w-lg sm:max-w-lg overflow-visible border"
 	>
 		<Dialog.Header class="space-y-1">
 			<Dialog.Title
@@ -197,7 +197,7 @@
 					class="h-9 text-xs font-mono"
 					bind:value={domain}
 				/>
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-xs text-muted-foreground">
 					Supports exact domains (`app.lan`) or wildcard patterns
 					(`*.home.arpa`).
 				</p>
@@ -228,7 +228,7 @@
 						class="h-9 text-xs font-mono"
 						bind:value={staticAnswer}
 					/>
-					<p class="text-[11px] text-muted-foreground">
+					<p class="text-xs text-muted-foreground">
 						Answers <code class="font-mono text-primary font-semibold">{staticRtype}</code> queries
 						(the type follows the target).
 					</p>
@@ -296,7 +296,7 @@
 						{/if}
 					</div>
 
-					<p class="text-[11px] text-muted-foreground">
+					<p class="text-xs text-muted-foreground">
 						Answers with the device's live addresses; a fallback (optional) is used while
 						the device has no address of that family.
 					</p>

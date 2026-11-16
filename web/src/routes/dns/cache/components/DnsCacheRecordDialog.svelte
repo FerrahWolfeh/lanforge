@@ -143,7 +143,7 @@
 					<!-- Domain -->
 					<div>
 						<span
-							class="text-xs text-muted-foreground font-medium uppercase tracking-wider"
+							class="text-xs text-muted-foreground font-medium"
 						>
 							Domain Name
 						</span>
@@ -165,7 +165,7 @@
 							>
 								{#if copiedField === "Domain Name"}
 									<CheckIcon
-										class="h-3 w-3 text-emerald-500"
+										class="h-3 w-3 text-success"
 									/>
 								{:else}
 									<CopyIcon
@@ -179,7 +179,7 @@
 					<!-- Resolved Value -->
 					<div>
 						<span
-							class="text-xs text-muted-foreground font-medium uppercase tracking-wider"
+							class="text-xs text-muted-foreground font-medium"
 						>
 							Resolved Target / Answer
 						</span>
@@ -201,7 +201,7 @@
 							>
 								{#if copiedField === "Answer Data"}
 									<CheckIcon
-										class="h-3 w-3 text-emerald-500"
+										class="h-3 w-3 text-success"
 									/>
 								{:else}
 									<CopyIcon
@@ -231,7 +231,7 @@
 				<!-- Quick Action Toolbar -->
 				<div>
 					<span
-						class="text-xs font-medium text-muted-foreground uppercase tracking-wider block mb-2"
+						class="text-xs font-medium text-muted-foreground block mb-2"
 					>
 						Quick Actions
 					</span>
@@ -243,7 +243,7 @@
 							disabled={testingQuery}
 							onclick={handleTestQuery}
 						>
-							<SearchIcon class="h-3.5 w-3.5 text-blue-500" />
+							<SearchIcon class="h-3.5 w-3.5 text-muted-foreground" />
 							<span>Test Query</span>
 						</Button>
 
@@ -256,7 +256,7 @@
 							onclick={handleBlockDomain}
 						>
 							<ShieldAlertIcon
-								class="h-3.5 w-3.5 text-rose-500"
+								class="h-3.5 w-3.5 text-danger"
 							/>
 							<span>Block</span>
 						</Button>
@@ -269,7 +269,7 @@
 							onclick={handleAllowDomain}
 						>
 							<ShieldCheckIcon
-								class="h-3.5 w-3.5 text-emerald-500"
+								class="h-3.5 w-3.5 text-success"
 							/>
 							<span>Allow</span>
 						</Button>
@@ -281,7 +281,7 @@
 							onclick={handleCreateRewrite}
 						>
 							<ArrowRightLeftIcon
-								class="h-3.5 w-3.5 text-amber-500"
+								class="h-3.5 w-3.5 text-warning"
 							/>
 							<span>Rewrite</span>
 						</Button>

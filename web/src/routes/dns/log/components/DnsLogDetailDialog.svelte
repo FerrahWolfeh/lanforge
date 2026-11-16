@@ -177,61 +177,61 @@
 		if (filter?.action === "allow") {
 			return {
 				label: "Allowed (@@)",
-				class: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
+				class: "bg-success/10 text-success border-success/20",
 			};
 		}
 		const lower = (result || "").toLowerCase();
 		if (lower === "cachedblock" || lower === "cached_block" || (lower.includes("block") && cached)) {
 			return {
 				label: "Cached Block",
-				class: "bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/20",
+				class: "bg-warning/10 text-warning border-warning/20",
 			};
 		}
 		if (lower.includes("block") || lower.includes("deny")) {
 			return {
 				label: "Blocked",
-				class: "bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20",
+				class: "bg-danger/10 text-danger border-danger/20",
 			};
 		}
 		if (lower === "rewritten" || lower.includes("rewrite")) {
 			return {
 				label: "Rewritten",
-				class: "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20",
+				class: "bg-selected text-selected-foreground border-transparent",
 			};
 		}
 		if (lower === "local") {
 			return {
 				label: "Local",
-				class: "bg-teal-500/10 text-teal-600 dark:text-teal-400 border-teal-500/20",
+				class: "bg-muted text-muted-foreground border-border",
 			};
 		}
 		if (lower === "nxdomain") {
 			return {
 				label: "NXDomain",
-				class: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
+				class: "bg-warning/10 text-warning border-warning/20",
 			};
 		}
 		if (lower === "error") {
 			return {
 				label: "Error",
-				class: "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20",
+				class: "bg-danger/10 text-danger border-danger/20",
 			};
 		}
 		if (cached || lower === "cached") {
 			return {
 				label: "Cached",
-				class: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
+				class: "bg-success/10 text-success border-success/20",
 			};
 		}
 		if (lower === "coalesced") {
 			return {
 				label: "Coalesced",
-				class: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border-cyan-500/20",
+				class: "bg-info/10 text-info border-info/20",
 			};
 		}
 		return {
 			label: "Forwarded",
-			class: "bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/20",
+			class: "bg-muted text-muted-foreground border-border",
 		};
 	}
 
@@ -241,7 +241,7 @@
 </script>
 
 <Dialog.Root bind:open>
-	<Dialog.Content class="w-[95vw] max-w-lg sm:max-w-lg border shadow-lg">
+	<Dialog.Content class="w-[95vw] max-w-lg sm:max-w-lg border">
 		<Dialog.Header class="space-y-1 min-w-0 pr-6">
 			<div class="flex items-center gap-2 min-w-0">
 				<Badge variant="outline" class="font-mono text-xs px-2 py-0.5 shrink-0">
@@ -262,7 +262,7 @@
 				<div class="grid grid-cols-1 gap-3 rounded-lg border p-3 bg-muted/20 min-w-0">
 					<!-- Domain -->
 					<div class="min-w-0">
-						<span class="text-[11px] text-muted-foreground font-medium uppercase tracking-wider block">
+						<span class="text-xs text-muted-foreground font-medium block">
 							Requested Domain
 						</span>
 						<div class="flex items-start justify-between gap-2 mt-1 min-w-0">
@@ -276,7 +276,7 @@
 								onclick={() => copyToClipboard(domainClean, "Domain Name")}
 							>
 								{#if copiedField === "Domain Name"}
-									<CheckIcon class="h-3 w-3 text-emerald-500" />
+									<CheckIcon class="h-3 w-3 text-success" />
 								{:else}
 									<CopyIcon class="h-3 w-3 text-muted-foreground" />
 								{/if}
@@ -286,7 +286,7 @@
 
 					<!-- Client Info -->
 					<div class="min-w-0">
-						<span class="text-[11px] text-muted-foreground font-medium uppercase tracking-wider block">
+						<span class="text-xs text-muted-foreground font-medium block">
 							Requesting Client
 						</span>
 						<div class="flex items-center justify-between gap-2 mt-1 min-w-0">
@@ -294,7 +294,7 @@
 								<LaptopIcon class="h-3.5 w-3.5 text-muted-foreground shrink-0" />
 								<span class="truncate">{clientLabel}</span>
 								{#if entry.src_mac}
-									<Badge variant="secondary" class="text-[10px] font-mono px-1 py-0 shrink-0">
+									<Badge variant="secondary" class="text-xs font-mono px-1 py-0 shrink-0">
 										{entry.src_mac}
 									</Badge>
 								{/if}
@@ -306,7 +306,7 @@
 								onclick={() => copyToClipboard(entry.src_ip, "Client IP")}
 							>
 								{#if copiedField === "Client IP"}
-									<CheckIcon class="h-3 w-3 text-emerald-500" />
+									<CheckIcon class="h-3 w-3 text-success" />
 								{:else}
 									<CopyIcon class="h-3 w-3 text-muted-foreground" />
 								{/if}
@@ -316,14 +316,14 @@
 
 					<!-- Resolution Outcome / Answer -->
 					<div class="min-w-0">
-						<span class="text-[11px] text-muted-foreground font-medium uppercase tracking-wider block">
+						<span class="text-xs text-muted-foreground font-medium block">
 							Resolution Result / Answer
 						</span>
 						<div class="flex items-start justify-between gap-2 mt-1 min-w-0">
 							<div class="flex flex-wrap items-center gap-2 min-w-0 flex-1">
 								<Badge
 									variant="outline"
-									class="text-[11px] font-mono border font-medium uppercase shrink-0 {badgeInfo.class}"
+									class="text-xs font-mono border font-medium uppercase shrink-0 {badgeInfo.class}"
 								>
 									{badgeInfo.label}
 								</Badge>
@@ -339,7 +339,7 @@
 									onclick={() => copyToClipboard(answerClean, "Answer")}
 								>
 									{#if copiedField === "Answer"}
-										<CheckIcon class="h-3 w-3 text-emerald-500" />
+										<CheckIcon class="h-3 w-3 text-success" />
 									{:else}
 										<CopyIcon class="h-3 w-3 text-muted-foreground" />
 									{/if}
@@ -373,15 +373,15 @@
 				{#if entry.filter}
 					<div class="rounded-lg border p-3 bg-muted/20 space-y-2">
 						<div class="flex items-center justify-between">
-							<span class="text-[11px] text-muted-foreground font-medium uppercase tracking-wider block">
+							<span class="text-xs text-muted-foreground font-medium block">
 								Filter Rule Attribution
 							</span>
 							{#if entry.filter.action === 'block'}
-								<Badge variant="outline" class="bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20 font-mono text-[10px]">
+								<Badge variant="outline" class="bg-danger/10 text-danger border-danger/20 font-mono text-xs">
 									Blocked by Filter
 								</Badge>
 							{:else}
-								<Badge variant="outline" class="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 font-mono text-[10px]">
+								<Badge variant="outline" class="bg-success/10 text-success border-success/20 font-mono text-xs">
 									Allowed Exception (@@)
 								</Badge>
 							{/if}
@@ -390,13 +390,13 @@
 						<div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs pt-1">
 							{#if entry.filter.rule}
 								<div>
-									<span class="text-[10px] text-muted-foreground block">Matched Rule</span>
+									<span class="text-xs text-muted-foreground block">Matched Rule</span>
 									<div class="flex items-center gap-1.5 mt-0.5">
 										<code class="font-mono text-xs bg-muted px-1.5 py-0.5 rounded font-medium text-foreground">
 											{entry.filter.rule}
 										</code>
 										{#if entry.filter.important}
-											<Badge variant="secondary" class="font-mono text-[9px] bg-amber-500/10 text-amber-600 border-amber-500/20">
+											<Badge variant="secondary" class="font-mono text-xs bg-warning/10 text-warning border-warning/20">
 												$important
 											</Badge>
 										{/if}
@@ -405,7 +405,7 @@
 							{/if}
 
 							<div>
-								<span class="text-[10px] text-muted-foreground block">Rule Origin</span>
+								<span class="text-xs text-muted-foreground block">Rule Origin</span>
 								<div class="font-mono text-xs text-foreground mt-0.5">
 									{#if entry.filter.origin.type === 'user_rule'}
 										Custom User Rule
@@ -428,9 +428,9 @@
 
 				<!-- Coalesced Batch Attribution -->
 				{#if entry.coalesce_id != null}
-					<div class="rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-3 text-xs space-y-1.5">
+					<div class="rounded-lg border border-info/30 bg-info/5 p-3 text-xs space-y-1.5">
 						<div class="flex items-center justify-between">
-							<div class="flex items-center gap-1.5 font-medium text-cyan-700 dark:text-cyan-300">
+							<div class="flex items-center gap-1.5 font-medium text-info">
 								<LayersIcon class="h-3.5 w-3.5" />
 								<span>
 									{#if entry.result === 'coalesced'}
@@ -440,11 +440,11 @@
 									{/if}
 								</span>
 							</div>
-							<Badge variant="outline" class="bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border-cyan-500/20 font-mono text-[10px]">
+							<Badge variant="outline" class="bg-info/10 text-info border-info/20 font-mono text-xs">
 								Batch #{entry.coalesce_id}
 							</Badge>
 						</div>
-						<p class="text-muted-foreground text-[11px] leading-relaxed">
+						<p class="text-muted-foreground text-xs leading-relaxed">
 							{#if entry.result === 'coalesced'}
 								This query arrived while an identical request was already in-flight to upstream resolvers. It was served in-memory from the leader's upstream response without generating extra network I/O.
 							{:else}
@@ -456,7 +456,7 @@
 
 				<!-- Quick Action Toolbar -->
 				<div>
-					<span class="text-[11px] font-medium text-muted-foreground uppercase tracking-wider block mb-2">
+					<span class="text-xs font-medium text-muted-foreground block mb-2">
 						Quick Administrative Actions
 					</span>
 					<div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -467,7 +467,7 @@
 							disabled={testingQuery}
 							onclick={handleTestQuery}
 						>
-							<SearchIcon class="h-3.5 w-3.5 text-blue-500" />
+							<SearchIcon class="h-3.5 w-3.5 text-muted-foreground" />
 							<span>Test Query</span>
 						</Button>
 
@@ -479,7 +479,7 @@
 							disabled={actionLoading}
 							onclick={handleBlockDomain}
 						>
-							<ShieldAlertIcon class="h-3.5 w-3.5 text-rose-500" />
+							<ShieldAlertIcon class="h-3.5 w-3.5 text-danger" />
 							<span>Block</span>
 						</Button>
 
@@ -490,7 +490,7 @@
 							disabled={actionLoading}
 							onclick={handleAllowDomain}
 						>
-							<ShieldCheckIcon class="h-3.5 w-3.5 text-emerald-500" />
+							<ShieldCheckIcon class="h-3.5 w-3.5 text-success" />
 							<span>Allow</span>
 						</Button>
 
@@ -500,7 +500,7 @@
 							class="h-8 text-xs justify-start gap-1.5"
 							onclick={handleCreateRewrite}
 						>
-							<ArrowRightLeftIcon class="h-3.5 w-3.5 text-amber-500" />
+							<ArrowRightLeftIcon class="h-3.5 w-3.5 text-warning" />
 							<span>Rewrite</span>
 						</Button>
 						{/if}
@@ -510,7 +510,7 @@
 				<!-- Log Noise Suppression (Device-targeted, a device setting: device_write) -->
 				{#if entry.src_mac && auth.can("device_write")}
 					<div class="rounded-lg border p-3 bg-muted/20 space-y-2">
-						<span class="text-[11px] font-medium text-muted-foreground uppercase tracking-wider block">
+						<span class="text-xs font-medium text-muted-foreground block">
 							Log Noise Suppression ({entry.src_hostname || entry.src_mac})
 						</span>
 						<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -521,7 +521,7 @@
 								disabled={actionLoading}
 								onclick={handleSilenceDomainForClient}
 							>
-								<EyeOffIcon class="h-3.5 w-3.5 text-purple-400" />
+								<EyeOffIcon class="h-3.5 w-3.5 text-muted-foreground" />
 								<span class="truncate">Silence domain for client</span>
 							</Button>
 
@@ -532,7 +532,7 @@
 								disabled={actionLoading}
 								onclick={handleSilenceClientEntirely}
 							>
-								<BellOffIcon class="h-3.5 w-3.5 text-purple-400" />
+								<BellOffIcon class="h-3.5 w-3.5 text-muted-foreground" />
 								<span class="truncate">Mute all logs from client</span>
 							</Button>
 						</div>

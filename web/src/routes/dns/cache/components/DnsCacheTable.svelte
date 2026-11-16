@@ -67,17 +67,17 @@
 	];
 
 	const typeVariants: Record<string, string> = {
-		A: "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20",
-		AAAA: "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20",
-		CNAME: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
-		PTR: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
-		TXT: "bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20",
-		MX: "bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20",
-		NS: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border-cyan-500/20",
-		SOA: "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/20",
-		SRV: "bg-teal-500/10 text-teal-600 dark:text-teal-400 border-teal-500/20",
-		HTTPS: "bg-violet-500/10 text-violet-600 dark:text-violet-400 border-violet-500/20",
-		SVCB: "bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-400 border-fuchsia-500/20",
+		A: "bg-muted text-muted-foreground border-border",
+		AAAA: "bg-muted text-muted-foreground border-border",
+		CNAME: "bg-muted text-muted-foreground border-border",
+		PTR: "bg-muted text-muted-foreground border-border",
+		TXT: "bg-muted text-muted-foreground border-border",
+		MX: "bg-muted text-muted-foreground border-border",
+		NS: "bg-muted text-muted-foreground border-border",
+		SOA: "bg-muted text-muted-foreground border-border",
+		SRV: "bg-muted text-muted-foreground border-border",
+		HTTPS: "bg-muted text-muted-foreground border-border",
+		SVCB: "bg-muted text-muted-foreground border-border",
 	};
 
 	function cleanDomain(raw: string): string {
@@ -220,7 +220,7 @@
 									>
 										{#if copiedItem === domainClean}
 											<CheckIcon
-												class="h-3.5 w-3.5 text-emerald-500"
+												class="h-3.5 w-3.5 text-success"
 											/>
 										{:else}
 											<CopyIcon
@@ -235,7 +235,7 @@
 							<Table.Cell>
 								<Badge
 									variant="outline"
-									class="px-2 py-0.5 text-[11px] font-mono border font-semibold {style}"
+									class="px-2 py-0.5 text-xs font-mono border font-semibold {style}"
 								>
 									{entry.kind}
 								</Badge>
@@ -248,13 +248,13 @@
 								<div class="flex items-center gap-1.5">
 									{#if dataClean === "no-data"}
 										<span
-											class="inline-flex items-center gap-1 text-muted-foreground/70 italic text-[11px]"
+											class="inline-flex items-center gap-1 text-muted-foreground/70 italic text-xs"
 										>
 											no-data
 										</span>
 									{:else if dataClean === "wire-error"}
 										<span
-											class="inline-flex items-center gap-1 text-rose-500/80 font-medium text-[11px]"
+											class="inline-flex items-center gap-1 text-danger font-medium text-xs"
 										>
 											wire-error
 										</span>
@@ -279,7 +279,7 @@
 										>
 											{#if copiedItem === dataClean}
 												<CheckIcon
-													class="h-3.5 w-3.5 text-emerald-500"
+													class="h-3.5 w-3.5 text-success"
 												/>
 											{:else}
 												<CopyIcon
@@ -295,7 +295,7 @@
 							<Table.Cell class="text-right font-mono text-xs">
 								<span
 									class={isExpiringSoon
-										? "text-amber-500 font-semibold"
+										? "text-warning font-semibold"
 										: "text-muted-foreground"}
 								>
 									{formatTtl(entry.expires_in_secs)}
@@ -357,7 +357,7 @@
 										<DropdownMenu.Item
 											onclick={() =>
 												handleQuickBlock(domainClean)}
-											class="gap-2 text-rose-500"
+											class="gap-2 text-danger"
 										>
 											<ShieldAlertIcon
 												class="h-3.5 w-3.5"
@@ -367,7 +367,7 @@
 										<DropdownMenu.Item
 											onclick={() =>
 												handleQuickAllow(domainClean)}
-											class="gap-2 text-emerald-500"
+											class="gap-2 text-success"
 										>
 											<ShieldCheckIcon
 												class="h-3.5 w-3.5"
@@ -385,7 +385,7 @@
 											class="gap-2"
 										>
 											<ArrowRightLeftIcon
-												class="h-3.5 w-3.5 text-amber-500"
+												class="h-3.5 w-3.5 text-warning"
 											/>
 											Create Rewrite
 										</DropdownMenu.Item>

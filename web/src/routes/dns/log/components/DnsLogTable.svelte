@@ -96,17 +96,17 @@
 	];
 
 	const typeVariants: Record<string, string> = {
-		A: "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20",
-		AAAA: "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20",
-		CNAME: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
-		PTR: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
-		TXT: "bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20",
-		MX: "bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20",
-		NS: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border-cyan-500/20",
-		SOA: "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/20",
-		SRV: "bg-teal-500/10 text-teal-600 dark:text-teal-400 border-teal-500/20",
-		HTTPS: "bg-violet-500/10 text-violet-600 dark:text-violet-400 border-violet-500/20",
-		SVCB: "bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-400 border-fuchsia-500/20",
+		A: "bg-muted text-muted-foreground border-border",
+		AAAA: "bg-muted text-muted-foreground border-border",
+		CNAME: "bg-muted text-muted-foreground border-border",
+		PTR: "bg-muted text-muted-foreground border-border",
+		TXT: "bg-muted text-muted-foreground border-border",
+		MX: "bg-muted text-muted-foreground border-border",
+		NS: "bg-muted text-muted-foreground border-border",
+		SOA: "bg-muted text-muted-foreground border-border",
+		SRV: "bg-muted text-muted-foreground border-border",
+		HTTPS: "bg-muted text-muted-foreground border-border",
+		SVCB: "bg-muted text-muted-foreground border-border",
 	};
 
 	function cleanDomain(raw: string): string {
@@ -183,7 +183,7 @@
 		if (filter?.action === "allow") {
 			return {
 				label: "Allowed (@@)",
-				class: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
+				class: "bg-success/10 text-success border-success/20",
 			};
 		}
 		const lower = (result || "").toLowerCase();
@@ -194,54 +194,54 @@
 		) {
 			return {
 				label: "Cached Block",
-				class: "bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/20",
+				class: "bg-warning/10 text-warning border-warning/20",
 			};
 		}
 		if (lower.includes("block") || lower.includes("deny")) {
 			return {
 				label: "Blocked",
-				class: "bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20",
+				class: "bg-danger/10 text-danger border-danger/20",
 			};
 		}
 		if (lower === "rewritten" || lower.includes("rewrite")) {
 			return {
 				label: "Rewritten",
-				class: "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20",
+				class: "bg-selected text-selected-foreground border-transparent",
 			};
 		}
 		if (lower === "local") {
 			return {
 				label: "Local",
-				class: "bg-teal-500/10 text-teal-600 dark:text-teal-400 border-teal-500/20",
+				class: "bg-muted text-muted-foreground border-border",
 			};
 		}
 		if (lower === "nxdomain") {
 			return {
 				label: "NXDomain",
-				class: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
+				class: "bg-warning/10 text-warning border-warning/20",
 			};
 		}
 		if (lower === "error") {
 			return {
 				label: "Error",
-				class: "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20",
+				class: "bg-danger/10 text-danger border-danger/20",
 			};
 		}
 		if (cached || lower === "cached") {
 			return {
 				label: "Cached",
-				class: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
+				class: "bg-success/10 text-success border-success/20",
 			};
 		}
 		if (lower === "coalesced") {
 			return {
 				label: "Coalesced",
-				class: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border-cyan-500/20",
+				class: "bg-info/10 text-info border-info/20",
 			};
 		}
 		return {
 			label: "Forwarded",
-			class: "bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/20",
+			class: "bg-muted text-muted-foreground border-border",
 		};
 	}
 
@@ -298,7 +298,7 @@
 		<DropdownMenu.Item
 			onclick={() =>
 				handleQuickBlock(domainClean)}
-			class="gap-2 text-rose-500"
+			class="gap-2 text-danger"
 		>
 			<ShieldAlertIcon
 				class="h-3.5 w-3.5"
@@ -308,7 +308,7 @@
 		<DropdownMenu.Item
 			onclick={() =>
 				handleQuickAllow(domainClean)}
-			class="gap-2 text-emerald-500"
+			class="gap-2 text-success"
 		>
 			<ShieldCheckIcon
 				class="h-3.5 w-3.5"
@@ -326,7 +326,7 @@
 			class="gap-2"
 		>
 			<ArrowRightLeftIcon
-				class="h-3.5 w-3.5 text-amber-500"
+				class="h-3.5 w-3.5 text-warning"
 			/>
 			Create Rewrite
 		</DropdownMenu.Item>
@@ -399,7 +399,7 @@
 			{@const style = typeVariants[entry.qtype] || "bg-secondary text-secondary-foreground border-border"}
 			{@const badgeInfo = getResultBadge(entry.result, entry.cached, entry.filter)}
 			<div
-				class="flex items-start gap-2 px-4 py-3 {entry.coalesce_id != null ? 'border-l-4 border-l-cyan-500/70' : ''}"
+				class="flex items-start gap-2 px-4 py-3 {entry.coalesce_id != null ? 'border-l-4 border-l-info/70' : ''}"
 			>
 				<button
 					class="flex flex-1 min-w-0 flex-col gap-1 text-left cursor-pointer"
@@ -408,27 +408,27 @@
 					<span class="flex items-baseline justify-between gap-2">
 						<span class="flex items-center gap-1.5 min-w-0">
 							{#if entry.result === "coalesced"}
-								<span class="shrink-0 font-mono text-[11px] text-cyan-600 dark:text-cyan-400">↳</span>
+								<span class="shrink-0 font-mono text-xs text-info">↳</span>
 							{/if}
 							<span class="truncate font-mono text-xs font-medium text-foreground">{domainClean}</span>
 							{#if entry.repeats > 1}
-								<span class="shrink-0 rounded border border-border bg-muted px-1 font-mono text-[10px] text-muted-foreground">
+								<span class="shrink-0 rounded border border-border bg-muted px-1 font-mono text-xs text-muted-foreground">
 									×{entry.repeats}
 								</span>
 							{/if}
 						</span>
-						<span class="shrink-0 font-mono text-[11px] text-muted-foreground">
+						<span class="shrink-0 font-mono text-xs text-muted-foreground">
 							{formatTime(entry.timestamp)}
 						</span>
 					</span>
-					<span class="flex items-center gap-1.5 flex-wrap text-[11px] text-muted-foreground">
+					<span class="flex items-center gap-1.5 flex-wrap text-xs text-muted-foreground">
 						<span class="truncate max-w-[45%] {entry.src_hostname ? 'text-foreground' : 'font-mono'}">
 							{entry.src_hostname || entry.src_ip}
 						</span>
-						<Badge variant="outline" class="px-1.5 py-0 text-[10px] font-mono border font-semibold {style}">
+						<Badge variant="outline" class="px-1.5 py-0 text-xs font-mono border font-semibold {style}">
 							{entry.qtype}
 						</Badge>
-						<Badge variant="outline" class="px-1.5 py-0 text-[10px] font-mono border font-semibold {badgeInfo.class}">
+						<Badge variant="outline" class="px-1.5 py-0 text-xs font-mono border font-semibold {badgeInfo.class}">
 							{badgeInfo.label}
 						</Badge>
 						<span class="font-mono">{formatLatency(entry.upstream_us)}</span>
@@ -465,7 +465,7 @@
 						{@const isBatchHovered = entry.coalesce_id != null && hoveredCoalesceId === entry.coalesce_id}
 						{@const batchSize = entry.coalesce_id != null ? (batchCounts.get(entry.coalesce_id) ?? 1) : 0}
 						<Table.Row
-							class="transition-colors cursor-pointer group {entry.coalesce_id != null ? 'border-l-4 border-l-cyan-500/70' : ''} {isBatchHovered ? 'bg-cyan-500/[0.08] dark:bg-cyan-500/[0.12]' : 'hover:bg-muted/50'}"
+							class="transition-colors cursor-pointer group {entry.coalesce_id != null ? 'border-l-4 border-l-info/70' : ''} {isBatchHovered ? 'bg-info/[0.08]' : 'hover:bg-muted/50'}"
 							onclick={() => inspectRecord(entry)}
 							onmouseenter={() => {
 								if (entry.coalesce_id != null) hoveredCoalesceId = entry.coalesce_id;
@@ -499,7 +499,7 @@
 											</span>
 										</div>
 										<span
-											class="text-[10px] font-mono text-muted-foreground truncate pl-5"
+											class="text-xs font-mono text-muted-foreground truncate pl-5"
 										>
 											{entry.src_ip}
 										</span>
@@ -525,7 +525,7 @@
 							<Table.Cell class="font-medium text-xs">
 								<div class="flex items-center gap-1.5 {isCoalesced ? 'pl-3' : ''}">
 									{#if isCoalesced}
-										<span class="text-cyan-600 dark:text-cyan-400 font-mono text-[11px] shrink-0" title="Coalesced into in-flight query">↳</span>
+										<span class="text-info font-mono text-xs shrink-0" title="Coalesced into in-flight query">↳</span>
 									{/if}
 									<span
 										class="truncate max-w-[220px] font-mono text-foreground font-medium"
@@ -535,7 +535,7 @@
 									</span>
 									{#if entry.repeats > 1}
 										<span
-											class="shrink-0 rounded border border-border bg-muted px-1 font-mono text-[10px] text-muted-foreground"
+											class="shrink-0 rounded border border-border bg-muted px-1 font-mono text-xs text-muted-foreground"
 											title={`${entry.repeats} identical queries from this client, folded into one line`}
 										>
 											×{entry.repeats}
@@ -555,7 +555,7 @@
 									>
 										{#if copiedItem === domainClean}
 											<CheckIcon
-												class="h-3.5 w-3.5 text-emerald-500"
+												class="h-3.5 w-3.5 text-success"
 											/>
 										{:else}
 											<CopyIcon
@@ -570,7 +570,7 @@
 							<Table.Cell>
 								<Badge
 									variant="outline"
-									class="px-2 py-0.5 text-[11px] font-mono border font-semibold {style}"
+									class="px-2 py-0.5 text-xs font-mono border font-semibold {style}"
 								>
 									{entry.qtype}
 								</Badge>
@@ -581,21 +581,21 @@
 								<div class="flex items-center gap-1.5 flex-wrap">
 									<Badge
 										variant="outline"
-										class="px-2 py-0.5 text-[11px] font-mono border font-semibold {badgeInfo.class}"
+										class="px-2 py-0.5 text-xs font-mono border font-semibold {badgeInfo.class}"
 										title={entry.filter?.rule ? `Rule: ${entry.filter.rule}` : undefined}
 									>
 										{badgeInfo.label}
 									</Badge>
 									{#if isLeader && batchSize > 1}
 										<span
-											class="inline-flex items-center px-1.5 py-0.5 text-[10px] rounded font-mono font-medium bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border border-cyan-500/20"
+											class="inline-flex items-center px-1.5 py-0.5 text-xs rounded font-mono font-medium bg-info/10 text-info border border-info/20"
 											title={`Leader of batch #${entry.coalesce_id} with ${batchSize} concurrent queries`}
 										>
 											Leader ({batchSize}x)
 										</span>
 									{:else if isCoalesced}
 										<span
-											class="text-[10px] text-cyan-600 dark:text-cyan-400 font-mono"
+											class="text-xs text-info font-mono"
 											title={`In-flight multiplexed from batch #${entry.coalesce_id}`}
 										>
 											multiplex

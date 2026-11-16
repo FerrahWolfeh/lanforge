@@ -250,7 +250,7 @@
 						<HistoryIcon class="size-3.5 text-primary" />
 						<span>Query History</span>
 						{#if historyTotal > 0}
-							<Badge variant="secondary" class="ml-1 px-1.5 py-0 text-[10px] font-mono">
+							<Badge variant="secondary" class="ml-1 px-1.5 py-0 text-xs font-mono">
 								{historyTotal.toLocaleString()}
 							</Badge>
 						{/if}
@@ -259,12 +259,12 @@
 					<Tabs.Trigger value="live" class="gap-1.5 text-xs shrink-0">
 						<RadioIcon
 							class="size-3.5 {isLiveConnected && !isLivePaused
-								? 'text-emerald-500 animate-pulse'
+								? 'text-success'
 								: 'text-muted-foreground'}"
 						/>
 						<span>Live Stream</span>
 						{#if liveEntries.length > 0}
-							<Badge variant="secondary" class="ml-1 px-1.5 py-0 text-[10px] font-mono">
+							<Badge variant="secondary" class="ml-1 px-1.5 py-0 text-xs font-mono">
 								{liveEntries.length}
 							</Badge>
 						{/if}
