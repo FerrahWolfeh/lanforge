@@ -18,7 +18,7 @@
 	import ArrowUpIcon from "@lucide/svelte/icons/arrow-up";
 	import { formatBytes } from "$lib/utils";
 
-	import type { SqmOverhead, SqmDiffserv, NetworkInterfaceInfo, TrafficTelemetryResponse } from "$lib/api/types";
+	import type { SqmOverhead, SqmDiffserv, NetworkInterfaceInfo, TrafficTelemetryResponse, CakeTinStats } from "$lib/api/types";
 
 	let {
 		enabled = $bindable(false),
@@ -296,6 +296,27 @@
 
 				<!-- DiffServ Tins Detailed Priority Queues Table -->
 				{#if (telemetry.sqm.ingress?.tins.length ?? 0) > 0 || (telemetry.sqm.egress?.tins.length ?? 0) > 0}
+					{#snippet tinRow(tin: CakeTinStats, direction: string)}
+						<tr class="hover:bg-muted/20">
+							<td class="py-2 px-3 font-semibold text-foreground font-sans">{tin.name}</td>
+							<td class="py-2 px-3 text-center">
+								<Badge variant="outline" class="text-xs px-1 py-0 border-border text-muted-foreground font-sans">{direction}</Badge>
+							</td>
+							<td class="py-2 px-3 text-right">{tin.sent_packets.toLocaleString()}</td>
+							<td class="py-2 px-3 text-right">{formatBytes(tin.sent_bytes)}</td>
+							<td class="py-2 px-3 text-right">{tin.peak_delay_us} µs <span class="text-muted-foreground">({tin.avg_delay_us} µs)</span></td>
+							<td class="py-2 px-3 text-right">
+								<span class={tin.drops > 0 ? "text-warning" : "text-muted-foreground"}>{tin.drops} drops</span>
+								{#if tin.ecn_mark > 0}
+									<span class="text-muted-foreground ml-1">· {tin.ecn_mark} ecn</span>
+								{/if}
+							</td>
+							<td class="py-2 px-3 text-right">
+								<span class="text-foreground">{tin.sparse_flows}s</span> / <span class="text-muted-foreground">{tin.bulk_flows}b</span>
+							</td>
+						</tr>
+					{/snippet}
+
 					<div class="flex flex-col gap-1.5 pt-1">
 						<span class="text-xs font-semibold text-foreground">DiffServ Priority Tins Breakdown</span>
 						<div class="overflow-x-auto rounded-lg border border-border/50">
@@ -314,46 +335,12 @@
 								<tbody class="divide-y divide-border/40 font-mono text-xs">
 									{#if telemetry.sqm.ingress}
 										{#each telemetry.sqm.ingress.tins as tin (tin.tin_index)}
-											<tr class="hover:bg-muted/20">
-												<td class="py-2 px-3 font-semibold text-foreground font-sans">{tin.name}</td>
-												<td class="py-2 px-3 text-center">
-													<Badge variant="outline" class="text-xs px-1 py-0 border-border text-muted-foreground font-sans">Ingress</Badge>
-												</td>
-												<td class="py-2 px-3 text-right">{tin.sent_packets.toLocaleString()}</td>
-												<td class="py-2 px-3 text-right">{formatBytes(tin.sent_bytes)}</td>
-												<td class="py-2 px-3 text-right">{tin.peak_delay_us} µs <span class="text-muted-foreground">({tin.avg_delay_us} µs)</span></td>
-												<td class="py-2 px-3 text-right">
-													<span class={tin.drops > 0 ? "text-warning" : "text-muted-foreground"}>{tin.drops} drops</span>
-													{#if tin.ecn_mark > 0}
-														<span class="text-muted-foreground ml-1">· {tin.ecn_mark} ecn</span>
-													{/if}
-												</td>
-												<td class="py-2 px-3 text-right">
-													<span class="text-foreground">{tin.sparse_flows}s</span> / <span class="text-muted-foreground">{tin.bulk_flows}b</span>
-												</td>
-											</tr>
+											{@render tinRow(tin, "Ingress")}
 										{/each}
 									{/if}
 									{#if telemetry.sqm.egress}
 										{#each telemetry.sqm.egress.tins as tin (tin.tin_index)}
-											<tr class="hover:bg-muted/20">
-												<td class="py-2 px-3 font-semibold text-foreground font-sans">{tin.name}</td>
-												<td class="py-2 px-3 text-center">
-													<Badge variant="outline" class="text-xs px-1 py-0 border-border text-muted-foreground font-sans">Egress</Badge>
-												</td>
-												<td class="py-2 px-3 text-right">{tin.sent_packets.toLocaleString()}</td>
-												<td class="py-2 px-3 text-right">{formatBytes(tin.sent_bytes)}</td>
-												<td class="py-2 px-3 text-right">{tin.peak_delay_us} µs <span class="text-muted-foreground">({tin.avg_delay_us} µs)</span></td>
-												<td class="py-2 px-3 text-right">
-													<span class={tin.drops > 0 ? "text-warning" : "text-muted-foreground"}>{tin.drops} drops</span>
-													{#if tin.ecn_mark > 0}
-														<span class="text-muted-foreground ml-1">· {tin.ecn_mark} ecn</span>
-													{/if}
-												</td>
-												<td class="py-2 px-3 text-right">
-													<span class="text-foreground">{tin.sparse_flows}s</span> / <span class="text-muted-foreground">{tin.bulk_flows}b</span>
-												</td>
-											</tr>
+											{@render tinRow(tin, "Egress")}
 										{/each}
 									{/if}
 								</tbody>

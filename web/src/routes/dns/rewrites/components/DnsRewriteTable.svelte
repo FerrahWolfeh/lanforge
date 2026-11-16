@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { copyToClipboard } from "$lib/utils";
+	import { RECORD_TYPE_CLASS, recordTypeClass } from "$lib/components/dns/dnsLog";
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Table from "$lib/components/ui/table";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
@@ -54,21 +55,6 @@
 	let copiedItem = $state<string | null>(null);
 
 	const RECORD_TYPES: DnsRecordType[] = ["A", "AAAA", "CNAME", "DEVICE"];
-
-	const typeVariants: Record<string, string> = {
-		A: "bg-muted text-muted-foreground border-border",
-		AAAA: "bg-muted text-muted-foreground border-border",
-		DEVICE: "bg-muted text-muted-foreground border-border",
-		CNAME: "bg-muted text-muted-foreground border-border",
-		PTR: "bg-muted text-muted-foreground border-border",
-		TXT: "bg-muted text-muted-foreground border-border",
-		MX: "bg-muted text-muted-foreground border-border",
-		NS: "bg-muted text-muted-foreground border-border",
-		SOA: "bg-muted text-muted-foreground border-border",
-		SRV: "bg-muted text-muted-foreground border-border",
-		HTTPS: "bg-muted text-muted-foreground border-border",
-		SVCB: "bg-muted text-muted-foreground border-border",
-	};
 
 	function cleanDomain(raw: string): string {
 		if (!raw) return "";
@@ -175,9 +161,7 @@
 	{#each paginatedRules as rule, i (`${rule.id}-${rule.domain}-${rule.rtype}-${i}`)}
 						{@const domainClean = cleanDomain(rule.domain)}
 						{@const ans = formatRewriteAnswer(rule.answer)}
-						{@const style =
-							typeVariants[rule.rtype] ||
-							"bg-secondary text-secondary-foreground border-border"}
+						{@const style = rule.rtype === "DEVICE" ? RECORD_TYPE_CLASS : recordTypeClass(rule.rtype)}
 						{@const isDevice = ans.startsWith("dev:") || rule.rtype === "DEVICE"}
 
 						<Table.Row

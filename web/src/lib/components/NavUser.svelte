@@ -2,6 +2,7 @@
 	import { auth } from "$lib/stores/auth.svelte";
 	import { sidebarState } from "$lib/stores/sidebar.svelte";
 	import { changePassword } from "$lib/api/client";
+	import { passwordError } from "$lib/utils/validation";
 	import { goto } from "$app/navigation";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
@@ -56,12 +57,9 @@
 			toast.error("Please enter your current password");
 			return;
 		}
-		if (newPassword.length < 8) {
-			toast.error("New password must be at least 8 characters");
-			return;
-		}
-		if (newPassword !== confirmPassword) {
-			toast.error("New passwords do not match");
+		const problem = passwordError(newPassword, confirmPassword);
+		if (problem) {
+			toast.error(problem);
 			return;
 		}
 		changingPassword = true;

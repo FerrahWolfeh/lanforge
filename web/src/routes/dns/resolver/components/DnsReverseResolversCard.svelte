@@ -29,18 +29,7 @@
 	} = $props();
 
 	function formatResolverUri(r: ReverseResolverEntry): string {
-		if (!r) return "—";
-		if (typeof r.resolver === "string") return r.resolver;
-		if (typeof r.resolver_uri === "string") return r.resolver_uri;
-		if (r.resolver && typeof r.resolver === "object") {
-			const res = r.resolver as any;
-			if (res.target) return String(res.target);
-			if (res.addr)
-				return res.protocol
-					? `${res.protocol}://${res.addr}`
-					: String(res.addr);
-		}
-		return "—";
+		return r?.resolver ?? "—";
 	}
 </script>
 

@@ -75,7 +75,7 @@
 
 	function updatePill() {
 		if (!navEl) return;
-		const activeEl = navEl.querySelector<HTMLElement>('[aria-current="page"], [aria-selected="true"]');
+		const activeEl = navEl.querySelector<HTMLElement>('[aria-current="page"], [aria-current="true"]');
 		// On a narrow screen the active tab may sit past the edge: bring it into view (row only,
 		// never the page).
 		if (activeEl) {
@@ -161,8 +161,7 @@
 		{:else}
 			<button
 				type="button"
-				role="tab"
-				aria-selected={active}
+				aria-current={active ? "true" : undefined}
 				disabled={tab.disabled}
 				title={tab.title ?? tab.label}
 				onclick={() => {

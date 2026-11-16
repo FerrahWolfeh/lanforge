@@ -990,8 +990,8 @@ export interface DnsUpstreamsResponse {
 
 export interface ReverseResolverEntry {
 	subnet: string | { addr: string; prefix_len: number };
-	resolver?: string | { addr?: string; protocol?: string };
-	resolver_uri?: string;
+	/** The upstream as its URI (`UpstreamTarget` serializes to a string). */
+	resolver: string;
 }
 
 // ---------------------------------------------------------------------------

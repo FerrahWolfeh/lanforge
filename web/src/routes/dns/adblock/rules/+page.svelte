@@ -133,6 +133,32 @@
 	const filteredAllowlist = $derived(matching(allowRules));
 	const filteredCustomBlocks = $derived(matching(customBlocks));
 
+	/** Rules and filtered rules of the active tab: one table renders either list. */
+	const all = $derived(activeTab === "allow" ? allowRules : customBlocks);
+	const filtered = $derived(activeTab === "allow" ? filteredAllowlist : filteredCustomBlocks);
+
+	const TAB_VIEWS = {
+		allow: {
+			title: "Explicit Whitelist Exceptions",
+			description: "Domains on the allowlist always bypass blocklists, regex rules, and sinkhole policies.",
+			emptySearch: "No allowlist entries match your search.",
+			empty: "No whitelist exceptions added yet.",
+			enabledLabel: "Allowed",
+			enabledClass: "bg-success/10 text-success border-success/20 hover:bg-success/20",
+			removeTitle: "Remove from allowlist",
+		},
+		block: {
+			title: "Custom Domain Blacklist",
+			description: "User-defined domain blocks enforced alongside remote list subscriptions.",
+			emptySearch: "No custom blocks match your search.",
+			empty: "No manual domain blocks added yet.",
+			enabledLabel: "Blocked",
+			enabledClass: "bg-danger/10 text-danger border-danger/20 hover:bg-danger/20",
+			removeTitle: "Remove custom block",
+		},
+	};
+	const view = $derived(TAB_VIEWS[activeTab]);
+
 	const scopeLabel = $derived(group ? `group "${group}"` : "global");
 
 	async function selectScope(value: string) {
@@ -248,15 +274,15 @@
 		</Card.Root>
 		{/if}
 
-		<!-- Allowlist Tab Content -->
-		<Tabs.Content value="allow" class="m-0">
+		<!-- Rules table of the active tab -->
+		<Tabs.Content value={activeTab} class="m-0">
 			<Card.Root>
 				<Card.Header class="pb-3 border-b border-border/50">
 					<Card.Title class="text-sm font-semibold">
-						Explicit Whitelist Exceptions ({allowRules.length})
+						{view.title} ({all.length})
 					</Card.Title>
 					<Card.Description class="text-xs">
-						Domains on the allowlist always bypass blocklists, regex rules, and sinkhole policies.
+						{view.description}
 					</Card.Description>
 				</Card.Header>
 
@@ -271,7 +297,7 @@
 						</Table.Header>
 
 						<Table.Body>
-							{#if loading && allowRules.length === 0}
+							{#if loading && all.length === 0}
 								{#each Array(3) as _}
 									<Table.Row>
 										<Table.Cell><Skeleton class="h-4 w-60" /></Table.Cell>
@@ -279,18 +305,18 @@
 										<Table.Cell class="text-right"><Skeleton class="h-4 w-10 ml-auto" /></Table.Cell>
 									</Table.Row>
 								{/each}
-							{:else if filteredAllowlist.length === 0}
+							{:else if filtered.length === 0}
 								<Table.Row>
 									<Table.Cell colspan={3} class="h-28 text-center text-muted-foreground text-xs">
 										{#if searchQuery}
-											No allowlist entries match your search.
+											{view.emptySearch}
 										{:else}
-											No whitelist exceptions added yet.
+											{view.empty}
 										{/if}
 									</Table.Cell>
 								</Table.Row>
 							{:else}
-								{#each filteredAllowlist as entry, i (`${entry.domain}-${i}`)}
+								{#each filtered as entry, i (`${entry.domain}-${i}`)}
 									<Table.Row class="hover:bg-muted/40 transition-colors group">
 										<Table.Cell class="font-mono text-xs">
 											<div class="flex items-center gap-2">
@@ -319,8 +345,8 @@
 												title="Click to toggle rule status"
 											>
 												{#if entry.enabled}
-													<Badge variant="outline" class="bg-success/10 text-success border-success/20 text-xs font-mono cursor-pointer hover:bg-success/20">
-														Allowed
+													<Badge variant="outline" class="{view.enabledClass} text-xs font-mono cursor-pointer">
+														{view.enabledLabel}
 													</Badge>
 												{:else}
 													<Badge variant="outline" class="bg-muted text-muted-foreground border-border text-xs font-mono cursor-pointer hover:bg-muted/80">
@@ -337,103 +363,7 @@
 												size="sm"
 												onclick={() => handleRemoveRule(entry)}
 												class="size-7 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-												title="Remove from allowlist"
-											>
-												<Trash2Icon class="size-3.5" />
-											</Button>
-											{/if}
-										</Table.Cell>
-									</Table.Row>
-								{/each}
-							{/if}
-						</Table.Body>
-					</Table.Root>
-				</Card.Content>
-			</Card.Root>
-		</Tabs.Content>
-
-		<!-- Custom Blocklist Tab Content -->
-		<Tabs.Content value="block" class="m-0">
-			<Card.Root>
-				<Card.Header class="pb-3 border-b border-border/50">
-					<Card.Title class="text-sm font-semibold">
-						Custom Domain Blacklist ({customBlocks.length})
-					</Card.Title>
-					<Card.Description class="text-xs">
-						User-defined domain blocks enforced alongside remote list subscriptions.
-					</Card.Description>
-				</Card.Header>
-
-				<Card.Content class="p-0">
-					<Table.Root>
-						<Table.Header>
-							<Table.Row class="hover:bg-transparent">
-								<Table.Head class="w-[70%]">Domain</Table.Head>
-								<Table.Head class="w-[15%]">Status</Table.Head>
-								<Table.Head class="w-[15%] text-right">Action</Table.Head>
-							</Table.Row>
-						</Table.Header>
-
-						<Table.Body>
-							{#if filteredCustomBlocks.length === 0}
-								<Table.Row>
-									<Table.Cell colspan={3} class="h-28 text-center text-muted-foreground text-xs">
-										{#if searchQuery}
-											No custom blocks match your search.
-										{:else}
-											No manual domain blocks added yet.
-										{/if}
-									</Table.Cell>
-								</Table.Row>
-							{:else}
-								{#each filteredCustomBlocks as entry, i (`${entry.domain}-${i}`)}
-									<Table.Row class="hover:bg-muted/40 transition-colors group">
-										<Table.Cell class="font-mono text-xs">
-											<div class="flex items-center gap-2">
-												<span class="font-medium text-foreground" title={entry.domain}>{ruleLabel(entry)}</span>
-												<button
-													type="button"
-													onclick={() => copyDomain(ruleLabel(entry))}
-													class="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 hover:text-primary rounded text-muted-foreground"
-													title="Copy domain"
-												>
-													{#if copiedDomain === ruleLabel(entry)}
-														<CheckIcon class="size-3 text-success" />
-													{:else}
-														<CopyIcon class="size-3" />
-													{/if}
-												</button>
-											</div>
-										</Table.Cell>
-
-										<Table.Cell>
-											<button
-												type="button"
-												onclick={() => handleToggleStatus(entry)}
-												disabled={!canEdit}
-												class="transition-transform active:scale-95"
-												title="Click to toggle rule status"
-											>
-												{#if entry.enabled}
-													<Badge variant="outline" class="bg-danger/10 text-danger border-danger/20 text-xs font-mono cursor-pointer hover:bg-danger/20">
-														Blocked
-													</Badge>
-												{:else}
-													<Badge variant="outline" class="bg-muted text-muted-foreground border-border text-xs font-mono cursor-pointer hover:bg-muted/80">
-														Disabled
-													</Badge>
-												{/if}
-											</button>
-										</Table.Cell>
-
-										<Table.Cell class="text-right">
-											{#if canEdit}
-											<Button
-												variant="ghost"
-												size="sm"
-												onclick={() => handleRemoveRule(entry)}
-												class="size-7 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-												title="Remove custom block"
+												title={view.removeTitle}
 											>
 												<Trash2Icon class="size-3.5" />
 											</Button>

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { RECORD_TYPES, cleanDomain, cleanAnswer, quickDnsRule } from "$lib/components/dns/dnsLog";
+	import { RECORD_TYPES, cleanDomain, cleanAnswer, quickDnsRule, recordTypeClass } from "$lib/components/dns/dnsLog";
 	import { copyToClipboard } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Table from "$lib/components/ui/table";
@@ -50,20 +50,6 @@
 	let copiedItem = $state<string | null>(null);
 	let selectedRecord = $state<DnsCacheEntry | null>(null);
 	let dialogOpen = $state(false);
-
-	const typeVariants: Record<string, string> = {
-		A: "bg-muted text-muted-foreground border-border",
-		AAAA: "bg-muted text-muted-foreground border-border",
-		CNAME: "bg-muted text-muted-foreground border-border",
-		PTR: "bg-muted text-muted-foreground border-border",
-		TXT: "bg-muted text-muted-foreground border-border",
-		MX: "bg-muted text-muted-foreground border-border",
-		NS: "bg-muted text-muted-foreground border-border",
-		SOA: "bg-muted text-muted-foreground border-border",
-		SRV: "bg-muted text-muted-foreground border-border",
-		HTTPS: "bg-muted text-muted-foreground border-border",
-		SVCB: "bg-muted text-muted-foreground border-border",
-	};
 
 	function formatTtl(secs: number): string {
 		if (secs <= 0) return "Expiring...";
@@ -135,9 +121,7 @@
 	{#each entries as entry (entry.name + entry.kind + entry.data)}
 						{@const domainClean = cleanDomain(entry.name)}
 						{@const dataClean = cleanAnswer(entry.data)}
-						{@const style =
-							typeVariants[entry.kind] ||
-							"bg-secondary text-secondary-foreground border-border"}
+						{@const style = recordTypeClass(entry.kind)}
 						{@const isExpiringSoon = entry.expires_in_secs < 30}
 						<Table.Row
 							class="hover:bg-muted/50 transition-colors cursor-pointer group"

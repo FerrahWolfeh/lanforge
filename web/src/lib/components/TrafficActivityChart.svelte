@@ -396,6 +396,17 @@
 			color: dnsChartConfig.cached.color,
 		},
 	];
+
+	/** Interface filter chip: primary when selected, muted otherwise. `layout` adds the flex classes some chips need. */
+	function ifaceChipClass(selected: boolean, layout = "flex items-center gap-1"): string {
+		return [
+			"px-2 py-0.5 rounded text-xs font-mono transition-colors shrink-0",
+			layout,
+			selected
+				? "bg-primary text-primary-foreground font-semibold"
+				: "bg-muted/50 text-muted-foreground hover:text-foreground",
+		].filter(Boolean).join(" ");
+	}
 </script>
 
 <Card.Root class="relative overflow-hidden border-border/70 !py-0 !pt-0 [--card-spacing:0] gap-0">
@@ -458,6 +469,7 @@
 									? "bg-background text-foreground font-semibold"
 									: "text-muted-foreground hover:text-foreground",
 							].join(" ")}
+							aria-pressed={activeMode === "bandwidth"}
 							onclick={() => (activeMode = "bandwidth")}
 						>
 							<ActivityIcon class="size-3.5 text-muted-foreground" />
@@ -471,6 +483,7 @@
 									? "bg-background text-foreground font-semibold"
 									: "text-muted-foreground hover:text-foreground",
 							].join(" ")}
+							aria-pressed={activeMode === "dns"}
 							onclick={() => (activeMode = "dns")}
 						>
 							<GlobeIcon class="size-3.5 text-muted-foreground" />
@@ -552,12 +565,8 @@
 				{#if detectedWan}
 					<button
 						type="button"
-						class={[
-							"px-2 py-0.5 rounded text-xs font-mono transition-colors shrink-0 flex items-center gap-1",
-							effectiveSelectedIface === detectedWan
-								? "bg-primary text-primary-foreground font-semibold"
-								: "bg-muted/50 text-muted-foreground hover:text-foreground",
-						].join(" ")}
+						class={ifaceChipClass(effectiveSelectedIface === detectedWan)}
+						aria-pressed={effectiveSelectedIface === detectedWan}
 						onclick={() => (selectedIface = detectedWan)}
 						title="Active Gateway WAN interface"
 					>
@@ -570,12 +579,8 @@
 				{#if detectedLan && detectedLan !== detectedWan}
 					<button
 						type="button"
-						class={[
-							"px-2 py-0.5 rounded text-xs font-mono transition-colors shrink-0 flex items-center gap-1",
-							effectiveSelectedIface === detectedLan
-								? "bg-primary text-primary-foreground font-semibold"
-								: "bg-muted/50 text-muted-foreground hover:text-foreground",
-						].join(" ")}
+						class={ifaceChipClass(effectiveSelectedIface === detectedLan)}
+						aria-pressed={effectiveSelectedIface === detectedLan}
 						onclick={() => (selectedIface = detectedLan)}
 						title="Local Network interface"
 					>
@@ -588,12 +593,8 @@
 				{#each vpnInterfaces as vpn (vpn)}
 					<button
 						type="button"
-						class={[
-							"px-2 py-0.5 rounded text-xs font-mono transition-colors shrink-0 flex items-center gap-1",
-							effectiveSelectedIface === vpn
-								? "bg-primary text-primary-foreground font-semibold"
-								: "bg-muted/50 text-muted-foreground hover:text-foreground",
-						].join(" ")}
+						class={ifaceChipClass(effectiveSelectedIface === vpn)}
+						aria-pressed={effectiveSelectedIface === vpn}
 						onclick={() => (selectedIface = vpn)}
 						title="Virtual Private Network overlay"
 					>
@@ -606,12 +607,8 @@
 				{#if detectedIngress}
 					<button
 						type="button"
-						class={[
-							"px-2 py-0.5 rounded text-xs font-mono transition-colors shrink-0 flex items-center gap-1",
-							effectiveSelectedIface === detectedIngress
-								? "bg-primary text-primary-foreground font-semibold"
-								: "bg-muted/50 text-muted-foreground hover:text-foreground",
-						].join(" ")}
+						class={ifaceChipClass(effectiveSelectedIface === detectedIngress)}
+						aria-pressed={effectiveSelectedIface === detectedIngress}
 						onclick={() => (selectedIface = detectedIngress)}
 						title="Kernel IFB queue redirect mirror for SQM ingress traffic shaping"
 					>
@@ -624,12 +621,7 @@
 				{#if containerInterfaces.length > 0 || otherInterfaces.length > 0}
 					<DropdownMenu.Root>
 						<DropdownMenu.Trigger
-							class={[
-								"px-2 py-0.5 rounded text-xs font-mono transition-colors shrink-0 flex items-center gap-1 cursor-pointer border border-border/40",
-								isContainerOrOtherSelected
-									? "bg-primary text-primary-foreground font-semibold"
-									: "bg-muted/50 text-muted-foreground hover:text-foreground",
-							].join(" ")}
+							class={ifaceChipClass(isContainerOrOtherSelected, "flex items-center gap-1 cursor-pointer border border-border/40")}
 							title="Container virtual devices (Podman/Docker) and secondary interfaces"
 						>
 							<BoxesIcon class="size-3 text-muted-foreground" />
@@ -665,12 +657,8 @@
 				<!-- 6. All Interfaces (Excludes IFB mirrors from aggregation) -->
 				<button
 					type="button"
-					class={[
-						"px-2 py-0.5 rounded text-xs font-mono transition-colors shrink-0",
-						effectiveSelectedIface === "all"
-							? "bg-primary text-primary-foreground font-semibold"
-							: "bg-muted/50 text-muted-foreground hover:text-foreground",
-					].join(" ")}
+					class={ifaceChipClass(effectiveSelectedIface === "all", "")}
+					aria-pressed={effectiveSelectedIface === "all"}
 					onclick={() => (selectedIface = "all")}
 					title="Aggregated throughput across physical interfaces (excludes SQM IFB mirrors)"
 				>

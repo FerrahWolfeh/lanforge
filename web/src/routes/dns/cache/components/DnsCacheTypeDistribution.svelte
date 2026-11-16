@@ -1,5 +1,6 @@
 <script lang="ts">
 	import * as Card from "$lib/components/ui/card";
+	import { RECORD_TYPE_CLASS, UNKNOWN_TYPE_CLASS, isRecordType } from "$lib/components/dns/dnsLog";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import FilterIcon from "@lucide/svelte/icons/filter";
@@ -15,20 +16,6 @@
 		selectedType?: string;
 		onSelectType?: (type: string) => void;
 	} = $props();
-
-	const typeVariants: Record<string, string> = {
-		A: "bg-muted text-muted-foreground border-border hover:bg-muted/70",
-		AAAA: "bg-muted text-muted-foreground border-border hover:bg-muted/70",
-		CNAME: "bg-muted text-muted-foreground border-border hover:bg-muted/70",
-		PTR: "bg-muted text-muted-foreground border-border hover:bg-muted/70",
-		TXT: "bg-muted text-muted-foreground border-border hover:bg-muted/70",
-		MX: "bg-muted text-muted-foreground border-border hover:bg-muted/70",
-		NS: "bg-muted text-muted-foreground border-border hover:bg-muted/70",
-		SOA: "bg-muted text-muted-foreground border-border hover:bg-muted/70",
-		SRV: "bg-muted text-muted-foreground border-border hover:bg-muted/70",
-		HTTPS: "bg-muted text-muted-foreground border-border hover:bg-muted/70",
-		SVCB: "bg-muted text-muted-foreground border-border hover:bg-muted/70",
-	};
 
 	const sortedTypes = $derived.by(() => {
 		if (!entriesByType) return [];
@@ -89,9 +76,7 @@
 				</button>
 
 				{#each sortedTypes as [kind, count] (kind)}
-					{@const style =
-						typeVariants[kind] ||
-						"bg-secondary text-secondary-foreground border-border"}
+					{@const style = isRecordType(kind) ? `${RECORD_TYPE_CLASS} hover:bg-muted/70` : UNKNOWN_TYPE_CLASS}
 					{@const isSelected = selectedType === kind}
 					<button
 						type="button"

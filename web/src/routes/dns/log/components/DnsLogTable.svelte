@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { RECORD_TYPES, cleanDomain, cleanAnswer, getResultBadge, quickDnsRule } from "$lib/components/dns/dnsLog";
+	import { RECORD_TYPES, cleanDomain, cleanAnswer, getResultBadge, quickDnsRule, recordTypeClass } from "$lib/components/dns/dnsLog";
 	import { copyToClipboard, formatClockTime, formatLatency } from "$lib/utils";
 	import { goto } from "$app/navigation";
 	import { auth } from "$lib/stores/auth.svelte";
@@ -81,20 +81,6 @@
 		{ value: "nxdomain", label: "NXDomain" },
 		{ value: "error", label: "Error" },
 	];
-
-	const typeVariants: Record<string, string> = {
-		A: "bg-muted text-muted-foreground border-border",
-		AAAA: "bg-muted text-muted-foreground border-border",
-		CNAME: "bg-muted text-muted-foreground border-border",
-		PTR: "bg-muted text-muted-foreground border-border",
-		TXT: "bg-muted text-muted-foreground border-border",
-		MX: "bg-muted text-muted-foreground border-border",
-		NS: "bg-muted text-muted-foreground border-border",
-		SOA: "bg-muted text-muted-foreground border-border",
-		SRV: "bg-muted text-muted-foreground border-border",
-		HTTPS: "bg-muted text-muted-foreground border-border",
-		SVCB: "bg-muted text-muted-foreground border-border",
-	};
 
 	async function copyItem(text: string, label: string) {
 		if (!(await copyToClipboard(text, label))) return;
@@ -269,7 +255,7 @@
 		{#each entries as entry, i (`${entry.timestamp}-${entry.src_ip}-${entry.domain}-${entry.qtype}-${i}`)}
 			{@const domainClean = cleanDomain(entry.domain)}
 			{@const answerClean = cleanAnswer(entry.answer)}
-			{@const style = typeVariants[entry.qtype] || "bg-secondary text-secondary-foreground border-border"}
+			{@const style = recordTypeClass(entry.qtype)}
 			{@const badgeInfo = getResultBadge(entry.result, entry.cached, entry.filter)}
 			<div
 				class="flex items-start gap-2 px-4 py-3 {entry.coalesce_id != null ? 'border-l-4 border-l-info/70' : ''}"
@@ -339,9 +325,7 @@
 	{#each entries as entry, i (`${entry.timestamp}-${entry.src_ip}-${entry.domain}-${entry.qtype}-${i}`)}
 						{@const domainClean = cleanDomain(entry.domain)}
 						{@const answerClean = cleanAnswer(entry.answer)}
-						{@const style =
-							typeVariants[entry.qtype] ||
-							"bg-secondary text-secondary-foreground border-border"}
+						{@const style = recordTypeClass(entry.qtype)}
 						{@const badgeInfo = getResultBadge(
 							entry.result,
 							entry.cached,

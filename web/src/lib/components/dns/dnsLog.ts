@@ -16,6 +16,20 @@ export const RECORD_TYPES: DnsRecordType[] = [
 	"SVCB",
 ];
 
+const RECORD_TYPE_SET = new Set<string>(RECORD_TYPES);
+
+/** Badge classes for a record type: muted for the known types, a neutral fallback otherwise. */
+export const RECORD_TYPE_CLASS = "bg-muted text-muted-foreground border-border";
+export const UNKNOWN_TYPE_CLASS = "bg-secondary text-secondary-foreground border-border";
+
+export function isRecordType(type: string): boolean {
+	return RECORD_TYPE_SET.has(type);
+}
+
+export function recordTypeClass(type: string): string {
+	return isRecordType(type) ? RECORD_TYPE_CLASS : UNKNOWN_TYPE_CLASS;
+}
+
 export function cleanDomain(raw: string): string {
 	if (!raw) return "";
 	return raw.trim().replace(/\.$/, "");
@@ -76,11 +90,7 @@ export function getResultBadge(result: string, cached: boolean, filter?: FilterM
 		};
 	}
 	const lower = (result || "").toLowerCase();
-	if (
-		lower === "cachedblock" ||
-		lower === "cached_block" ||
-		(lower.includes("block") && cached)
-	) {
+	if (lower === "cachedblock" || lower === "cached_block" || (lower.includes("block") && cached)) {
 		return {
 			label: "Cached Block",
 			class: "bg-warning/10 text-warning border-warning/20",

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { cleanDomain, cleanAnswer, getResultBadge, quickDnsRule } from "$lib/components/dns/dnsLog";
+	import { cleanDomain, cleanAnswer, getResultBadge, quickDnsRule, recordTypeClass } from "$lib/components/dns/dnsLog";
 	import { copyToClipboard, formatClockTime, formatLatency } from "$lib/utils";
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Table from "$lib/components/ui/table";
@@ -55,20 +55,6 @@
 	let freezeOnHover = $state(true);
 	let frozenEntries = $state<DnsQueryLogEntry[] | null>(null);
 	let copiedItem = $state<string | null>(null);
-
-	const typeVariants: Record<string, string> = {
-		A: "bg-muted text-muted-foreground border-border",
-		AAAA: "bg-muted text-muted-foreground border-border",
-		CNAME: "bg-muted text-muted-foreground border-border",
-		PTR: "bg-muted text-muted-foreground border-border",
-		TXT: "bg-muted text-muted-foreground border-border",
-		MX: "bg-muted text-muted-foreground border-border",
-		NS: "bg-muted text-muted-foreground border-border",
-		SOA: "bg-muted text-muted-foreground border-border",
-		SRV: "bg-muted text-muted-foreground border-border",
-		HTTPS: "bg-muted text-muted-foreground border-border",
-		SVCB: "bg-muted text-muted-foreground border-border",
-	};
 
 	async function copyItem(text: string, label: string) {
 		if (!(await copyToClipboard(text, label))) return;
@@ -254,7 +240,7 @@
 					{#each displayEntries as entry (entry._seq)}
 						{@const domainClean = cleanDomain(entry.domain)}
 						{@const answerClean = cleanAnswer(entry.answer)}
-						{@const style = typeVariants[entry.qtype] || "bg-secondary text-secondary-foreground border-border"}
+						{@const style = recordTypeClass(entry.qtype)}
 						{@const badgeInfo = getResultBadge(entry.result, entry.cached, entry.filter)}
 						{@const isCoalesced = entry.result === "coalesced"}
 						<Table.Row

@@ -382,6 +382,7 @@
 			<input
 				bind:this={inputEl}
 				bind:value={search}
+				aria-label="Search commands and pages"
 				placeholder="Type a command or search for a page..."
 				class="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
 			/>
@@ -391,7 +392,7 @@
 		</div>
 
 		<!-- Results List -->
-		<div class="max-h-80 overflow-y-auto p-2 space-y-1">
+		<div class="max-h-80 overflow-y-auto p-2 space-y-1" role="listbox" aria-label="Results">
 			{#if filteredItems.length === 0}
 				<div class="py-10 text-center text-xs text-muted-foreground">
 					No results found for "<span class="font-semibold text-foreground">{search}</span>".
@@ -403,6 +404,8 @@
 					{@const isDbgOnly = isNavDebugOnly(item)}
 					<button
 						type="button"
+						role="option"
+						aria-selected={isSelected}
 						class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-md text-left transition-colors cursor-pointer {isSelected
 							? 'bg-primary text-primary-foreground'
 							: 'hover:bg-muted/60 text-foreground'}"
