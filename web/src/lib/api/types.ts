@@ -659,6 +659,34 @@ export interface DeviceDnsResponse {
 	logging_off: boolean;
 }
 
+/** One client that asked for a domain over the last day. */
+export interface DnsDomainClient {
+	/** The device's MAC when known. */
+	mac: string | null;
+	name: string | null;
+	/** Busiest first. */
+	addresses: string[];
+	total: number;
+	blocked: number;
+	/** Unix seconds. */
+	last_seen: number;
+}
+
+/** One domain's DNS activity over the last day (`/dns/domains/{domain}`). */
+export interface DnsDomainResponse {
+	/** Normalized: lowercase, no trailing dot. */
+	domain: string;
+	since: number;
+	bucket_secs: number;
+	total: number;
+	blocked: number;
+	/** Unix seconds. */
+	last_seen: number | null;
+	rate: DeviceDnsBucket[];
+	/** Busiest first, at most 25. */
+	clients: DnsDomainClient[];
+}
+
 /** A port forward that reaches a device, as the daemon resolves it. */
 export interface DevicePortForward {
 	/** Position in the firewall's `port_forwards`. */
@@ -880,6 +908,8 @@ export interface TopClientEntry {
 	blocked_count?: number;
 	/** Every address counted in this row: one device's LAN and linked addresses. */
 	addresses?: string[];
+	/** The device's MAC when the row is a known device. */
+	mac?: string | null;
 }
 
 export interface QueryTypeEntry {

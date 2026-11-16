@@ -266,9 +266,13 @@
 							Requested Domain
 						</span>
 						<div class="flex items-start justify-between gap-2 mt-1 min-w-0">
-							<span class="font-mono font-medium text-xs break-all text-foreground min-w-0 flex-1 leading-relaxed">
+							<a
+								href={`/dns/domains/${encodeURIComponent(domainClean)}`}
+								class="font-mono font-medium text-xs break-all text-foreground min-w-0 flex-1 leading-relaxed hover:underline"
+								onclick={() => (open = false)}
+							>
 								{domainClean}
-							</span>
+							</a>
 							<Button
 								variant="ghost"
 								size="icon"
@@ -292,7 +296,15 @@
 						<div class="flex items-center justify-between gap-2 mt-1 min-w-0">
 							<div class="flex items-center gap-1.5 font-mono text-xs text-foreground min-w-0 truncate">
 								<LaptopIcon class="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-								<span class="truncate">{clientLabel}</span>
+								{#if entry.src_mac}
+									<a
+										href={`/network/devices/${encodeURIComponent(entry.src_mac)}`}
+										class="truncate hover:underline"
+										onclick={() => (open = false)}>{clientLabel}</a
+									>
+								{:else}
+									<span class="truncate">{clientLabel}</span>
+								{/if}
 								{#if entry.src_mac}
 									<Badge variant="secondary" class="text-xs font-mono px-1 py-0 shrink-0">
 										{entry.src_mac}

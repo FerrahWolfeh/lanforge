@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { goto } from "$app/navigation";
 	import { auth } from "$lib/stores/auth.svelte";
 	import * as Table from "$lib/components/ui/table";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
@@ -14,6 +15,7 @@
 	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 	import ArrowRightLeftIcon from "@lucide/svelte/icons/arrow-right-left";
 	import LaptopIcon from "@lucide/svelte/icons/laptop";
+	import GlobeIcon from "@lucide/svelte/icons/globe";
 	import { toast } from "svelte-sonner";
 	import { dnsBlock, dnsAllow } from "$lib/api/client";
 	import type { DnsQueryLogEntry, DnsRecordType, FilterMatch } from "$lib/api/types";
@@ -268,6 +270,15 @@
 			Inspect Log
 		</DropdownMenu.Item>
 		<DropdownMenu.Item
+			onclick={() => goto(`/dns/domains/${encodeURIComponent(domainClean)}`)}
+			class="gap-2"
+		>
+			<GlobeIcon
+				class="h-3.5 w-3.5 text-muted-foreground"
+			/>
+			Open domain stats
+		</DropdownMenu.Item>
+		<DropdownMenu.Item
 			onclick={() =>
 				copyToClipboard(
 					domainClean,
@@ -410,7 +421,11 @@
 							{#if entry.result === "coalesced"}
 								<span class="shrink-0 font-mono text-xs text-info">↳</span>
 							{/if}
-							<span class="truncate font-mono text-xs font-medium text-foreground">{domainClean}</span>
+							<a
+								href={`/dns/domains/${encodeURIComponent(domainClean)}`}
+								class="truncate font-mono text-xs font-medium text-foreground hover:underline"
+								onclick={(e) => e.stopPropagation()}>{domainClean}</a
+							>
 							{#if entry.repeats > 1}
 								<span class="shrink-0 rounded border border-border bg-muted px-1 font-mono text-xs text-muted-foreground">
 									×{entry.repeats}
@@ -422,9 +437,19 @@
 						</span>
 					</span>
 					<span class="flex items-center gap-1.5 flex-wrap text-xs text-muted-foreground">
-						<span class="truncate max-w-[45%] {entry.src_hostname ? 'text-foreground' : 'font-mono'}">
-							{entry.src_hostname || entry.src_ip}
-						</span>
+						{#if entry.src_mac}
+							<a
+								href={`/network/devices/${encodeURIComponent(entry.src_mac)}`}
+								class="truncate max-w-[45%] hover:underline {entry.src_hostname ? 'text-foreground' : 'font-mono'}"
+								onclick={(e) => e.stopPropagation()}
+							>
+								{entry.src_hostname || entry.src_ip}
+							</a>
+						{:else}
+							<span class="truncate max-w-[45%] {entry.src_hostname ? 'text-foreground' : 'font-mono'}">
+								{entry.src_hostname || entry.src_ip}
+							</span>
+						{/if}
 						<Badge variant="outline" class="px-1.5 py-0 text-xs font-mono border font-semibold {style}">
 							{entry.qtype}
 						</Badge>
@@ -492,11 +517,21 @@
 											<LaptopIcon
 												class="h-3.5 w-3.5 text-primary shrink-0"
 											/>
-											<span
-												class="truncate max-w-[150px] font-medium text-foreground text-xs"
-											>
-												{entry.src_hostname}
-											</span>
+											{#if entry.src_mac}
+												<a
+													href={`/network/devices/${encodeURIComponent(entry.src_mac)}`}
+													class="truncate max-w-[150px] font-medium text-foreground text-xs hover:underline"
+													onclick={(e) => e.stopPropagation()}
+												>
+													{entry.src_hostname}
+												</a>
+											{:else}
+												<span
+													class="truncate max-w-[150px] font-medium text-foreground text-xs"
+												>
+													{entry.src_hostname}
+												</span>
+											{/if}
 										</div>
 										<span
 											class="text-xs font-mono text-muted-foreground truncate pl-5"
@@ -512,11 +547,21 @@
 										<LaptopIcon
 											class="h-3.5 w-3.5 text-muted-foreground shrink-0"
 										/>
-										<span
-											class="truncate max-w-[150px] font-mono text-foreground text-xs"
-										>
-											{entry.src_ip}
-										</span>
+										{#if entry.src_mac}
+											<a
+												href={`/network/devices/${encodeURIComponent(entry.src_mac)}`}
+												class="truncate max-w-[150px] font-mono text-foreground text-xs hover:underline"
+												onclick={(e) => e.stopPropagation()}
+											>
+												{entry.src_ip}
+											</a>
+										{:else}
+											<span
+												class="truncate max-w-[150px] font-mono text-foreground text-xs"
+											>
+												{entry.src_ip}
+											</span>
+										{/if}
 									</div>
 								{/if}
 							</Table.Cell>
@@ -527,12 +572,14 @@
 									{#if isCoalesced}
 										<span class="text-info font-mono text-xs shrink-0" title="Coalesced into in-flight query">↳</span>
 									{/if}
-									<span
-										class="truncate max-w-[220px] font-mono text-foreground font-medium"
+									<a
+										href={`/dns/domains/${encodeURIComponent(domainClean)}`}
+										class="truncate max-w-[220px] font-mono text-foreground font-medium hover:underline"
 										title={domainClean}
+										onclick={(e) => e.stopPropagation()}
 									>
 										{domainClean}
-									</span>
+									</a>
 									{#if entry.repeats > 1}
 										<span
 											class="shrink-0 rounded border border-border bg-muted px-1 font-mono text-xs text-muted-foreground"

@@ -100,9 +100,13 @@
 						<div class="flex items-center justify-between p-3.5 hover:bg-muted/40 transition-colors group">
 							<div class="flex flex-col gap-1 min-w-0 pr-3 flex-1">
 								<div class="flex items-center gap-2 min-w-0">
-									<span class="font-mono text-xs font-semibold truncate text-foreground" title={item.domain}>
+									<a
+										href={`/dns/domains/${encodeURIComponent(item.domain)}`}
+										class="font-mono text-xs font-semibold truncate text-foreground hover:underline"
+										title={item.domain}
+									>
 										{item.domain}
-									</span>
+									</a>
 									<button
 										type="button"
 										onclick={() => copyText(item.domain)}
@@ -184,9 +188,18 @@
 						<div class="flex items-center justify-between p-3.5 hover:bg-muted/40 transition-colors">
 							<div class="flex flex-col gap-1 min-w-0 pr-3 flex-1">
 								<div class="flex items-center gap-2 min-w-0">
-									<span class="text-xs font-semibold truncate text-foreground">
-										{client.hostname || client.ip}
-									</span>
+									{#if client.mac}
+										<a
+											href={`/network/devices/${encodeURIComponent(client.mac)}`}
+											class="text-xs font-semibold truncate text-foreground hover:underline"
+										>
+											{client.hostname || client.ip}
+										</a>
+									{:else}
+										<span class="text-xs font-semibold truncate text-foreground">
+											{client.hostname || client.ip}
+										</span>
+									{/if}
 									{#if client.hostname}
 										<span class="text-xs font-mono text-muted-foreground">
 											({client.ip})

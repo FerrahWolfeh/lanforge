@@ -141,7 +141,7 @@
 			{#each entries as e, i (`${e.timestamp}-${e.domain}-${e.qtype}-${i}`)}
 				<li class="flex items-center gap-3 px-3 py-2 text-xs">
 					<span class="shrink-0 tabular-nums text-muted-foreground">{time(e.timestamp)}</span>
-					<span class="min-w-0 flex-1 truncate font-mono" title={e.domain}>{e.domain}</span>
+					<a href={`/dns/domains/${encodeURIComponent(e.domain.replace(/\.$/, ""))}`} class="min-w-0 flex-1 truncate font-mono hover:underline" title={e.domain}>{e.domain}</a>
 					{#if e.repeats > 1}
 						<span class="shrink-0 tabular-nums text-muted-foreground" title="{e.repeats} identical queries, folded into one line">×{e.repeats}</span>
 					{/if}

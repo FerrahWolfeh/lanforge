@@ -170,11 +170,12 @@
 								>
 									#{i + 1}
 								</div>
-								<span
-									class="font-semibold text-xs text-foreground font-mono truncate"
+								<a
+									href={`/dns/domains/${encodeURIComponent(item.domain)}`}
+									class="font-semibold text-xs text-foreground font-mono truncate hover:underline"
 								>
 									{item.domain}
-								</span>
+								</a>
 							</div>
 							<div class="flex flex-col items-end shrink-0">
 								<span

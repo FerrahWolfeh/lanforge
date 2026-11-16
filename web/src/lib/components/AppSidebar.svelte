@@ -136,6 +136,7 @@
 			return (
 				currentPath === "/dns" ||
 				currentPath.startsWith("/dns/resolver") ||
+				currentPath.startsWith("/dns/domains") ||
 				currentPath.startsWith("/dns/cache") ||
 				currentPath.startsWith("/dns/rewrites")
 			);

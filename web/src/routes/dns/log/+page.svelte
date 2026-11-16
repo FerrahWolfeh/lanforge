@@ -32,6 +32,8 @@
 	let selectedResult = $state("");
 	/** Set from `?client=` (a device's MAC link); empty means all clients. */
 	let selectedClient = $state("");
+	/** Set from `?domain=` (a domain page link): prefills the search and shows a chip. */
+	let selectedDomain = $state("");
 	let limit = $state(50);
 	let offset = $state(0);
 	let searchDebounce: ReturnType<typeof setTimeout> | null = null;
@@ -71,8 +73,19 @@
 		}
 	}
 
+	function dropParam(name: string) {
+		const url = new URL(page.url);
+		url.searchParams.delete(name);
+		replaceState(url, page.state);
+	}
+
 	function handleSearchInput(q: string) {
 		searchQuery = q;
+		// Typing something else replaces the domain filter.
+		if (selectedDomain && q !== selectedDomain) {
+			selectedDomain = "";
+			dropParam("domain");
+		}
 		offset = 0;
 		if (searchDebounce) clearTimeout(searchDebounce);
 		searchDebounce = setTimeout(() => {
@@ -110,6 +123,14 @@
 			liveEntries = [];
 			startLiveStream();
 		}
+	}
+
+	function clearDomain() {
+		selectedDomain = "";
+		searchQuery = "";
+		dropParam("domain");
+		offset = 0;
+		loadHistoricalLogs();
 	}
 
 	// --- Live SSE Stream Life-cycle ---
@@ -220,6 +241,8 @@
 			selectedResult = resultParam;
 		}
 		selectedClient = page.url.searchParams.get("client") ?? "";
+		selectedDomain = page.url.searchParams.get("domain") ?? "";
+		if (selectedDomain) searchQuery = selectedDomain;
 		loadHistoricalLogs();
 	});
 
@@ -261,8 +284,9 @@
 		{/snippet}
 	</PageHeader>
 
-	{#if selectedClient}
-		<div>
+	{#if selectedClient || selectedDomain}
+		<div class="flex flex-wrap gap-2">
+		{#if selectedClient}
 			<span class="inline-flex items-center gap-1.5 rounded-full bg-selected py-1 pr-1 pl-3 text-xs text-selected-foreground">
 				Client: <span class="font-mono">{selectedClient}</span>
 				<button
@@ -274,6 +298,20 @@
 					<XIcon class="size-3" />
 				</button>
 			</span>
+		{/if}
+		{#if selectedDomain}
+			<span class="inline-flex items-center gap-1.5 rounded-full bg-selected py-1 pr-1 pl-3 text-xs text-selected-foreground">
+				Domain: <span class="font-mono">{selectedDomain}</span>
+				<button
+					type="button"
+					class="inline-flex size-5 items-center justify-center rounded-full hover:bg-muted"
+					aria-label="Clear domain filter"
+					onclick={clearDomain}
+				>
+					<XIcon class="size-3" />
+				</button>
+			</span>
+		{/if}
 		</div>
 	{/if}
 

@@ -91,11 +91,20 @@
 									#{i + 1}
 								</div>
 								<div class="flex flex-col min-w-0">
-									<span
-										class="font-semibold text-xs text-foreground truncate"
-									>
-										{client.hostname || client.ip}
-									</span>
+									{#if client.mac}
+										<a
+											href={`/network/devices/${encodeURIComponent(client.mac)}`}
+											class="font-semibold text-xs text-foreground truncate hover:underline"
+										>
+											{client.hostname || client.ip}
+										</a>
+									{:else}
+										<span
+											class="font-semibold text-xs text-foreground truncate"
+										>
+											{client.hostname || client.ip}
+										</span>
+									{/if}
 									{#if client.hostname}
 										{@const others = (client.addresses?.length ?? 1) - 1}
 										<span
