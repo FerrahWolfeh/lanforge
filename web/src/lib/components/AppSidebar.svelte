@@ -4,6 +4,7 @@
 	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
 	import { auth } from "$lib/stores/auth.svelte";
 	import type { Permission } from "$lib/api/types";
+	import { formatBuild } from "$lib/utils";
 	import NavUser from "./NavUser.svelte";
 	import type { Component } from "svelte";
 
@@ -44,10 +45,16 @@
 
 	const currentPath = $derived(page.url.pathname as string);
 	const isCollapsed = $derived(onNavigate ? false : sidebarState.isCollapsed);
+	const shortVersion = $derived(capabilitiesState.version?.split("+", 1)[0] ?? null);
 	const subtitle = $derived(
-		[page.url.hostname, capabilitiesState.version ? `v${capabilitiesState.version}` : null]
+		[page.url.hostname, shortVersion ? `v${shortVersion}` : null]
 			.filter(Boolean)
 			.join(" · ") || "Router"
+	);
+	const subtitleTitle = $derived(
+		[page.url.hostname, formatBuild(capabilitiesState.version) || null]
+			.filter(Boolean)
+			.join(" · ") || subtitle
 	);
 
 	// Grouped by what the admin is doing, not by daemon module; URLs are unchanged.
@@ -163,7 +170,7 @@
 				<span class="text-sm font-bold tracking-tight text-foreground flex items-center font-sans">
 					Lanforge
 				</span>
-				<span class="text-xs text-muted-foreground font-mono truncate" title={subtitle}>
+				<span class="text-xs text-muted-foreground font-mono truncate" title={subtitleTitle}>
 					{subtitle}
 				</span>
 			</div>

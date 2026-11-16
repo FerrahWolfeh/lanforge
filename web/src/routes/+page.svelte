@@ -3,7 +3,7 @@
 	import * as Card from "$lib/components/ui/card";
 	import { Button } from "$lib/components/ui/button";
 	import { Skeleton } from "$lib/components/ui/skeleton";
-	import { formatBytes, formatIpv6Prefix, formatUptime, createPolling } from "$lib/utils";
+	import { formatBytes, formatBuild, formatIpv6Prefix, formatUptime, createPolling } from "$lib/utils";
 	import {
 		status,
 		dnsStats,
@@ -372,7 +372,7 @@
 					<dt class="text-muted-foreground">Memory</dt>
 					<dd class="text-right tabular-nums text-foreground">{rssBytes !== null ? formatBytes(rssBytes) : "—"}</dd>
 					<dt class="text-muted-foreground">Version</dt>
-					<dd class="text-right font-mono text-xs text-muted-foreground truncate self-center">{statusData?.version ?? "—"}</dd>
+					<dd class="text-right font-mono text-xs text-muted-foreground truncate self-center" title={statusData?.version ?? ""}>{statusData?.version ? formatBuild(statusData.version) : "—"}</dd>
 				</dl>
 			{/if}
 		</Card.Root>

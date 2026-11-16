@@ -133,15 +133,17 @@ export function formatIpv6Prefix(ip?: string | null, prefixLen = 64): string {
 }
 
 /**
- * A lanforge build token (`0.40.0+74ea33b0e126.1793720666[.dirty]`) as
- * `v0.40.0 · 74ea33b0e126` (`· local changes` for a dirty build).
+ * A lanforge build token (`0.63.0+c40879dc27e8.1762160000.0.1.0[.dirty]`) as
+ * `v0.63.0 · web v0.1.0 · c40879dc27e8` (`· local changes` for a dirty build).
  */
 export function formatBuild(token: string | null | undefined): string {
 	if (!token) return "";
 	const [version, meta] = token.split("+", 2);
 	if (!meta) return `v${version}`;
-	const [hash, , dirty] = meta.split(".");
-	return `v${version} · ${hash}${dirty === "dirty" ? " · local changes" : ""}`;
+	const dirty = meta.endsWith(".dirty");
+	const [hash, , ...webui] = (dirty ? meta.slice(0, -".dirty".length) : meta).split(".");
+	const webPart = webui.length ? ` · web v${webui.join(".")}` : "";
+	return `v${version}${webPart} · ${hash}${dirty ? " · local changes" : ""}`;
 }
 
 /**
