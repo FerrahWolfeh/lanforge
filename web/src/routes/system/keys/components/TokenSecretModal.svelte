@@ -7,14 +7,14 @@
 	import CopyIcon from "@lucide/svelte/icons/copy";
 	import CheckIcon from "@lucide/svelte/icons/check";
 	import { copyToClipboard } from "$lib/utils";
-	import type { AuthToken } from "$lib/api/types";
+	import type { GeneratedToken } from "$lib/api/types";
 
 	let {
 		open = $bindable(false),
 		token = null
 	}: {
 		open: boolean;
-		token: AuthToken | null;
+		token: GeneratedToken | null;
 	} = $props();
 
 	let hasCopied = $state(false);

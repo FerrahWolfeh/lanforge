@@ -10,7 +10,7 @@
 	import SparklesIcon from "@lucide/svelte/icons/sparkles";
 	import Loader2Icon from "@lucide/svelte/icons/loader-2";
 	import { generateToken } from "$lib/api/client";
-	import type { AuthToken, GenerateTokenRequest } from "$lib/api/types";
+	import type { GeneratedToken, GenerateTokenRequest } from "$lib/api/types";
 	import { toast } from "svelte-sonner";
 
 	let {
@@ -18,7 +18,7 @@
 		onCreated
 	}: {
 		open: boolean;
-		onCreated: (token: AuthToken) => void;
+		onCreated: (token: GeneratedToken) => void;
 	} = $props();
 
 	function defaultScopes(): Record<string, boolean> {

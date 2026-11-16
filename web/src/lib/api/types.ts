@@ -87,16 +87,32 @@ export interface UserInfo {
 	created_at: number;
 	updated_at: number;
 	last_login: number | null;
-	/** Only from `/auth/me`: what the server grants this session. */
-	permissions?: Permission[];
 }
 
+/** `/auth/me`: the caller and what the server grants this session (role for a password session,
+ * scopes for an API token). */
+export interface SessionUser {
+	username: string;
+	role: UserRole;
+	scopes: string[];
+	permissions: Permission[];
+}
+
+/** A key as `/auth/tokens` lists it (`AuthTokenEntry`). */
 export interface AuthToken {
-	id: number | string;
-	token?: string; // present only on generate
+	id: number;
 	name: string;
 	created_at: number;
 	last_used: number | null;
+	scopes: string[];
+	expires_at: number | null;
+}
+
+/** A key just generated or renewed (`AuthTokenResponse`): carries the secret once. */
+export interface GeneratedToken {
+	id: number;
+	token: string;
+	name: string;
 	scopes: string[];
 	expires_at: number | null;
 }

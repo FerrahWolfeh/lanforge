@@ -12,7 +12,7 @@
 	import Loader2Icon from "@lucide/svelte/icons/loader-2";
 	import { deleteToken, renewToken } from "$lib/api/client";
 	import { copyToClipboard, formatDateTime, formatTimeAgo, toMillis } from "$lib/utils";
-	import type { AuthToken } from "$lib/api/types";
+	import type { AuthToken, GeneratedToken } from "$lib/api/types";
 	import { toast } from "svelte-sonner";
 	import DataTableCard from "$lib/components/DataTableCard.svelte";
 
@@ -27,7 +27,7 @@
 		isLoading: boolean;
 		onRefresh: () => Promise<void> | void;
 		onOpenCreate: () => void;
-		onRenewed: (token: AuthToken) => void;
+		onRenewed: (token: GeneratedToken) => void;
 	} = $props();
 
 	let searchQuery = $state("");

@@ -5,7 +5,7 @@
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 
 	import { listTokens } from "$lib/api/client";
-	import type { AuthToken } from "$lib/api/types";
+	import type { AuthToken, GeneratedToken } from "$lib/api/types";
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
 	import TokenTable from "./components/TokenTable.svelte";
@@ -22,7 +22,7 @@
 
 	let isCreateOpen = $state(false);
 	let isSecretModalOpen = $state(false);
-	let newlyCreatedToken = $state<AuthToken | null>(null);
+	let newlyCreatedToken = $state<GeneratedToken | null>(null);
 
 	async function loadTokens(showSpinner = true) {
 		if (showSpinner) isRefreshing = true;
@@ -41,7 +41,7 @@
 		loadTokens(false);
 	});
 
-	function handleTokenCreatedOrRenewed(token: AuthToken) {
+	function handleTokenCreatedOrRenewed(token: GeneratedToken) {
 		newlyCreatedToken = token;
 		isSecretModalOpen = true;
 	}

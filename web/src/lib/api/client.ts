@@ -13,6 +13,8 @@ import type {
 	AdblockRulesImport,
 	AuthStatusResponse,
 	AuthToken,
+	GeneratedToken,
+	SessionUser,
 	BlockingMode,
 	DeviceDnsResponse,
 	DnsDomainResponse,
@@ -332,7 +334,7 @@ const del = <T>(path: string, body?: unknown, extraHeaders?: Record<string, stri
 export const authStatus = () => get<AuthStatusResponse>('/auth/status');
 export const login = (req: LoginRequest) => post<LoginResponse>('/auth/login', req);
 export const logout = () => post<void>('/auth/logout');
-export const me = () => get<UserInfo>('/auth/me');
+export const me = () => get<SessionUser>('/auth/me');
 /** Changing the password ends every session of the user; keep this one on the new token. */
 export const changePassword = async (current_password: string, new_password: string) => {
 	const res = await post<{ message: string; token?: string }>('/auth/change-password', {
@@ -344,13 +346,13 @@ export const changePassword = async (current_password: string, new_password: str
 export const listTokens = async (): Promise<AuthToken[]> =>
 	(await get<{ tokens: AuthToken[] }>('/auth/tokens')).tokens;
 
-export const generateToken = (req: GenerateTokenRequest) => post<AuthToken>('/auth/tokens', req);
+export const generateToken = (req: GenerateTokenRequest) => post<GeneratedToken>('/auth/tokens', req);
 
 export const deleteToken = (idOrName: string | number) =>
 	del<void>(`/auth/tokens/${encodeURIComponent(String(idOrName))}`);
 
 export const renewToken = (idOrName: string | number) =>
-	post<AuthToken>(`/auth/tokens/${encodeURIComponent(String(idOrName))}/renew`, {});
+	post<GeneratedToken>(`/auth/tokens/${encodeURIComponent(String(idOrName))}/renew`, {});
 
 export const validateToken = (token: string) =>
 	post<{ valid: boolean }>('/auth/validate', { token });

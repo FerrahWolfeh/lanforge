@@ -4,12 +4,12 @@
  */
 
 import { ApiError, getToken, logout, me, onTokenChange, setClientToken } from '$lib/api/client';
-import type { Permission, UserInfo } from '$lib/api/types';
+import type { Permission, SessionUser } from '$lib/api/types';
 
 function createAuthStore() {
 	// The client owns the token; this copy only makes it reactive.
 	let token = $state<string | null>(getToken());
-	let user = $state<UserInfo | null>(null);
+	let user = $state<SessionUser | null>(null);
 	let loading = $state(false);
 	onTokenChange((t) => {
 		token = t;
