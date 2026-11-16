@@ -40,12 +40,12 @@
 		"/dhcp/pools": "DHCP Pools",
 		"/dhcp/server": "DHCP Server Options",
 		"/tftp": "TFTP Server",
-		"/system": "System Status",
+		"/system": "Status & Services",
 		"/system/services": "Services",
 		"/system/database": "Database",
 		"/system/database/maintenance": "Database Maintenance",
 		"/system/database/backup": "Database Backup & Restore",
-		"/system/users": "Users",
+		"/system/users": "Users & Tokens",
 		"/system/keys": "API Tokens",
 	};
 

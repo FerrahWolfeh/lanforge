@@ -19,6 +19,8 @@
 	import HardDriveDownloadIcon from "@lucide/svelte/icons/hard-drive-download";
 	import DatabaseIcon from "@lucide/svelte/icons/database";
 	import UsersIcon from "@lucide/svelte/icons/users";
+	import ShieldBanIcon from "@lucide/svelte/icons/shield-ban";
+	import CpuIcon from "@lucide/svelte/icons/cpu";
 
 	interface Props {
 		onNavigate?: () => void;
@@ -43,44 +45,45 @@
 	const currentPath = $derived(page.url.pathname as string);
 	const isCollapsed = $derived(onNavigate ? false : sidebarState.isCollapsed);
 
+	// Grouped by what the admin is doing, not by daemon module; URLs are unchanged.
 	const navGroups: NavGroup[] = [
 		{
 			header: "OVERVIEW",
 			items: [
 				{ title: "Dashboard", href: "/", icon: LayoutDashboardIcon },
+				{ title: "Devices", href: "/network/devices", icon: MonitorIcon },
 			],
 		},
 		{
-			header: "NETWORK",
+			header: "INTERNET",
 			items: [
-				{ title: "Devices", href: "/network/devices", icon: MonitorIcon },
+				{ title: "PPPoE WAN", href: "/network/pppoe", icon: PlugZapIcon, cap: "pppoe" },
 				{ title: "Firewall", href: "/firewall", icon: ShieldIcon, cap: "firewall" },
 				{ title: "Traffic & SQM", href: "/network/traffic", icon: SlidersHorizontalIcon, cap: "traffic" },
-				{ title: "PPPoE WAN", href: "/network/pppoe", icon: PlugZapIcon, cap: "pppoe" },
+			],
+		},
+		{
+			header: "LAN",
+			items: [
+				{ title: "DHCP", href: "/dhcp/leases", icon: ServerIcon, cap: ["dhcp_v4", "dhcp_v6"] },
 				{ title: "IPv6 RA", href: "/network/ra", icon: WifiIcon, cap: "ra" },
+				{ title: "TFTP", href: "/tftp", icon: HardDriveDownloadIcon, cap: "tftp" },
 			],
 		},
 		{
 			header: "DNS",
 			items: [
-				{ title: "DNS Resolver", href: "/dns/resolver", icon: GlobeIcon, cap: "dns" },
+				{ title: "Resolver", href: "/dns/resolver", icon: GlobeIcon, cap: "dns" },
 				{ title: "Query Log", href: "/dns/log", icon: ActivityIcon, cap: "dns" },
-				{ title: "Adblock", href: "/dns/adblock", icon: ShieldIcon, cap: "adblock" },
-			],
-		},
-		{
-			header: "DHCP & BOOT",
-			items: [
-				{ title: "DHCP Server", href: "/dhcp/leases", icon: ServerIcon, cap: ["dhcp_v4", "dhcp_v6"] },
-				{ title: "TFTP Server", href: "/tftp", icon: HardDriveDownloadIcon, cap: "tftp" },
+				{ title: "Adblock", href: "/dns/adblock", icon: ShieldBanIcon, cap: "adblock" },
 			],
 		},
 		{
 			header: "SYSTEM",
 			items: [
-				{ title: "System Status", href: "/system", icon: ServerIcon },
+				{ title: "Status & Services", href: "/system", icon: CpuIcon },
 				{ title: "Database", href: "/system/database", icon: DatabaseIcon },
-				{ title: "Users & Access", href: "/system/users", icon: UsersIcon, perm: "admin" },
+				{ title: "Users & Tokens", href: "/system/users", icon: UsersIcon, perm: "admin" },
 			],
 		},
 	];
