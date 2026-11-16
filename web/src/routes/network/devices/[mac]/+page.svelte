@@ -34,10 +34,10 @@
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import StatusLine from "$lib/components/StatusLine.svelte";
 	import StatStrip, { type StatStripItem } from "$lib/components/StatStrip.svelte";
-	import HostDialog from "../../hosts/components/HostDialog.svelte";
 	import DeviceAdblockModal from "../components/DeviceAdblockModal.svelte";
 	import DeviceLinkedModal from "../components/DeviceLinkedModal.svelte";
 	import DeviceDnsPanel from "./components/DeviceDnsPanel.svelte";
+	import DeviceHostSheet from "./components/DeviceHostSheet.svelte";
 	import DeviceRecentQueries from "./components/DeviceRecentQueries.svelte";
 
 	import MonitorIcon from "@lucide/svelte/icons/monitor";
@@ -65,7 +65,9 @@
 	let adblock = $state<string | null>(null);
 
 	let hostOpen = $state(false);
-	let hostEditing = $state(false);
+	/** The device already has a static host rule (the sheet then edits it and can remove it). */
+	let hostReserved = $state(false);
+	/** What the reservation sheet starts from: the existing rule, or the device as it is now. */
 	let hostEntry = $state<HostConfigEntry | null>(null);
 	let adblockOpen = $state(false);
 	let linkedOpen = $state(false);
@@ -169,7 +171,12 @@
 		if (!f.by_device) return { v4: !f.rule.internal_ip.includes(":"), v6: f.rule.internal_ip.includes(":") };
 		return { v4: f.rule.family !== "ipv6", v6: f.rule.family !== "ipv4" };
 	}
-	const port = (r: PortForwardRule) => `${String(r.protocol).toUpperCase()} ${r.external_port}`;
+	/** "both" is TCP and UDP; the daemon's protocol names are otherwise shown upper-cased. */
+	const protocolLabel = (p: PortForwardRule["protocol"]) => {
+		const s = String(p).toLowerCase();
+		return s === "both" ? "TCP+UDP" : s.toUpperCase();
+	};
+	const port = (r: PortForwardRule) => `${protocolLabel(r.protocol)} ${r.external_port}`;
 
 	/** Only what is wrong: nothing is shown when the device is fine. */
 	const problems = $derived.by(() => {
@@ -266,26 +273,25 @@
 
 	async function openHost() {
 		if (!device) return;
+		let existing: HostConfigEntry | null = null;
 		if (device.origin === "Static") {
 			try {
 				const hosts = await hostList();
-				hostEntry = hosts.find((h) => h.mac.toLowerCase() === mac.toLowerCase()) ?? null;
+				existing = hosts.find((h) => h.mac.toLowerCase() === mac.toLowerCase()) ?? null;
 			} catch (err: any) {
 				toast.error(err?.message ?? "Failed to load the static host");
 				return;
 			}
-			hostEditing = hostEntry !== null;
-		} else {
-			hostEditing = false;
-			hostEntry = {
-				mac: device.mac,
-				hostname: named ? device.hostname : "",
-				v4_fixed: v4 ?? undefined,
-				v6_suffix: undefined,
-				ignore_dns_log: device.ignore_dns_log,
-				ignored_log_domains: device.ignored_log_domains,
-			};
 		}
+		hostReserved = existing !== null;
+		hostEntry = existing ?? {
+			mac: device.mac,
+			hostname: named ? device.hostname : "",
+			v4_fixed: v4 ?? undefined,
+			v6_suffix: undefined,
+			ignore_dns_log: device.ignore_dns_log,
+			ignored_log_domains: device.ignored_log_domains,
+		};
 		hostOpen = true;
 	}
 
@@ -345,6 +351,12 @@
 
 	const canDevice = $derived(auth.can("device_write"));
 	const canDns = $derived(auth.can("dns_write"));
+	const canFirewall = $derived(auth.can("config_write"));
+	/** A new forward targets the device by name (by MAC when it has none), so it follows the device. */
+	const forwardHref = $derived(
+		`/firewall?forward_to=${encodeURIComponent(`dev:${named ? device?.hostname : mac}`)}` +
+			(named ? `&forward_name=${encodeURIComponent(name)}` : "")
+	);
 	const kindLabel: Record<string, string> = { Gua: "global", Ula: "local", LinkLocal: "link-local" };
 </script>
 
@@ -518,7 +530,10 @@
 							{/each}
 						</ul>
 					{/if}
-					<footer class="flex justify-end border-t border-border px-3 py-2 text-xs">
+					<footer class="flex justify-end gap-4 border-t border-border px-3 py-2 text-xs">
+						{#if canFirewall}
+							<a href={forwardHref} class="font-medium text-selected-foreground hover:underline">Forward a port</a>
+						{/if}
 						<a href="/firewall" class="font-medium text-selected-foreground hover:underline">Firewall →</a>
 					</footer>
 				</section>
@@ -577,15 +592,17 @@
 	{/if}
 </div>
 
-<HostDialog
-	bind:open={hostOpen}
-	isEditing={hostEditing}
-	host={hostEntry}
-	prefill={hostEditing ? null : hostEntry}
-	devices={device ? [device] : []}
-	onSaved={async () => {
-		await loadDevice();
-	}}
-/>
+{#if device && hostEntry}
+	<DeviceHostSheet
+		bind:open={hostOpen}
+		mac={device.mac}
+		name={named ? name : device.mac}
+		reserved={hostReserved}
+		initial={hostEntry}
+		onSaved={async () => {
+			await Promise.all([loadDevice(), loadRules()]);
+		}}
+	/>
+{/if}
 <DeviceAdblockModal bind:open={adblockOpen} {device} onSaved={loadAdblock} />
 <DeviceLinkedModal bind:open={linkedOpen} {device} onSaved={loadDevice} />
