@@ -84,7 +84,7 @@
 												<Badge variant="secondary" class="text-xs px-1 py-0 font-normal">GUA</Badge>
 												<Badge variant="outline" class="text-xs px-1 py-0 font-normal text-muted-foreground border-border">Auto</Badge>
 											</div>
-										{:else if pref.source === "ula" && !pref.address}
+										{:else if pref.source === "auto_ula" || (pref.source === "ula" && !pref.address)}
 											<div class="flex items-center gap-1.5">
 												<span class="text-foreground">
 													{status?.active_ula_prefix

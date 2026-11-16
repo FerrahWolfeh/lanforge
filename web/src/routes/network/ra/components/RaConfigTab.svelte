@@ -87,8 +87,8 @@
 	}
 
 	function formatPrefixLabel(p: RaPrefix): string {
-		if (p.source === "auto_gua") {
-			return `auto_gua (/${p.prefix_len || 64})`;
+		if (p.source === "auto_gua" || p.source === "auto_ula") {
+			return `${p.source} (/${p.prefix_len || 64})`;
 		}
 		if (p.source === "ula") {
 			return p.address

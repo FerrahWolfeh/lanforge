@@ -1333,7 +1333,7 @@ export interface PppoeStatusResponse {
 // ---------------------------------------------------------------------------
 
 export type RouterPriority = 'low' | 'medium' | 'high';
-export type PrefixSource = 'static' | 'ula' | 'auto_gua';
+export type PrefixSource = 'static' | 'ula' | 'auto_ula' | 'auto_gua';
 
 export interface RaPrefix {
 	source: PrefixSource;
