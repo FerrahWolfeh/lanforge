@@ -68,7 +68,7 @@
 			{/if}
 			<span class="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
 				{#if Icon}<Icon class="size-3.5 shrink-0" />{/if}
-				<span class="truncate">{item.label}</span>
+				<span class="line-clamp-2 sm:line-clamp-1">{item.label}</span>
 			</span>
 			{#if item.bar !== undefined}
 				<span class="mt-0.5 block h-1 overflow-hidden rounded-full bg-muted" aria-hidden="true">

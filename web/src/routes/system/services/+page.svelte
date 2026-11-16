@@ -344,7 +344,7 @@
 						</span>
 					{/if}
 
-					<span class="w-20 text-right font-mono text-xs tabular-nums text-muted-foreground">
+					<span class="hidden w-20 text-right font-mono text-xs tabular-nums text-muted-foreground sm:inline">
 						{active || starting ? formatUptime(banner.uptime_secs) : ""}
 					</span>
 
@@ -355,7 +355,7 @@
 						class="w-24 justify-center capitalize shrink-0"
 					/>
 
-					<div class="flex w-full items-center justify-end gap-1.5 sm:w-auto">
+					<div class="ml-auto flex items-center justify-end gap-1.5">
 						{#if meta.canControl && isAdmin}
 							{#if inactive}
 								<Button

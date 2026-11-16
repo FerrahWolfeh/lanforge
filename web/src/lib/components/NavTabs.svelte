@@ -63,9 +63,28 @@
 	let navEl = $state<HTMLElement | null>(null);
 	let pillStyle = $state({ left: 0, top: 0, width: 0, height: 0, opacity: 0 });
 
+	// Which edges hide more tabs: drives the fade so a cut-off row reads as scrollable.
+	let fadeLeft = $state(false);
+	let fadeRight = $state(false);
+
+	function updateFades() {
+		if (!navEl) return;
+		fadeLeft = navEl.scrollLeft > 2;
+		fadeRight = navEl.scrollLeft + navEl.clientWidth < navEl.scrollWidth - 2;
+	}
+
 	function updatePill() {
 		if (!navEl) return;
 		const activeEl = navEl.querySelector<HTMLElement>('[aria-current="page"], [aria-selected="true"]');
+		// On a narrow screen the active tab may sit past the edge: bring it into view (row only,
+		// never the page).
+		if (activeEl) {
+			const left = activeEl.offsetLeft;
+			const right = left + activeEl.offsetWidth;
+			if (left < navEl.scrollLeft) navEl.scrollLeft = left - 8;
+			else if (right > navEl.scrollLeft + navEl.clientWidth) navEl.scrollLeft = right - navEl.clientWidth + 8;
+		}
+		updateFades();
 		if (activeEl) {
 			pillStyle = {
 				left: activeEl.offsetLeft,
@@ -93,10 +112,14 @@
 
 <nav
 	bind:this={navEl}
+	onscroll={updateFades}
 	class={[
 		"relative flex items-center gap-1 rounded-lg bg-card border border-border p-1 overflow-x-auto w-full no-scrollbar",
 		className,
 	].join(" ")}
+	style:mask-image={fadeLeft || fadeRight
+		? `linear-gradient(to right, ${fadeLeft ? "transparent, black 2rem" : "black"}, ${fadeRight ? "black calc(100% - 2rem), transparent" : "black"})`
+		: undefined}
 	aria-label={ariaLabel}
 >
 	<!-- Sliding Active Indicator Pill -->
