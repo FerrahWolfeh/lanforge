@@ -44,6 +44,11 @@
 
 	const currentPath = $derived(page.url.pathname as string);
 	const isCollapsed = $derived(onNavigate ? false : sidebarState.isCollapsed);
+	const subtitle = $derived(
+		[page.url.hostname, capabilitiesState.version ? `v${capabilitiesState.version}` : null]
+			.filter(Boolean)
+			.join(" · ") || "Router"
+	);
 
 	// Grouped by what the admin is doing, not by daemon module; URLs are unchanged.
 	const navGroups: NavGroup[] = [
@@ -158,8 +163,8 @@
 				<span class="text-sm font-bold tracking-tight text-foreground flex items-center font-sans">
 					Lanforge
 				</span>
-				<span class="text-xs text-muted-foreground font-normal">
-					Network Orchestrator
+				<span class="text-xs text-muted-foreground font-mono truncate" title={subtitle}>
+					{subtitle}
 				</span>
 			</div>
 		</a>

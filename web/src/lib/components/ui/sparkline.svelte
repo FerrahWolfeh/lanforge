@@ -1,7 +1,7 @@
 <script lang="ts">
 	let {
 		data,
-		color = "#38bdf8",
+		color = "var(--chart-1)",
 		height = 36,
 		class: className = "",
 	}: {

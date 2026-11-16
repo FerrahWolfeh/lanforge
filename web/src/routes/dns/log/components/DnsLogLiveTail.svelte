@@ -254,7 +254,7 @@
 				<Badge
 					variant="outline"
 					class="font-mono text-xs px-2 py-0.5 {isConnected && !isPaused
-						? 'border-success/30 bg-success/10 text-success dark:text-success'
+						? 'border-success/30 bg-success/10 text-success'
 						: 'border-border bg-secondary text-muted-foreground'}"
 				>
 					{isPaused ? "Paused" : isConnected ? "Streaming" : "Disconnected"}

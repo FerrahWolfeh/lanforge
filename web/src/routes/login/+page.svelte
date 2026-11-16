@@ -89,7 +89,7 @@
 
 	<!-- Centered Main Auth Card -->
 	<div
-		class="relative z-10 w-full max-w-[420px] rounded-lg  border border-border/80 bg-card/95 p-6 sm:p-8 backdrop-blur-xl transition-all"
+		class="relative z-10 w-full max-w-[420px] rounded-lg border border-border bg-card p-6 sm:p-8"
 	>
 		<!-- Header: Branding integrated inside the card -->
 		<div class="flex flex-col items-center text-center gap-3 pb-6">

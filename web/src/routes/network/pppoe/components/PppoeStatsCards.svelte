@@ -110,7 +110,6 @@
 	<StatCard
 		label="Public Address"
 		icon={GlobeIcon}
-		color="neutral"
 		popover={{
 			title: "Public address",
 			description: "The IPv4 address the ISP gave this session, and its gateway.",
@@ -139,7 +138,6 @@
 	<StatCard
 		label="ISP Server"
 		icon={ServerIcon}
-		color="neutral"
 		popover={{
 			title: "ISP server (access concentrator)",
 			description: "The ISP box that answered this router's PPPoE discovery.",

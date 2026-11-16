@@ -324,7 +324,7 @@
 
 		{#if setupStatus && (!setupStatus.first_run || setupStatus.is_provisioned)}
 			<!-- Already Provisioned Locked Card -->
-			<Card.Root class="border-border/60 bg-card/80 backdrop-blur-sm text-center p-8">
+			<Card.Root class="border-border bg-card text-center p-8">
 				<div class="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-success/10 text-success mb-4">
 					<ShieldCheckIcon class="h-8 w-8" />
 				</div>
@@ -379,7 +379,7 @@
 			</div>
 
 			<!-- Card Content -->
-			<Card.Root class="border-border/60 bg-card/80 backdrop-blur-sm">
+			<Card.Root class="border-border bg-card">
 				{#if errorMsg}
 					<div class="m-6 mb-0 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
 						{errorMsg}

@@ -37,7 +37,6 @@
 		label="Service"
 		value={serviceState ? serviceState.charAt(0).toUpperCase() + serviceState.slice(1) : "Inactive"}
 		icon={HardDriveDownloadIcon}
-		color={isServiceActive ? "emerald" : "zinc"}
 		subtext={enabled ? "Enabled in lanforge.toml" : "Disabled in lanforge.toml ([tftp] enabled = false)"}
 		{loading}
 	>
@@ -91,7 +90,6 @@
 		label="Listening On"
 		value={listenAddr || "—"}
 		icon={RadioIcon}
-		color="sky"
 		subtext={rootDir ? `Serving files from ${rootDir}` : ""}
 		{loading}
 	>

@@ -7,23 +7,14 @@
 	import Sparkline from "$lib/components/ui/sparkline.svelte";
 	import type { Component, Snippet } from "svelte";
 
-	export type StatCardColor =
-		| "emerald"
-		| "sky"
-		| "indigo"
-		| "teal"
-		| "violet"
-		| "amber"
-		| "rose"
-		| "primary"
-		| "zinc";
+	export type StatCardColor = "neutral" | "amber" | "rose";
 
 	let {
 		label,
 		value = null,
 		subtext = "",
 		icon: Icon,
-		color = "primary",
+		color = "neutral",
 		badge,
 		popover,
 		sparkline,
@@ -41,7 +32,7 @@
 		value?: string | number | null;
 		subtext?: string;
 		icon?: Component<{ class?: string }>;
-		color?: StatCardColor | string;
+		color?: StatCardColor;
 		badge?: { text: string; variant?: string; showDot?: boolean; pulse?: boolean };
 		popover?: { title: string; description?: string };
 		sparkline?: { data: number[]; color?: string; height?: number };
@@ -56,8 +47,7 @@
 		children?: Snippet;
 	} = $props();
 
-	// Colour is for state only: amber/rose read as warning/danger, every other colour name is the
-	// neutral icon chip (the names stay accepted so callers need not change at once).
+	// Colour is for state only: amber/rose read as warning/danger, neutral uses the muted chip.
 	const colorStyles = $derived.by(() => {
 		switch (color) {
 			case "amber":
