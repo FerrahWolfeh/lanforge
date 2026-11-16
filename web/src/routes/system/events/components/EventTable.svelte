@@ -317,6 +317,33 @@
 		</Button>
 	{/snippet}
 
+	{#snippet mobile()}
+		{#each paginatedEvents as ev (ev.id)}
+			<button
+				type="button"
+				class="flex w-full min-w-0 flex-col gap-1 px-4 py-3 text-left transition-colors hover:bg-muted/30"
+				onclick={() => inspectEvent(ev)}
+				title="Inspect raw event JSON"
+			>
+				<span class="flex items-center justify-between gap-2">
+					<span class="flex min-w-0 items-center gap-2">
+						<Badge
+							variant="outline"
+							class="text-xs font-medium {getTopicBadgeClass(ev.topic)}"
+						>
+							{ev.topic || "system"}
+						</Badge>
+						<span class="truncate font-mono text-xs font-medium text-foreground">{ev.kind}</span>
+					</span>
+					<span class="shrink-0 font-mono text-xs text-muted-foreground">{formatTime(ev.ts)}</span>
+				</span>
+				<span class="break-words text-xs text-foreground">
+					{formatEventPayload(ev.data, ev.kind, ev.device_info, ev.interface_info, ev.service_info)}
+				</span>
+			</button>
+		{/each}
+	{/snippet}
+
 	{#snippet header()}
 		<Table.Head class="w-[95px] sm:w-[105px] text-xs font-semibold">Time</Table.Head>
 		<Table.Head class="w-[95px] sm:w-[110px] text-xs font-semibold">Subsystem</Table.Head>

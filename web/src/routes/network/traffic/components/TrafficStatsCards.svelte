@@ -15,6 +15,7 @@
 	import StatusBadge from "$lib/components/StatusBadge.svelte";
 	import StatusDot from "$lib/components/StatusDot.svelte";
 	import { formatBytes, formatBps } from "$lib/utils";
+	import { IsMobile } from "$lib/hooks/is-mobile.svelte";
 
 	import type { TrafficStatusResponse, TrafficTelemetryResponse } from "$lib/api/types";
 
@@ -27,6 +28,7 @@
 
 	const sqmWaiting = $derived(!!status?.flow_offload_suppressed && !status?.sqm_active);
 	const wanIface = $derived(telemetry?.wan_interface ?? status?.wan_interface);
+	const isMobile = new IsMobile();
 
 </script>
 
@@ -115,6 +117,43 @@
 				</div>
 			</Card.Header>
 			<Card.Content class="p-0">
+				{#if isMobile.current}
+					<div class="divide-y divide-border/60">
+						{#each telemetry.interfaces as iface (iface.interface)}
+							<div class="flex flex-col gap-1 px-4 py-3">
+								<div class="flex items-center justify-between gap-2">
+									<span class="flex min-w-0 items-center gap-2">
+										<StatusDot state="online" size="sm" />
+										<span class="truncate font-mono text-sm font-semibold text-foreground">{iface.interface}</span>
+										{#if iface.interface === wanIface || iface.interface.startsWith("ppp")}
+											<Badge variant="outline" class="text-xs px-1 py-0 border-border text-muted-foreground">WAN</Badge>
+										{:else if iface.interface.startsWith("lan") || iface.interface.startsWith("br-")}
+											<Badge variant="outline" class="text-xs px-1 py-0 border-border text-muted-foreground">LAN</Badge>
+										{/if}
+									</span>
+									{#if iface.rx_dropped + iface.tx_dropped + iface.rx_errors + iface.tx_errors === 0}
+										<StatusBadge variant="online" text="Healthy" />
+									{:else}
+										<StatusBadge variant="warning" text={`${iface.rx_dropped + iface.tx_dropped} Drops`} />
+									{/if}
+								</div>
+								<div class="flex items-center gap-4 font-mono text-xs">
+									<span class="flex items-center gap-1 text-[var(--chart-1)]">
+										<ArrowDownIcon class="size-3 shrink-0" />
+										<span class="font-semibold">{formatBps(iface.rx_rate_bps)}</span>
+									</span>
+									<span class="flex items-center gap-1 text-[var(--chart-2)]">
+										<ArrowUpIcon class="size-3 shrink-0" />
+										<span class="font-semibold">{formatBps(iface.tx_rate_bps)}</span>
+									</span>
+								</div>
+								<span class="text-xs text-muted-foreground">
+									{formatBytes(iface.rx_bytes)} / {formatBytes(iface.tx_bytes)}
+								</span>
+							</div>
+						{/each}
+					</div>
+				{:else}
 				<div class="overflow-x-auto">
 					<table class="w-full text-xs text-left">
 						<thead class="bg-muted/40 text-muted-foreground font-medium border-b border-border/50">
@@ -177,6 +216,7 @@
 						</tbody>
 					</table>
 				</div>
+				{/if}
 			</Card.Content>
 		</Card.Root>
 	{/if}
