@@ -30,12 +30,15 @@
 		rule,
 		onSave,
 		onClose,
+		prefill = null,
 	}: {
 		open: boolean;
 		zones: string[];
 		rule: PortForwardRule | null;
 		onSave: (rule: PortForwardRule | PortForwardRule[]) => void;
 		onClose: () => void;
+		/** Opens an add form with the internal target (`dev:<name|mac>` or an IP) and comment preset. */
+		prefill?: { target: string; name?: string } | null;
 	} = $props();
 
 	// ── Form state ────────────────────────────────────────────────────────────
@@ -116,7 +119,7 @@
 						internalIpv6 = "";
 					}
 				} else {
-					comment = "";
+					comment = prefill?.name ?? "";
 					protocol = "Tcp";
 					srcZone = zones.find((z) => z === "external" || z === "wan") ?? zones[0] ?? "";
 					externalPort = 80;
@@ -125,6 +128,16 @@
 					internalPort = 80;
 					ipMode = "v4";
 					enableHairpin = false;
+					const target = prefill?.target.trim();
+					if (target?.startsWith("dev:")) {
+						deviceTarget = target;
+						ipMode = "dual";
+					} else if (target?.includes(":")) {
+						ipMode = "v6";
+						internalIpv6 = cleanIp(target);
+					} else if (target) {
+						internalIp = cleanIp(target);
+					}
 				}
 			});
 		}

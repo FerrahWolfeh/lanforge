@@ -16,9 +16,21 @@
 		rules: PortForwardRule[];
 		zones: FirewallZone[];
 		onUpdate: (rules: PortForwardRule[]) => void;
+		/** Opens the add dialog once with this target (from the `forward_to` URL param). */
+		prefill?: { target: string; name?: string } | null;
+		onPrefillUsed?: () => void;
 	}
 
-	let { rules, zones, onUpdate }: Props = $props();
+	let { rules, zones, onUpdate, prefill = null, onPrefillUsed }: Props = $props();
+
+	let dialogPrefill = $state<{ target: string; name?: string } | null>(null);
+
+	$effect(() => {
+		if (!prefill) return;
+		dialogPrefill = prefill;
+		openAdd();
+		onPrefillUsed?.();
+	});
 
 	let showDialog = $state(false);
 	let editingRule = $state<PortForwardRule | null>(null);
@@ -48,6 +60,7 @@
 			onUpdate([...rules, ...newRules]);
 		}
 		showDialog = false;
+		dialogPrefill = null;
 		editingRule = null;
 		editingIndex = null;
 	}
@@ -209,9 +222,11 @@
 	bind:open={showDialog}
 	zones={zoneNames}
 	rule={editingRule}
+	prefill={dialogPrefill}
 	onSave={handleDialogSave}
 	onClose={() => {
 		showDialog = false;
+		dialogPrefill = null;
 		editingRule = null;
 		editingIndex = null;
 	}}

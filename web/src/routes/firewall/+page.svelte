@@ -10,6 +10,8 @@
 	import { Spinner } from "$lib/components/ui/spinner";
 	import { toast } from "svelte-sonner";
 	import { onMount, onDestroy } from "svelte";
+	import { page } from "$app/state";
+	import { replaceState } from "$app/navigation";
 	import { fly } from "svelte/transition";
 	import { cubicOut } from "svelte/easing";
 
@@ -76,6 +78,7 @@
 	let committing = $state(false);
 
 	let activeTab = $state("zones");
+	let pendingForward = $state<{ target: string; name?: string } | null>(null);
 	let highlightedZone = $state<string | null>(null);
 
 	// 3-way handshake state
@@ -272,6 +275,15 @@
 	// ---------------------------------------------------------------------------
 
 	onMount(() => {
+		const forwardTo = page.url.searchParams.get("forward_to");
+		if (forwardTo) {
+			pendingForward = { target: forwardTo, name: page.url.searchParams.get("forward_name") ?? undefined };
+			activeTab = "portforward";
+			const url = new URL(page.url);
+			url.searchParams.delete("forward_to");
+			url.searchParams.delete("forward_name");
+			replaceState(url, page.state);
+		}
 		loadAll();
 		const stopPolling = createPolling(() => loadAll(true), 10_000);
 		return () => {
@@ -462,6 +474,8 @@
 					<PortForwardTab
 						rules={draft.port_forwards}
 						zones={draft.zones}
+						prefill={pendingForward}
+						onPrefillUsed={() => (pendingForward = null)}
 						onUpdate={(port_forwards) => { if (draft) draft = { ...draft, port_forwards }; }}
 					/>
 					</fieldset>
