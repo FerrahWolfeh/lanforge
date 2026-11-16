@@ -38,30 +38,12 @@
 		}
 	}
 
-	const displayTopDomains = $derived.by(() => {
-		if (domainFilterMode === "device" && selectedClientFilter) {
-			if (filteredTopDomains.length > 0) return filteredTopDomains;
-			return [
-				{ domain: "api.github.com", count: 1420 },
-				{ domain: "crates.io", count: 850 },
-				{ domain: "raw.githubusercontent.com", count: 420 },
-				{ domain: "google.com", count: 310 },
-			];
-		}
-		const globalList = analyticsData?.top_domains ?? [];
-		if (globalList.length === 0) {
-			return [
-				{ domain: "google.com", count: 4820 },
-				{ domain: "github.com", count: 3150 },
-				{ domain: "cloudflare.com", count: 2410 },
-				{ domain: "discord.com", count: 1890 },
-				{ domain: "store.steampowered.com", count: 1240 },
-				{ domain: "youtube.com", count: 980 },
-				{ domain: "crates.io", count: 760 },
-			];
-		}
-		return globalList;
-	});
+	// No data shows the empty state, never sample domains.
+	const displayTopDomains = $derived(
+		domainFilterMode === "device" && selectedClientFilter
+			? filteredTopDomains
+			: (analyticsData?.top_domains ?? [])
+	);
 
 	const maxDomainCount = $derived.by(() => {
 		if (displayTopDomains.length === 0) return 1;
