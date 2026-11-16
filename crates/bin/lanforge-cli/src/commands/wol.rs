@@ -17,10 +17,10 @@ impl WolArgs {
             return printer.print_json(&resp);
         }
 
-        printer.success(&format!(
-            "Magic packet sent to '{}': {}",
-            self.target, resp.message
-        ));
+        printer.success_detail(
+            &format!("Magic packet sent to '{}'", self.target),
+            &resp.message,
+        );
         Ok(())
     }
 }

@@ -417,10 +417,10 @@ async fn purge_device(client: &LanforgeClient, printer: &Printer, mac_str: Strin
         return printer.print_json(&resp);
     }
 
-    printer.success(&format!(
-        "Device {mac} purged from active tables and database storage: {}",
-        resp.message
-    ));
+    printer.success_detail(
+        &format!("Device {mac} purged from active tables and database storage"),
+        &resp.message,
+    );
     Ok(())
 }
 
@@ -440,13 +440,25 @@ async fn device_link(
     } else {
         addresses.retain(|a| !args.addresses.contains(a));
     }
+    let count = addresses
+        .iter()
+        .map(IpAddr::to_canonical)
+        .collect::<HashSet<_>>()
+        .len();
     let resp = client
         .device_linked_addresses_set(device.mac, addresses)
         .await?;
     if printer.json {
         return printer.print_json(&resp);
     }
-    printer.success(&resp.message);
+    if resp.message.is_empty() {
+        printer.success(&format!(
+            "Device {}: {count} linked address(es)",
+            device.mac
+        ));
+    } else {
+        printer.success(&resp.message);
+    }
     Ok(())
 }
 

@@ -659,10 +659,10 @@ async fn release_lease(
     }
 
     let target_str = target.map_or_else(|| "all leases".to_string(), |t| format!("lease {t}"));
-    printer.success(&format!(
-        "Released {target_str} for MAC {mac}: {}",
-        resp.message
-    ));
+    printer.success_detail(
+        &format!("Released {target_str} for MAC {mac}"),
+        &resp.message,
+    );
     Ok(())
 }
 
@@ -686,10 +686,10 @@ async fn renew_lease(
     }
 
     let target_str = target.map_or_else(|| "all leases".to_string(), |t| format!("lease {t}"));
-    printer.success(&format!(
-        "Renewed {target_str} for MAC {mac}: {}",
-        resp.message
-    ));
+    printer.success_detail(
+        &format!("Renewed {target_str} for MAC {mac}"),
+        &resp.message,
+    );
     Ok(())
 }
 

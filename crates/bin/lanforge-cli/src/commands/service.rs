@@ -191,7 +191,7 @@ async fn control_service(
         ServiceAction::Restart => "restarted",
     };
 
-    printer.success(&format!("Service '{id}' {action_str}: {}", resp.message));
+    printer.success_detail(&format!("Service '{id}' {action_str}"), &resp.message);
     Ok(())
 }
 

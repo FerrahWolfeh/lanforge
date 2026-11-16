@@ -177,6 +177,11 @@ impl Printer {
         }
     }
 
+    /// Prints a success message with an optional daemon detail suffix.
+    pub fn success_detail(&self, action: &str, detail: &str) {
+        self.success(&format_action_detail(action, detail));
+    }
+
     /// Prints a warning message.
     pub fn warning(&self, msg: &str) {
         if self.json {
@@ -199,6 +204,17 @@ impl Printer {
         } else {
             eprintln!("{} {msg}", "✗".red().bold());
         }
+    }
+}
+
+/// Joins `action` and a daemon `detail` message (`"{action}: {detail}"`), or returns `action`
+/// alone when `detail` is empty (e.g. a 204 No Content response over HTTP).
+#[must_use]
+pub fn format_action_detail(action: &str, detail: &str) -> String {
+    if detail.is_empty() {
+        action.to_string()
+    } else {
+        format!("{action}: {detail}")
     }
 }
 

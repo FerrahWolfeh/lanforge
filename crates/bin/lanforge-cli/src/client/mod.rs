@@ -267,7 +267,15 @@ impl LanforgeClient {
     }
 
     #[cfg(feature = "remote")]
-    fn decode_bytes<T: HttpWrappedResponse>(bytes: &[u8]) -> Result<T> {
+    fn decode_response<T: HttpWrappedResponse>(status: StatusCode, bytes: &[u8]) -> Result<T> {
+        if status == StatusCode::NO_CONTENT {
+            if let Ok(wrapper) = serde_json::from_str::<T::Wrapper>(r#"{"data":{"message":""}}"#) {
+                return Ok(T::unwrap(wrapper));
+            }
+            if let Ok(wrapper) = serde_json::from_str::<T::Wrapper>("null") {
+                return Ok(T::unwrap(wrapper));
+            }
+        }
         let wrapper = serde_json::from_slice::<T::Wrapper>(bytes)?;
         Ok(T::unwrap(wrapper))
     }
@@ -385,17 +393,7 @@ impl LanforgeClient {
     #[cfg(feature = "remote")]
     pub async fn http_get<T: HttpWrappedResponse>(&self, path: &str) -> Result<T> {
         let (status, bytes) = self.send_request(Method::GET, path, None).await?;
-        if status == StatusCode::NO_CONTENT {
-            if let Ok(wrapper) =
-                serde_json::from_str::<T::Wrapper>(r#"{"data":{"message":"Success"}}"#)
-            {
-                return Ok(T::unwrap(wrapper));
-            }
-            if let Ok(wrapper) = serde_json::from_str::<T::Wrapper>("null") {
-                return Ok(T::unwrap(wrapper));
-            }
-        }
-        Self::decode_bytes(&bytes)
+        Self::decode_response(status, &bytes)
     }
 
     #[cfg(feature = "remote")]
@@ -408,33 +406,13 @@ impl LanforgeClient {
         let (status, bytes) = self
             .send_request(Method::POST, path, Some(body_bytes))
             .await?;
-        if status == StatusCode::NO_CONTENT {
-            if let Ok(wrapper) =
-                serde_json::from_str::<T::Wrapper>(r#"{"data":{"message":"Success"}}"#)
-            {
-                return Ok(T::unwrap(wrapper));
-            }
-            if let Ok(wrapper) = serde_json::from_str::<T::Wrapper>("null") {
-                return Ok(T::unwrap(wrapper));
-            }
-        }
-        Self::decode_bytes(&bytes)
+        Self::decode_response(status, &bytes)
     }
 
     #[cfg(feature = "remote")]
     pub async fn http_delete<T: HttpWrappedResponse>(&self, path: &str) -> Result<T> {
         let (status, bytes) = self.send_request(Method::DELETE, path, None).await?;
-        if status == StatusCode::NO_CONTENT {
-            if let Ok(wrapper) =
-                serde_json::from_str::<T::Wrapper>(r#"{"data":{"message":"Success"}}"#)
-            {
-                return Ok(T::unwrap(wrapper));
-            }
-            if let Ok(wrapper) = serde_json::from_str::<T::Wrapper>("null") {
-                return Ok(T::unwrap(wrapper));
-            }
-        }
-        Self::decode_bytes(&bytes)
+        Self::decode_response(status, &bytes)
     }
 
     #[cfg(feature = "remote")]
@@ -447,17 +425,7 @@ impl LanforgeClient {
         let (status, bytes) = self
             .send_request(Method::PUT, path, Some(body_bytes))
             .await?;
-        if status == StatusCode::NO_CONTENT {
-            if let Ok(wrapper) =
-                serde_json::from_str::<T::Wrapper>(r#"{"data":{"message":"Success"}}"#)
-            {
-                return Ok(T::unwrap(wrapper));
-            }
-            if let Ok(wrapper) = serde_json::from_str::<T::Wrapper>("null") {
-                return Ok(T::unwrap(wrapper));
-            }
-        }
-        Self::decode_bytes(&bytes)
+        Self::decode_response(status, &bytes)
     }
 
     #[cfg(feature = "remote")]
@@ -470,17 +438,7 @@ impl LanforgeClient {
         let (status, bytes) = self
             .send_request(Method::PATCH, path, Some(body_bytes))
             .await?;
-        if status == StatusCode::NO_CONTENT {
-            if let Ok(wrapper) =
-                serde_json::from_str::<T::Wrapper>(r#"{"data":{"message":"Success"}}"#)
-            {
-                return Ok(T::unwrap(wrapper));
-            }
-            if let Ok(wrapper) = serde_json::from_str::<T::Wrapper>("null") {
-                return Ok(T::unwrap(wrapper));
-            }
-        }
-        Self::decode_bytes(&bytes)
+        Self::decode_response(status, &bytes)
     }
 
     #[cfg(feature = "remote")]
@@ -496,17 +454,7 @@ impl LanforgeClient {
         let (status, bytes) = self
             .send_request(Method::DELETE, path, Some(body_bytes))
             .await?;
-        if status == StatusCode::NO_CONTENT {
-            if let Ok(wrapper) =
-                serde_json::from_str::<T::Wrapper>(r#"{"data":{"message":"Success"}}"#)
-            {
-                return Ok(T::unwrap(wrapper));
-            }
-            if let Ok(wrapper) = serde_json::from_str::<T::Wrapper>("null") {
-                return Ok(T::unwrap(wrapper));
-            }
-        }
-        Self::decode_bytes(&bytes)
+        Self::decode_response(status, &bytes)
     }
 
     #[cfg(feature = "remote")]
@@ -2018,4 +1966,25 @@ fn urlencoding(s: &str) -> String {
 #[cfg(feature = "remote")]
 fn group_query(group: Option<&str>) -> String {
     group.map_or_else(String::new, |g| format!("?group={}", urlencoding(g)))
+}
+
+#[cfg(all(test, feature = "remote"))]
+mod tests {
+    use super::*;
+    use crate::output::format_action_detail;
+
+    #[test]
+    fn no_content_response_leaves_message_empty() {
+        let resp: SimpleSuccess =
+            LanforgeClient::decode_response(StatusCode::NO_CONTENT, b"").unwrap();
+        assert_eq!(resp.message, "");
+        assert_eq!(
+            format_action_detail("Domain 'example.com' added to the blocklist", &resp.message),
+            "Domain 'example.com' added to the blocklist"
+        );
+        assert_eq!(
+            format_action_detail("Domain 'example.com' added to the blocklist", "Saved"),
+            "Domain 'example.com' added to the blocklist: Saved"
+        );
+    }
 }

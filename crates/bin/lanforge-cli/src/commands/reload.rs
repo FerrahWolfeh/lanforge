@@ -14,7 +14,12 @@ impl ReloadArgs {
             return printer.print_json(&resp);
         }
 
-        printer.success(&resp.message);
+        let msg = if resp.message.is_empty() {
+            "Configuration reloaded"
+        } else {
+            &resp.message
+        };
+        printer.success(msg);
         Ok(())
     }
 }
