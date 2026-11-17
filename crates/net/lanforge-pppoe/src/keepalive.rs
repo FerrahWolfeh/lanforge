@@ -9,6 +9,7 @@ use lanforge_core::context::{ConfigSubscription, LanforgeContext};
 use lanforge_transport::{ArpProber, PppoeTransport};
 use lanforge_types::config::ChangeImpact;
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::snapshot::InterfaceSnapshot;
 use std::net::Ipv4Addr;
 use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
@@ -41,6 +42,14 @@ fn echo_timer(interval_secs: u64) -> Interval {
     interval_at(Instant::now() + period, period)
 }
 
+/// Echo-Requests sent, one per second, to confirm the session once the WAN carrier returns.
+const CARRIER_RETURN_ECHOES: u32 = 5;
+
+/// The WAN link's carrier in the interfaces snapshot; `None` while the link is unknown.
+fn wan_carrier(links: &InterfaceSnapshot, iface: &str) -> Option<bool> {
+    links.find_by_name(iface).map(|l| l.carrier)
+}
+
 /// Watches the live session. `config_sub` is the service's own subscription: a change seen here
 /// counts as applied for the service too, and a change that arrived while the session was being
 /// negotiated is still pending here (a fresh subscription would have missed it).
@@ -63,6 +72,16 @@ pub(crate) async fn run_keepalive(
     let mut interval_secs = applied.lcp_echo_interval_secs;
     let mut max_failures = applied.lcp_echo_max_failures;
     let mut interval_timer = echo_timer(interval_secs);
+
+    // A carrier loss alone never ends the session: a short flap must not cost a reconnect and a
+    // new delegated prefix. When the carrier returns, the session is confirmed with fast echoes
+    // instead of waiting out the regular schedule: a concentrator that dropped it during the
+    // outage never answers again, and every second spent on it is a second offline.
+    // A `wan_iface` change ends this watch (Rebind), so the name is fixed here.
+    let wan_iface = applied.wan_iface.clone();
+    let mut links = ctx.watch_interfaces();
+    let mut carrier = wan_carrier(&links.borrow_and_update(), &wan_iface);
+    let mut confirming = false;
 
     let mut bus_rx = ctx.bus().subscribe_system();
     let mut read_buf = [0u8; 1500];
@@ -90,6 +109,7 @@ pub(crate) async fn run_keepalive(
                             interval_secs = delta.new.lcp_echo_interval_secs;
                             max_failures = delta.new.lcp_echo_max_failures;
                             interval_timer = echo_timer(interval_secs);
+                            confirming = false;
                             info!(interval_secs, max_failures, "PPPoE LCP echo timers updated in place");
                         }
                     }
@@ -99,7 +119,25 @@ pub(crate) async fn run_keepalive(
                     }
                 }
             }
+            Ok(()) = links.changed() => {
+                let now = wan_carrier(&links.borrow_and_update(), &wan_iface);
+                match (carrier, now) {
+                    (Some(true), Some(false)) => {
+                        warn!(wan_iface = %wan_iface, "WAN carrier lost; keeping the session until it is back");
+                    }
+                    (Some(false), Some(true)) if interval_secs > 0 && max_failures > 0 => {
+                        info!(wan_iface = %wan_iface, "WAN carrier back; confirming the session");
+                        confirming = true;
+                        failed_echoes = 0;
+                        let period = Duration::from_secs(1);
+                        interval_timer = interval_at(Instant::now(), period);
+                    }
+                    _ => {}
+                }
+                carrier = now;
+            }
             _ = interval_timer.tick() => {
+                let limit = if confirming { CARRIER_RETURN_ECHOES } else { max_failures };
                 if interval_secs > 0 {
                     echo_id = echo_id.wrapping_add(1);
                     if let Err(e) = send_echo_request(
@@ -116,18 +154,18 @@ pub(crate) async fn run_keepalive(
                     if missed > 0 {
                         warn!(
                             missed,
-                            max = max_failures,
+                            max = limit,
                             "Missing LCP Echo-Reply from ISP Access Concentrator"
                         );
                         let _ = ctx.bus().publish(LanforgeEvent::Pppoe(PppoeEvent::KeepaliveWarning {
                             consecutive_failures: missed,
-                            max_failures,
+                            max_failures: limit,
                         }));
                     }
-                    if max_failures > 0 && failed_echoes > max_failures {
+                    if limit > 0 && failed_echoes > limit {
                         warn!(
                             missed,
-                            max = max_failures,
+                            max = limit,
                             "LCP keepalive failure threshold exceeded, disconnecting PPPoE session"
                         );
                         if let Some((arp, target_ip, sender_ip, timeout)) = prober {
@@ -169,6 +207,11 @@ pub(crate) async fn run_keepalive(
                         // Pairs every KeepaliveWarning run with its end.
                         if missed_before > 0 && failed_echoes == 0 {
                             let _ = ctx.bus().publish(LanforgeEvent::Pppoe(PppoeEvent::KeepaliveRestored));
+                        }
+                        if confirming && failed_echoes == 0 {
+                            info!("Session confirmed after the WAN carrier returned");
+                            confirming = false;
+                            interval_timer = echo_timer(interval_secs);
                         }
                     }
                     Ok(_) => {}

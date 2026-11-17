@@ -11,6 +11,7 @@ control frames) and the discovery socket (PADT), next to the RA listener that fo
  every lcp_echo_interval_secs ─► Echo-Request (our magic); unanswered previous one ─► missed += 1, KeepaliveWarning
  Echo-Reply                   ─► missed = 0 (KeepaliveRestored after a miss)
  missed = lcp_echo_max_failures ─► terminal probe ─► KeepAliveTimeout | TerminalUnreachable
+ WAN carrier back after a loss ─► Echo-Request every 1 s; 5 unanswered ─► KeepAliveTimeout
  LCP Terminate-Request        ─► Terminate-Ack ─► LcpFailed
  PADT from the AC             ─► PadtReceived (no PADT back)
  config change / shutdown     ─► Hot: retime in place | Reconnect/Rebind: ConfigUpdated | disabled | Shutdown
@@ -33,6 +34,10 @@ control frames) and the discovery socket (PADT), next to the RA listener that fo
 - When the missed replies reach `lcp_echo_max_failures` (default 5; `0` never gives up), the session ends. With the
   terminal probe enabled, an ARP probe to the ONT/modem classifies the failure: terminal answers →
   `KeepAliveTimeout` (upstream), no answer → `TerminalUnreachable` (local hardware or cable).
+- **Carrier loss** on `wan_iface` (interfaces snapshot, `IFF_LOWER_UP`) never ends the session by itself: a
+  short flap must not cost a reconnect and a new delegated prefix. When the carrier returns, the session is
+  confirmed right away with an Echo-Request every second; a reply restores the regular schedule, 5 unanswered
+  end the session (the concentrator dropped it during the outage). Only with echo on and a failure threshold set.
 - An LCP Terminate-Request is acknowledged and ends the session.
 - A PADT from the AC matching the session (AC MAC, session ID) ends it (RFC 2516 §5.5); no PADT is sent back. A
   broken discovery socket only stops the PADT watch; LCP echo still detects a dead session.

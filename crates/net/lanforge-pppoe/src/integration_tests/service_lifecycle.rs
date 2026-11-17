@@ -27,7 +27,7 @@ use lanforge_types::events::TimedEvent;
 use lanforge_types::events::pppoe::{PppoeEvent, PppoeSessionUp};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::pppoe::{AuthMethod, TerminalProbeConfig};
-use lanforge_types::network::snapshot::{WanSnapshot, WanState};
+use lanforge_types::network::snapshot::{InterfaceSnapshot, LinkInfo, WanSnapshot, WanState};
 use lanforge_types::system::{PppoeSessionState, ServiceId, ServiceState};
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
@@ -1895,6 +1895,124 @@ async fn a_rejected_login_is_not_probed_during_its_wait() {
         seen.lock().unwrap().padis,
         padis,
         "PADIs sent while waiting out a credential reject"
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(Duration::from_secs(2), handle).await;
+}
+
+/// The interfaces snapshot with the WAN link `eth1` (the `TestHost` default) and its carrier.
+fn set_wan_carrier(ctx: &LanforgeContext, carrier: bool, generation: u64) {
+    ctx.set_interfaces_snapshot(InterfaceSnapshot {
+        links: [LinkInfo {
+            ifindex: 2,
+            name: "eth1".into(),
+            carrier,
+            addrs: Default::default(),
+        }]
+        .into_iter()
+        .collect(),
+        generation,
+    });
+}
+
+/// The first `SessionDown` (its reason) and when it came; panics after `within`.
+async fn session_down_within(
+    sub: &mut broadcast::Receiver<TimedEvent>,
+    within: Duration,
+) -> (String, Instant) {
+    timeout(within, async {
+        loop {
+            if let Ok(evt) = sub.recv().await
+                && let LanforgeEvent::Pppoe(PppoeEvent::SessionDown { reason }) = evt.event
+            {
+                return (reason, Instant::now());
+            }
+        }
+    })
+    .await
+    .expect("SessionDown in time")
+}
+
+/// Owner's router (2026-11-17): the cable between the ONT and the router was out for 44 s. The
+/// concentrator dropped the session meanwhile, but with echoes every 20 s and 5 allowed misses it
+/// took 71 s after the carrier was back to give up on it. When the carrier returns, the session
+/// is now confirmed with fast echoes and a dead one is redialled within seconds.
+#[tokio::test(start_paused = true)]
+async fn a_session_lost_while_the_cable_was_out_is_redialled_once_it_is_back() {
+    let (ctx, bus) = create_test_context();
+    let mut sub = bus.subscribe_pppoe();
+    set_wan_carrier(&ctx, true, 1);
+    let cfg = PppoeConfig {
+        enabled: true,
+        wan_iface: "eth1".into(),
+        username: "client1".into(),
+        lcp_echo_interval_secs: 20,
+        lcp_echo_max_failures: 5,
+        ..Default::default()
+    };
+    let bras = MockBrasConfig::default();
+    let muted = Arc::clone(&bras.echo_muted);
+    let (_seen, _cmd_tx, handle) = start_with_bras(&ctx, cfg, bras);
+    wait_for_session_up(&mut sub).await;
+
+    // Cable out for 44 s; the concentrator forgets the session.
+    sleep(Duration::from_secs(5)).await;
+    set_wan_carrier(&ctx, false, 2);
+    muted.store(true, Ordering::Relaxed);
+    sleep(Duration::from_secs(44)).await;
+
+    set_wan_carrier(&ctx, true, 3);
+    let back = Instant::now();
+    let (reason, down) = session_down_within(&mut sub, Duration::from_secs(120)).await;
+    let after = down - back;
+    assert!(
+        after <= Duration::from_secs(7),
+        "dead session kept {after:?} after the carrier returned ({reason})"
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(Duration::from_secs(2), handle).await;
+}
+
+/// A short flap whose session survived: the fast confirmation gets its reply and the session
+/// stays up on the regular schedule (no reconnect, no new delegated prefix).
+#[tokio::test(start_paused = true)]
+async fn a_short_carrier_flap_keeps_a_live_session() {
+    let (ctx, bus) = create_test_context();
+    let mut sub = bus.subscribe_pppoe();
+    set_wan_carrier(&ctx, true, 1);
+    let cfg = PppoeConfig {
+        enabled: true,
+        wan_iface: "eth1".into(),
+        username: "client1".into(),
+        lcp_echo_interval_secs: 20,
+        lcp_echo_max_failures: 5,
+        ..Default::default()
+    };
+    let (_seen, _cmd_tx, handle) = start_with_bras(&ctx, cfg, MockBrasConfig::default());
+    wait_for_session_up(&mut sub).await;
+
+    set_wan_carrier(&ctx, false, 2);
+    sleep(Duration::from_secs(2)).await;
+    set_wan_carrier(&ctx, true, 3);
+
+    let quiet = timeout(Duration::from_secs(300), async {
+        loop {
+            if let Ok(evt) = sub.recv().await
+                && let LanforgeEvent::Pppoe(
+                    PppoeEvent::SessionDown { .. } | PppoeEvent::KeepaliveWarning { .. },
+                ) = evt.event
+            {
+                return evt.event;
+            }
+        }
+    })
+    .await;
+    assert!(quiet.is_err(), "live session disturbed: {quiet:?}");
+    assert_eq!(
+        ctx.pppoe_status().map(|s| s.state),
+        Some(PppoeSessionState::Connected)
     );
 
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
