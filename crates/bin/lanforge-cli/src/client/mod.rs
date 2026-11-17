@@ -5,12 +5,12 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use tokio::net::UnixStream;
 
 use lanforge_api::api::{
-    AdblockGroupChange, AuthTokenResponse, AuthTokensResponse, CreateUserPayload, DeviceListQuery,
-    DevicesResponse, DhcpOptionsResponse, DhcpPoolsConfigResponse, DhcpPoolsResponse,
-    DhcpReconcileResponse, DnsAdblockGroupsResponse, DnsAdblockRulesResponse, DnsAllowlistResponse,
-    DnsAnalyticsResponse, DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse,
-    DnsQueryResponse, DnsReverseResolversResponse, DnsRewritesResponse, DnsUpstreamsResponse,
-    HostConfigEntry, HostsResponse, LeasesResponse, ServiceBannersResponse,
+    AdblockGroupChange, AuthTokenResponse, AuthTokensResponse, BackupBundle, CreateUserPayload,
+    DeviceListQuery, DevicesResponse, DhcpOptionsResponse, DhcpPoolsConfigResponse,
+    DhcpPoolsResponse, DhcpReconcileResponse, DnsAdblockGroupsResponse, DnsAdblockRulesResponse,
+    DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse, DnsCacheStatsExtResponse,
+    DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse, DnsRewritesResponse,
+    DnsUpstreamsResponse, HostConfigEntry, HostsResponse, LeasesResponse, ServiceBannersResponse,
     ServiceStopImpactResponse, SetLogLevelRequest, SetupPayload, SetupResponse,
     SetupStatusResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
     SystemConfigImportResponse, UserListResponse, UserResponse, WhoisResponse,
@@ -772,6 +772,28 @@ impl LanforgeClient {
         }
         let mut rpc = self.connect_rpc().await?;
         rpc.system_config_toml().await.map_err(|e| eyre!("{e}"))
+    }
+
+    /// The plain backup bundle (admin only).
+    pub async fn backup(&self) -> Result<Box<BackupBundle>> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_get("/backup").await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.backup().await.map_err(|e| eyre!("{e}"))
+    }
+
+    /// Restores `bundle` in the running daemon.
+    pub async fn restore(&self, bundle: BackupBundle) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_post("/restore", &bundle).await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.restore(Box::new(bundle))
+            .await
+            .map_err(|e| eyre!("{e}"))
     }
 
     pub async fn system_config_import(

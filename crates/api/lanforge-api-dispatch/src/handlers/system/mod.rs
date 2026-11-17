@@ -1,3 +1,4 @@
+pub mod backup;
 pub mod banners;
 pub mod config;
 pub mod config_write;

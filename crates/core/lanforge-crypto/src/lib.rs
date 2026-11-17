@@ -9,6 +9,8 @@
 #[cfg(all(feature = "tls", not(any(feature = "ring", feature = "aws-lc"))))]
 compile_error!("lanforge-crypto: `tls` needs a crypto provider; enable `ring` or `aws-lc`");
 
+#[cfg(feature = "backup")]
+pub mod backup;
 pub mod hash;
 #[cfg(any(feature = "ring", feature = "aws-lc"))]
 pub mod hmac;
@@ -18,6 +20,6 @@ pub mod tls;
 
 pub use hash::{
     content_hash_hex, content_hash_short_hex, content_hash64, content_hash128, slugify,
-    stable_id_or_hash,
+    stable_id_or_hash, token_digest,
 };
 pub use password::{hash_password, verify_password};

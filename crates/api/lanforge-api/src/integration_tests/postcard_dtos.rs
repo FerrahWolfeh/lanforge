@@ -116,3 +116,50 @@ fn system_dtos_with_empty_optional_fields_cross_the_socket() {
     assert_postcard_roundtrip("ServiceBanner", ServiceBanner::default);
     assert_postcard_roundtrip("SystemConfigExport", SystemConfigExport::default);
 }
+
+#[test]
+fn the_backup_bundle_crosses_the_socket() {
+    use crate::api::{BackupBundle, BackupDevice, BackupFile};
+    use lanforge_types::auth::{ApiTokenEntry, UserEntry, UserRole};
+    use lanforge_types::device::DeviceClass;
+    use lanforge_types::identifiers::MacAddr;
+
+    assert_postcard_roundtrip("BackupBundle", || {
+        let mac = MacAddr([0, 1, 2, 3, 4, 5]);
+        BackupBundle {
+            files: vec![BackupFile {
+                name: "lanforge.toml".into(),
+                content: "[system]\n".into(),
+            }],
+            users: vec![UserEntry {
+                id: 1,
+                username: "admin".into(),
+                password_hash: "hash".into(),
+                role: UserRole::Admin,
+                created_at: 1,
+                updated_at: 2,
+                last_login: None,
+            }],
+            api_tokens: vec![ApiTokenEntry {
+                id: 1,
+                token: "ab".repeat(32),
+                name: "ci".into(),
+                created_at: 1,
+                last_used: None,
+                scopes: Default::default(),
+                expires_at: None,
+            }],
+            devices: vec![BackupDevice {
+                mac,
+                hostname: None,
+                class: DeviceClass::IoT,
+                dns_fallback: "host-000102030405".into(),
+                boot_file: None,
+                ignore_dns_log: false,
+                ignored_log_domains: Vec::new(),
+            }],
+            name_bindings: vec![("nas".into(), mac)],
+            linked_addresses: vec![(IpAddr::V4(Ipv4Addr::new(100, 64, 0, 1)), mac)],
+        }
+    });
+}

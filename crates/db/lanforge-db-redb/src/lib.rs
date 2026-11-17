@@ -9,8 +9,10 @@ pub mod prefix;
 pub mod tables;
 pub mod user;
 
+use lanforge_crypto::token_digest;
 use lanforge_db_core::DbError;
 use lanforge_db_core::config_keys::IN_USE;
+use lanforge_types::auth::ApiTokenEntry;
 pub use redb;
 use redb::{Database, ReadableDatabase, ReadableTable, WriteTransaction};
 use serde::Serialize;
@@ -462,6 +464,14 @@ impl RedbDatabase {
 
     /// Ensures the database schema reaches `target_version`, clearing contents on version change.
     pub fn ensure_schema_and_migrate_to(&self, target_version: u32) -> Result<(), DbError> {
+        self.ensure_schema_to(target_version)?;
+        if !self.volatile {
+            self.migrate_api_tokens_to_digests()?;
+        }
+        Ok(())
+    }
+
+    fn ensure_schema_to(&self, target_version: u32) -> Result<(), DbError> {
         let current = self.schema_version()?;
         if self.volatile {
             if current != Self::RUNTIME_SCHEMA_VERSION {
@@ -510,6 +520,51 @@ impl RedbDatabase {
             self.set_schema_version(target_version)?;
         }
 
+        Ok(())
+    }
+
+    /// API tokens used to be stored raw (the key was the token). Rewrites every row whose key is
+    /// not already a SHA-256 hex digest to be keyed by the digest, so existing logins keep
+    /// working. Idempotent: it runs on every open and finds nothing to do after the first.
+    fn migrate_api_tokens_to_digests(&self) -> Result<(), DbError> {
+        fn is_digest(key: &str) -> bool {
+            key.len() == 64 && key.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        }
+        let write_txn = self.begin_write()?;
+        let mut migrated = 0usize;
+        {
+            let mut table = match write_txn.open_table(TABLE_API_TOKENS) {
+                Ok(t) => t,
+                Err(redb::TableError::TableDoesNotExist(_)) => return Ok(()),
+                Err(e) => return Err(DbError::Backend(e.to_string())),
+            };
+            let mut legacy = Vec::new();
+            for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
+                let (k, v) = item.map_err(|e| DbError::Backend(e.to_string()))?;
+                if !is_digest(k.value()) {
+                    legacy.push((k.value().to_string(), v.value().to_vec()));
+                }
+            }
+            for (raw, bytes) in legacy {
+                let mut entry: ApiTokenEntry = decode(&bytes)
+                    .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
+                let digest = token_digest(&raw);
+                entry.token.clone_from(&digest);
+                let bytes = encode(&entry)
+                    .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
+                table
+                    .remove(raw.as_str())
+                    .map_err(|e| DbError::Backend(e.to_string()))?;
+                table
+                    .insert(digest.as_str(), bytes.as_slice())
+                    .map_err(|e| DbError::Backend(e.to_string()))?;
+                migrated += 1;
+            }
+        }
+        if migrated > 0 {
+            tracing::info!(migrated, "API tokens re-keyed by SHA-256 digest");
+            write_txn.commit()?;
+        }
         Ok(())
     }
 
@@ -716,6 +771,153 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    /// Every byte the token table holds (keys and values).
+    fn api_token_table_bytes(db: &RedbDatabase) -> Vec<u8> {
+        use redb::{ReadableDatabase, ReadableTable};
+        let read_txn = db.db.begin_read().unwrap();
+        let table = read_txn.open_table(TABLE_API_TOKENS).unwrap();
+        let mut all = Vec::new();
+        for item in table.iter().unwrap() {
+            let (k, v) = item.unwrap();
+            all.extend_from_slice(k.value().as_bytes());
+            all.extend_from_slice(v.value());
+        }
+        all
+    }
+
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    /// The raw token is never stored: not as the key, not inside the row. Validation and
+    /// deletion still take the raw token.
+    #[test]
+    fn api_token_is_stored_as_a_digest() {
+        use lanforge_db_core::ApiTokenStore;
+        use lanforge_types::auth::{ApiScope, ApiScopes};
+
+        let db = RedbDatabase::open_temp().unwrap();
+        let mut scopes = ApiScopes::new();
+        scopes.push(ApiScope::Admin);
+        let raw = "lf_ak_raw_secret_value";
+        db.store_api_token(raw, "k", &scopes, None, 1000).unwrap();
+
+        let stored = api_token_table_bytes(&db);
+        assert!(!stored.is_empty());
+        assert!(!contains(&stored, raw.as_bytes()), "raw token is stored");
+        assert!(contains(
+            &stored,
+            lanforge_crypto::token_digest(raw).as_bytes()
+        ));
+        let listed = db.load_api_tokens().unwrap();
+        assert_eq!(listed[0].token, lanforge_crypto::token_digest(raw));
+
+        assert!(db.validate_api_token(raw, 1001).unwrap().is_some());
+        assert!(
+            db.validate_api_token(&lanforge_crypto::token_digest(raw), 1001)
+                .unwrap()
+                .is_none(),
+            "the digest must not authenticate"
+        );
+        db.delete_api_token(raw).unwrap();
+        assert!(db.load_api_tokens().unwrap().is_empty());
+    }
+
+    /// A restore replaces every user and token (the backup is the truth), the restored raw token
+    /// authenticates, and new ids continue after the restored ones.
+    #[test]
+    fn replace_auth_replaces_users_and_tokens_and_moves_the_id_sequences() {
+        use lanforge_db_core::ApiTokenStore;
+        use lanforge_types::auth::{ApiScope, ApiScopes, UserEntry, UserRole};
+
+        let source = RedbDatabase::open_temp().unwrap();
+        source.create_user("old", "h", UserRole::Admin, 1).unwrap();
+        let scopes = ApiScopes::from_slice(&[ApiScope::Monitoring]);
+        source
+            .store_api_token("lf_ak_new", "kept", &scopes, Some(99), 5)
+            .unwrap();
+        let users = vec![UserEntry {
+            id: 7,
+            username: "restored".into(),
+            password_hash: "hash".into(),
+            role: UserRole::Operator,
+            created_at: 1,
+            updated_at: 2,
+            last_login: Some(3),
+        }];
+        let tokens = source.load_api_tokens().unwrap();
+
+        let db = RedbDatabase::open_temp().unwrap();
+        db.create_user("stale", "h", UserRole::Admin, 1).unwrap();
+        db.store_api_token("lf_ak_stale", "stale", &scopes, None, 1)
+            .unwrap();
+        db.replace_auth(&users, &tokens).unwrap();
+
+        assert_eq!(db.list_users().unwrap(), users);
+        assert!(db.get_user_by_username("stale").unwrap().is_none());
+        assert_eq!(db.load_api_tokens().unwrap(), tokens);
+        assert!(db.validate_api_token("lf_ak_new", 6).unwrap().is_some());
+        assert!(db.validate_api_token("lf_ak_stale", 6).unwrap().is_none());
+        assert_eq!(
+            db.create_user("next", "h", UserRole::Viewer, 9).unwrap().id,
+            8
+        );
+        let id = db
+            .store_api_token("lf_ak_next", "n", &scopes, None, 9)
+            .unwrap();
+        assert!(id > tokens[0].id);
+
+        db.replace_auth(&[], &[]).unwrap();
+        assert_eq!(db.count_users().unwrap(), 0, "an empty backup empties them");
+        assert!(db.load_api_tokens().unwrap().is_empty());
+    }
+
+    /// A database written when tokens were keyed by the raw token is re-keyed on open, and the
+    /// raw token still authenticates.
+    #[test]
+    fn legacy_raw_api_token_rows_are_migrated_on_open() {
+        use lanforge_db_core::ApiTokenStore;
+        use lanforge_types::auth::{ApiScope, ApiScopes, ApiTokenEntry};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.redb");
+        let raw = "lf_ak_legacy_secret_value";
+        {
+            let db = RedbDatabase::open(&path).unwrap();
+            let mut scopes = ApiScopes::new();
+            scopes.push(ApiScope::Admin);
+            let entry = ApiTokenEntry {
+                id: 7,
+                token: raw.to_string(),
+                name: "legacy".to_string(),
+                created_at: 1,
+                last_used: None,
+                scopes,
+                expires_at: None,
+            };
+            let bytes = encode(&entry).unwrap();
+            let txn = db.begin_write().unwrap();
+            {
+                let mut table = txn.open_table(TABLE_API_TOKENS).unwrap();
+                table.insert(raw, bytes.as_slice()).unwrap();
+            }
+            txn.commit().unwrap();
+            assert!(contains(&api_token_table_bytes(&db), raw.as_bytes()));
+        }
+
+        for _ in 0..2 {
+            // The second open proves the migration is idempotent.
+            let db = RedbDatabase::open(&path).unwrap();
+            assert!(!contains(&api_token_table_bytes(&db), raw.as_bytes()));
+            let (name, _) = db.validate_api_token(raw, 1000).unwrap().unwrap();
+            assert_eq!(name, "legacy");
+            let rows = db.load_api_tokens().unwrap();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].id, 7);
+            assert_eq!(rows[0].token, lanforge_crypto::token_digest(raw));
+        }
     }
 
     /// Rows written before `repeats` existed (postcard is positional: they lack the last field)

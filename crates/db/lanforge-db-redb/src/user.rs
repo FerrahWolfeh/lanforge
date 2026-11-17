@@ -1,7 +1,8 @@
 //! `UserStore` and `ApiTokenStore` implementations for `RedbDatabase`.
 
-use crate::tables::{TABLE_API_TOKENS, TABLE_USERS};
+use crate::tables::{TABLE_API_TOKENS, TABLE_META, TABLE_USERS};
 use crate::{RedbDatabase, decode, encode};
+use lanforge_crypto::token_digest;
 use lanforge_db_core::{ApiTokenEntry, ApiTokenStore, DbError, UserEntry, UserStore};
 use lanforge_types::auth::{ApiScopes, UserRole};
 use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata};
@@ -278,6 +279,37 @@ impl UserStore for RedbDatabase {
         let count = table.len().map_err(|e| DbError::Backend(e.to_string()))?;
         Ok(count as i64)
     }
+
+    fn replace_auth(&self, users: &[UserEntry], tokens: &[ApiTokenEntry]) -> Result<(), DbError> {
+        let write_txn = self.begin_write()?;
+        {
+            // The id sequences move past the restored ids, so the next user or token is new.
+            let mut meta = write_txn.open_table(TABLE_META)?;
+            let last_user = users.iter().map(|u| u.id).max().unwrap_or(0);
+            let last_token = tokens.iter().map(|t| t.id).max().unwrap_or(0);
+            for (sequence, last) in [("users", last_user), ("api_tokens", last_token)] {
+                let kept = meta
+                    .get(sequence)?
+                    .and_then(|v| <[u8; 8]>::try_from(v.value()).ok())
+                    .map_or(0, i64::from_be_bytes);
+                meta.insert(sequence, kept.max(last).to_be_bytes().as_slice())?;
+            }
+            drop(meta);
+            write_txn.delete_table(TABLE_USERS)?;
+            write_txn.delete_table(TABLE_API_TOKENS)?;
+            let mut table = write_txn.open_table(TABLE_USERS)?;
+            for user in users {
+                table.insert(user.username.as_str(), encode(user)?.as_slice())?;
+            }
+            drop(table);
+            let mut table = write_txn.open_table(TABLE_API_TOKENS)?;
+            for token in tokens {
+                table.insert(token.token.as_str(), encode(token)?.as_slice())?;
+            }
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
 }
 
 impl ApiTokenStore for RedbDatabase {
@@ -289,6 +321,7 @@ impl ApiTokenStore for RedbDatabase {
         expires_at: Option<i64>,
         now: i64,
     ) -> Result<i64, DbError> {
+        let digest = token_digest(token);
         let write_txn = self
             .begin_write()
             .map_err(|e| DbError::Backend(e.to_string()))?;
@@ -296,7 +329,7 @@ impl ApiTokenStore for RedbDatabase {
             let id = Self::next_id_in_txn(&write_txn, "api_tokens")?;
             let entry = ApiTokenEntry {
                 id,
-                token: token.to_string(),
+                token: digest.clone(),
                 name: name.to_string(),
                 created_at: now,
                 last_used: None,
@@ -312,7 +345,7 @@ impl ApiTokenStore for RedbDatabase {
                 .map_err(|e| DbError::Backend(e.to_string()))?;
 
             table
-                .insert(token, bytes.as_slice())
+                .insert(digest.as_str(), bytes.as_slice())
                 .map_err(|e| DbError::Backend(e.to_string()))?;
             id
         };
@@ -328,6 +361,7 @@ impl ApiTokenStore for RedbDatabase {
         token: &str,
         now: i64,
     ) -> Result<Option<(String, ApiScopes)>, DbError> {
+        let digest = token_digest(token);
         // Fast read check first: avoid write lock when token invalid, expired, or recently updated
         let token_info = {
             let read_txn = self
@@ -341,7 +375,7 @@ impl ApiTokenStore for RedbDatabase {
             };
 
             match table
-                .get(token)
+                .get(digest.as_str())
                 .map_err(|e| DbError::Backend(e.to_string()))?
             {
                 Some(guard) => {
@@ -375,7 +409,7 @@ impl ApiTokenStore for RedbDatabase {
             };
 
             let mut entry = match table
-                .get(token)
+                .get(digest.as_str())
                 .map_err(|e| DbError::Backend(e.to_string()))?
             {
                 Some(guard) => {
@@ -395,7 +429,7 @@ impl ApiTokenStore for RedbDatabase {
                 .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
 
             table
-                .insert(token, bytes.as_slice())
+                .insert(digest.as_str(), bytes.as_slice())
                 .map_err(|e| DbError::Backend(e.to_string()))?;
 
             Some((entry.name, entry.scopes))
@@ -408,6 +442,7 @@ impl ApiTokenStore for RedbDatabase {
     }
 
     fn delete_api_token(&self, token: &str) -> Result<(), DbError> {
+        let digest = token_digest(token);
         let write_txn = self
             .begin_write()
             .map_err(|e| DbError::Backend(e.to_string()))?;
@@ -417,7 +452,7 @@ impl ApiTokenStore for RedbDatabase {
                 .map_err(|e| DbError::Backend(e.to_string()))?;
 
             table
-                .remove(token)
+                .remove(digest.as_str())
                 .map_err(|e| DbError::Backend(e.to_string()))?;
         }
         write_txn

@@ -172,6 +172,7 @@ smallvec = { workspace = true }
 # === L1 (Core APIs & Logic) ===
 lanforge-core = { workspace = true }
 lanforge-api = { workspace = true }
+lanforge-crypto = { workspace = true, features = ["backup"] }
 
 # === L2 (Specialized Services - Required) ===
 lanforge-db = { workspace = true }
@@ -206,6 +207,7 @@ rustls = { workspace = true }
 # CLI e config
 clap = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 toml = { workspace = true }
 bytesize = { workspace = true }
 libc = { workspace = true }
@@ -232,7 +234,6 @@ parking_lot = { workspace = true }
 lanforge-dns-wire = { workspace = true }
 tokio = { workspace = true, features = ["full", "io-util", "test-util"] }
 tempfile = "3.10.1"
-serde_json = { workspace = true }
 lanforge-api-dispatch = { workspace = true }
 lanforge-api = { workspace = true }
 lanforge-transport = { workspace = true }

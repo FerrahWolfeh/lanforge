@@ -1,6 +1,6 @@
 use axum::{
     Extension, Json, Router,
-    extract::{Path, Query, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     http::{
         HeaderMap, HeaderValue, StatusCode,
         header::{self, SET_COOKIE},
@@ -9,7 +9,7 @@ use axum::{
     routing::{get, post},
 };
 use lanforge_api::api::{
-    HttpDataResponse, Response as ApiResponse, SetLogLevelRequest, SystemConfigExport,
+    BackupBundle, HttpDataResponse, Response as ApiResponse, SetLogLevelRequest, SystemConfigExport,
 };
 use lanforge_api_dispatch::ClientContext;
 use lanforge_types::logging::LogLevel;
@@ -54,7 +54,15 @@ pub fn router() -> Router<AppState> {
             get(handle_export_config).post(handle_import_config),
         )
         .route("/config/toml", get(handle_export_config_toml))
+        .route("/backup", get(handle_backup))
+        .route(
+            "/restore",
+            post(handle_restore).layer(DefaultBodyLimit::max(RESTORE_MAX_BYTES)),
+        )
 }
+
+/// A restore carries the config files and the redb state in one body.
+const RESTORE_MAX_BYTES: usize = 32 << 20;
 
 async fn handle_status(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
@@ -95,6 +103,19 @@ async fn handle_export_config(
         return config_toml_download(&ctx);
     }
     crate::http_response!(ctx.handle_system_config_export().await, SystemConfig)
+}
+
+async fn handle_backup(State(state): State<AppState>) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(ctx.handle_backup().await, Backup)
+}
+
+async fn handle_restore(
+    State(state): State<AppState>,
+    Json(bundle): Json<BackupBundle>,
+) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(ctx.handle_restore(bundle).await, Success)
 }
 
 async fn handle_export_config_toml(State(state): State<AppState>) -> impl IntoResponse {

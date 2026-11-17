@@ -50,9 +50,7 @@ hyper-util = { workspace = true, features = ["client-legacy", "tokio"], optional
 hyper-rustls = { workspace = true, features = ["http1", "http2", "webpki-roots"], optional = true }
 http-body-util = { workspace = true, optional = true }
 rustls-pki-types = { version = "1.14.1", features = ["std"], optional = true }
-argon2 = { workspace = true }
-rand = { workspace = true }
-hex = { workspace = true }
+lanforge-crypto = { workspace = true, features = ["backup"] }
 
 # Third party
 bytesize = { workspace = true }
@@ -62,7 +60,6 @@ inquire = "0.9.4"
 comfy-table = { version = "7.1", features = ["custom_styling"] }
 url = { version = "2.5.4", optional = true }
 directories = { version = "6.0.0", optional = true }
-chacha20poly1305 = "0.11.0"
 libc.workspace = true
 
 [dev-dependencies]

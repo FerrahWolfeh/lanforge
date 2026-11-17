@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
 use lanforge_api::api::{
-    AdblockCheckResponse, AdblockGroupChange, AuthTokenResponse, AuthTokensResponse,
+    AdblockCheckResponse, AdblockGroupChange, AuthTokenResponse, AuthTokensResponse, BackupBundle,
     CreateUserPayload, DeviceListQuery, DevicesResponse, DhcpOptionsResponse,
     DhcpPoolsConfigResponse, DhcpPoolsResponse, DhcpReconcileResponse, DnsAdblockGroupsResponse,
     DnsAdblockRulesResponse, DnsAdblockSourcesResponse, DnsAdblockStatusResponse,
@@ -746,6 +746,20 @@ impl LanforgeRpc for ClientContext {
     async fn system_config_export(&self) -> Result<Box<SystemConfigExport>, RpcCallError> {
         match self.handle_system_config_export().await {
             Response::SystemConfig(r) => Ok(r),
+            other => Err(Self::map_failure(other)),
+        }
+    }
+
+    async fn backup(&self) -> Result<Box<BackupBundle>, RpcCallError> {
+        match self.handle_backup().await {
+            Response::Backup(b) => Ok(b),
+            other => Err(Self::map_failure(other)),
+        }
+    }
+
+    async fn restore(&self, bundle: Box<BackupBundle>) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_restore(*bundle).await {
+            Response::Success(s) => Ok(s),
             other => Err(Self::map_failure(other)),
         }
     }

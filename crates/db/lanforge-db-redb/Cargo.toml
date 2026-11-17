@@ -10,6 +10,7 @@ authors.workspace = true
 lanforge-types = { workspace = true }
 lanforge-db-core = { path = "../lanforge-db-core" }
 lanforge-core = { workspace = true }
+lanforge-crypto = { workspace = true }
 
 # Workspace
 serde = { workspace = true }

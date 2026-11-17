@@ -3,6 +3,7 @@
 //! Uses XXH3 (64-bit and 128-bit) for ultra-fast, platform-independent deterministic
 //! hashing of configuration sections, blocklists, and stable entity IDs.
 
+use sha2::{Digest, Sha256};
 use xxhash_rust::xxh3::{xxh3_64, xxh3_128};
 
 /// Computes a deterministic 64-bit XXH3 content hash of the input bytes.
@@ -29,6 +30,21 @@ pub fn content_hash_hex(bytes: &[u8]) -> String {
 #[must_use]
 pub fn content_hash_short_hex(bytes: &[u8]) -> String {
     format!("{:08x}", content_hash64(bytes) as u32)
+}
+
+/// Lowercase hex SHA-256 of an API token: what the database stores instead of the token.
+///
+/// Tokens are high-entropy random strings, so a plain fast digest is enough (no salt, no
+/// Argon2 on every request).
+#[must_use]
+pub fn token_digest(token: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(64);
+    for b in Sha256::digest(token.as_bytes()) {
+        out.push(char::from(HEX[usize::from(b >> 4)]));
+        out.push(char::from(HEX[usize::from(b & 15)]));
+    }
+    out
 }
 
 /// Normalizes a human-readable label or URL into a clean, URL/TOML-friendly slug.

@@ -437,6 +437,10 @@ pub trait UserStore: Send + Sync {
 
     /// Returns total count of user accounts in database.
     fn count_users(&self) -> Result<i64, DbError>;
+
+    /// Replaces every user and every API token with `users` and `tokens` (a backup restore:
+    /// the backup is the truth), atomically. Tokens are as stored: `token` is the digest.
+    fn replace_auth(&self, users: &[UserEntry], tokens: &[ApiTokenEntry]) -> Result<(), DbError>;
 }
 
 pub use lanforge_types::storage::DnsQueryRateBucket;

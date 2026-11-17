@@ -11,9 +11,12 @@
 )]
 
 use anyhow::Result;
+use clap::Parser;
 use lanforge::app::Daemon;
 use lanforge::bootstrap::Bootstrapper;
+use lanforge::config::CliArgs;
 use lanforge::logging;
+use lanforge::restore;
 #[cfg(feature = "pppoe")]
 use lanforge_pppoe::kernel::store;
 #[cfg(feature = "ring")]
@@ -36,6 +39,20 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 static ALLOC: hotpath::CountingAllocator = hotpath::CountingAllocator::new();
 
 fn main() -> Result<()> {
+    let cli = CliArgs::parse();
+    if let Some(file) = cli.restore.as_deref() {
+        // Offline restore: no runtime, no services, no database left open.
+        return match restore::run(&cli, file) {
+            Ok(done) => {
+                println!("{done}");
+                Ok(())
+            }
+            Err(e) => {
+                eprintln!("❌ Restore failed: {e:#}");
+                process::exit(1);
+            }
+        };
+    }
     // systemd's start timeout runs from exec: the readiness deadline counts from here too.
     let started = Instant::now();
     let rt = Builder::new_multi_thread()

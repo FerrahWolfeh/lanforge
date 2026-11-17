@@ -9,7 +9,7 @@ use lanforge_api::api::{
 };
 use lanforge_api::config_file::{
     AdblockFile, AdblockSettings, ConfigFile, DhcpSettings, DnsFile, DnsSettings, FirewallFile,
-    NamedUpstream, RaFile, write_toml_atomically,
+    NamedUpstream, RaFile, SecretsFile, write_toml_atomically,
 };
 use lanforge_core::context::ConfigPatch;
 use lanforge_crypto::{hash_password, stable_id_or_hash};
@@ -467,6 +467,13 @@ impl ClientContext {
                 "Setup: Successfully generated and wrote configuration to {}",
                 target_path.display()
             );
+            if let Some(pppoe) = setup_pppoe_config(&payload) {
+                let mut secrets = SecretsFile::default();
+                secrets.pppoe.password = Some(pppoe.password);
+                if let Err(e) = secrets.write(&target_path) {
+                    error!("Setup: Failed to write the PPPoE password to secrets.toml: {e}");
+                }
+            }
             self.ctx.set_config_path(&target_path);
             self.ctx.set_config_writable(true);
         }

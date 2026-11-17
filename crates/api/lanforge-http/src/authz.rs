@@ -137,6 +137,8 @@ pub fn requirement(method: &Method, path: &str) -> Requirement {
 
         // Daemon lifecycle and internals.
         (_, ["reload" | "shutdown" | "context"] | ["service", ..]) => Admin,
+        // A backup holds password hashes and token digests; a restore replaces them.
+        (_, ["backup" | "restore"]) => Admin,
         // Exported config holds secrets.
         (_, ["config", ..]) => ConfigWrite,
 
@@ -286,6 +288,8 @@ mod tests {
             (Method::GET, "/api/v1/users"),
             (Method::GET, "/api/v1/pppoe/config"),
             (Method::GET, "/api/v1/system/config/toml"),
+            (Method::GET, "/api/v1/system/backup"),
+            (Method::POST, "/api/v1/system/restore"),
             (Method::POST, "/api/v1/system/shutdown"),
         ] {
             assert!(!allowed(&viewer, &method, path), "{method} {path}");
@@ -318,6 +322,9 @@ mod tests {
             (Method::GET, "/api/v1/pppoe/config"),
             (Method::POST, "/api/v1/users"),
             (Method::DELETE, "/api/v1/db"),
+            (Method::GET, "/api/v1/system/backup"),
+            (Method::POST, "/api/v1/system/restore"),
+            (Method::GET, "/api/v1/backup"),
             (Method::POST, "/api/v1/system/service/dns/control"),
         ] {
             assert!(!allowed(&op, &method, path), "{method} {path}");
