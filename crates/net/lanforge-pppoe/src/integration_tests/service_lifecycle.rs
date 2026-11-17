@@ -1819,11 +1819,12 @@ async fn next_reconnecting(sub: &mut broadcast::Receiver<TimedEvent>) -> u64 {
     .expect("a reconnect is scheduled")
 }
 
-/// Owner's fibre cut (2026-11-17): the ONT stayed up, no concentrator answered for hours and the
-/// backoff reached its 5-minute cap. When the WAN comes back the session must return within
-/// seconds, not after whatever is left of that wait.
+/// Owner's fibre cut (2026-11-17): the ONT stayed up and no concentrator answered for hours.
+/// Full attempts on a growing backoff logged a discovery round every few minutes and left the
+/// session down for up to ~6 minutes after the WAN came back. A dark WAN is now only polled with
+/// a single PADI, quietly, and the session returns within seconds of the first PADO.
 #[tokio::test(start_paused = true)]
-async fn the_session_returns_within_seconds_of_the_wan_coming_back() {
+async fn a_dark_wan_is_polled_quietly_and_the_session_returns_with_it() {
     let (ctx, bus) = create_test_context();
     let mut pppoe_sub = bus.subscribe_pppoe();
     let cfg = PppoeConfig {
@@ -1840,20 +1841,28 @@ async fn the_session_returns_within_seconds_of_the_wan_coming_back() {
     };
     let (seen, _cmd_tx, handle) = start_with_bras(&ctx, cfg, bras);
 
-    let mut wait = 0;
-    while wait < 150 {
-        wait = next_reconnecting(&mut pppoe_sub).await;
-    }
-    // The fibre is spliced right after a long wait was scheduled.
+    // The first attempt finds no concentrator.
+    next_reconnecting(&mut pppoe_sub).await;
+    let padis = seen.lock().unwrap().padis;
+
+    // Ten dark minutes: no further attempt (each one publishes Reconnecting), one PADI per 20 s.
+    let attempt = timeout(Duration::from_secs(600), next_reconnecting(&mut pppoe_sub)).await;
+    assert!(
+        attempt.is_err(),
+        "a full attempt ran while the WAN was dark"
+    );
+    let probes = seen.lock().unwrap().padis - padis;
+    assert!((25..=35).contains(&probes), "{probes} PADIs in 10 minutes");
+
+    // The fibre is spliced.
     dark.store(false, Ordering::SeqCst);
     let back = Instant::now();
-    session_up_within(&mut pppoe_sub, Duration::from_secs(wait + 120)).await;
+    session_up_within(&mut pppoe_sub, Duration::from_secs(120)).await;
     let took = back.elapsed();
     assert!(
         took <= Duration::from_secs(30),
-        "WAN back, session down for another {took:?} (the scheduled wait was {wait} s)"
+        "WAN back, session down for another {took:?}"
     );
-    assert!(seen.lock().unwrap().padis > 0);
 
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = timeout(Duration::from_secs(2), handle).await;

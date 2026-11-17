@@ -215,7 +215,7 @@ async fn exchange_padi(
         }
     }
 
-    Err(PppoeError::DiscoveryTimeout)
+    Err(PppoeError::NoConcentrator)
 }
 
 async fn exchange_padr(
