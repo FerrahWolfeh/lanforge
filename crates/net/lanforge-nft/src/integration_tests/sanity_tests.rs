@@ -1072,3 +1072,50 @@ fn test_sanity_rpfilter_absent_in_minimal_mode_and_without_interfaces() {
     let json = serde_json::to_string(&RulesetBuilder::new(&bare).build()).unwrap();
     assert!(!json.contains("rpfilter"));
 }
+
+/// Every MSS clamp must only lower the MSS: a rule that sets `maxseg size` without first
+/// matching `maxseg size > value` raises a smaller MSS announced by the peer (VPN, tunnel).
+#[test]
+fn test_mss_clamp_never_raises_a_smaller_mss() {
+    for mode in [FirewallMode::Full, FirewallMode::Minimal] {
+        let cfg = FirewallConfig {
+            mode,
+            ..FirewallConfig::default()
+        };
+        let ruleset = RulesetBuilder::new(&cfg)
+            .with_primary_lan(Some("lan0"))
+            .with_active_wan(Some("ppp0"))
+            .build();
+        let json = serde_json::to_value(&ruleset).unwrap();
+
+        let mut clamps = 0;
+        for obj in json["nftables"].as_array().unwrap() {
+            let Some(expr) = obj.pointer("/add/rule/expr").and_then(|e| e.as_array()) else {
+                continue;
+            };
+            let is_maxseg = |v: &serde_json::Value| {
+                v.pointer("/tcp option/name") == Some(&"maxseg".into())
+                    && v.pointer("/tcp option/field") == Some(&"size".into())
+            };
+            let Some(value) = expr.iter().find_map(|s| {
+                let m = s.get("mangle")?;
+                is_maxseg(&m["key"]).then(|| m["value"].clone())
+            }) else {
+                continue;
+            };
+            clamps += 1;
+            let guarded = expr.iter().any(|s| {
+                s.get("match")
+                    .is_some_and(|m| is_maxseg(&m["left"]) && m["op"] == ">" && m["right"] == value)
+            });
+            assert!(
+                guarded,
+                "{mode:?}: MSS clamp without `> {value}` guard: {expr:?}"
+            );
+        }
+        assert_eq!(
+            clamps, 4,
+            "{mode:?}: expected v4+v6 clamps in forward and output"
+        );
+    }
+}

@@ -518,6 +518,58 @@ impl RaService {
         }
     }
 
+    /// An RA must be sent from the interface's link-local address (RFC 4861 §4.2), which the
+    /// kernel only creates once the link is up: right after boot or a cable replug the RA has
+    /// nothing to send from. Waits for it, dormant, instead of failing the run into the
+    /// supervisor's error backoff. `None` once the address is there; otherwise why the run ends.
+    async fn wait_for_link_local(&self, iface_index: u32, h: &ServiceHandle) -> Option<RunResult> {
+        // Subscribe before reading: an address added in between must not be missed.
+        let mut handle = self.ctx.service_handle_network();
+        let mut ra_sub = self.ctx.config_subscription::<RaServerConfig>();
+        let mut prefix_sub = self.ctx.config_subscription::<Vec<RAPrefix>>();
+        let has_ll = || {
+            self.ctx
+                .get_interface_state(iface_index)
+                .link_local
+                .is_some()
+        };
+        if has_ll() {
+            return None;
+        }
+        info!(iface = %self.cfg.iface, "Waiting for the interface's link-local address");
+        h.dormant(DormantReason::WaitingForLink(self.cfg.iface.clone()));
+        loop {
+            tokio::select! {
+                cmd = h.next_command() => match cmd {
+                    ServiceCommand::Stop | ServiceCommand::Shutdown => return Some(RunResult::Shutdown),
+                    ServiceCommand::Restart => {
+                        h.request_restart();
+                        return Some(RunResult::Shutdown);
+                    }
+                    _ => {}
+                },
+                res = handle.next_event() => {
+                    if res.is_none() {
+                        return Some(RunResult::Shutdown);
+                    }
+                    if has_ll() {
+                        return None;
+                    }
+                }
+                Some(delta) = ra_sub.next() => {
+                    if delta.impact != ChangeImpact::None {
+                        return Some(RunResult::ConfigChanged);
+                    }
+                }
+                Some(delta) = prefix_sub.next() => {
+                    if delta.impact != ChangeImpact::None {
+                        return Some(RunResult::ConfigChanged);
+                    }
+                }
+            }
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     async fn run_server(
         &mut self,
@@ -563,6 +615,10 @@ impl RaService {
             iface_index,
             current_cfg.deprecate_on_renumber,
         );
+
+        if let Some(result) = self.wait_for_link_local(iface_index, h).await {
+            return Ok(result);
+        }
 
         // Immediate RA on startup
         send_ra_internal(

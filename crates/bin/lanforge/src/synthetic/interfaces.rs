@@ -64,7 +64,9 @@ impl InterfacesService {
                 });
             }
 
-            let carrier = iface.is_up();
+            // IFF_LOWER_UP is the carrier; `is_up` is only the admin flag (IFF_UP), true on a
+            // port whose cable is out.
+            let carrier = iface.is_lower_up();
             links.push(LinkInfo {
                 ifindex: iface.index,
                 name: iface.name,

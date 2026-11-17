@@ -9,6 +9,7 @@ mod db_reset;
 mod dhcp_core_consistency;
 #[cfg(all(feature = "dhcp", feature = "nft", feature = "ra", feature = "traffic"))]
 mod eventbus_reactivity;
+mod interfaces_carrier;
 mod phase2_service_contract;
 mod phase3_graph_supervisor;
 mod phase4_wan_acceptance;
