@@ -826,3 +826,73 @@ async fn test_ra_rdnss_falls_back_to_the_isp_only_when_local_dns_is_off() {
         "DNS off, WAN down: none"
     );
 }
+
+/// Right after boot (or a cable replug) the LAN link is up but the kernel has not created its
+/// link-local address yet. The RA must wait for it, dormant, and advertise as soon as it shows
+/// up, instead of failing the run with `NoLinkLocal` into the supervisor's error backoff.
+#[tokio::test]
+async fn test_ra_waits_for_link_local_instead_of_failing() {
+    let (ctx, _bus) = create_test_context();
+    ctx.update_ra_server_config(RaServerConfig {
+        enabled: true,
+        iface: Some("lan0".into()),
+        managed: false,
+        other_config: false,
+        hop_limit: 64,
+        priority: RouterPriority::Medium,
+        max_interval_secs: 600,
+        min_interval_secs: Some(200),
+        lifetime_secs: Some(1800),
+        reachable_time_ms: 0,
+        retrans_timer_ms: 0,
+        mtu: Some(1500),
+        prefixes: vec![RAPrefix::gua_dynamic()],
+        rdnss: vec![],
+        dnssl: vec![],
+        deprecate_on_renumber: true,
+    });
+    let lan = |link_local: Option<Ipv6Addr>| DeviceUpdate::InterfaceIpsChanged {
+        ifindex: LAN,
+        state: Box::new(InterfaceState {
+            v4: None,
+            link_local,
+            gua: Some("2001:db8:1000::1".parse().unwrap()),
+            ula: None,
+            gua_preferred: 3600,
+            gua_valid: 7200,
+            mac: Some(MacAddr([0x02, 0, 0, 0, 0, 0x01])),
+        }),
+    };
+    let _ = ctx.apply(lan(None));
+
+    let (handle, transport) = lanforge_transport::Icmp6Transport::inert();
+    let mut service = RaService::with_transport(RaConfig::default(), ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let mut serve_handle = tokio::spawn(async move {
+        let h = ServiceHandle::new(ServiceId::Ra, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+
+    // No link-local yet: the run keeps going, dormant, and sends nothing.
+    if let Ok(res) = timeout(Duration::from_millis(300), &mut serve_handle).await {
+        panic!("RA run ended without a link-local address: {res:?}");
+    }
+    assert_eq!(ctx.get_service_state(ServiceId::Ra), ServiceState::Inactive);
+    assert!(
+        timeout(Duration::from_millis(50), handle.recv_payload())
+            .await
+            .is_err(),
+        "no RA without a link-local source"
+    );
+
+    // The kernel adds the link-local address: the RA goes out right away.
+    let _ = ctx.apply(lan(Some("fe80::1".parse().unwrap())));
+    let ra = timeout(Duration::from_millis(1000), handle.recv_payload())
+        .await
+        .expect("RA once the link-local address exists")
+        .expect("RA channel closed");
+    assert!(!ra_prefixes(&ra).is_empty());
+    assert_eq!(ctx.get_service_state(ServiceId::Ra), ServiceState::Online);
+
+    serve_handle.abort();
+}
