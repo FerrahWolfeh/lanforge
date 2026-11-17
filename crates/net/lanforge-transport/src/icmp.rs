@@ -158,8 +158,8 @@ impl IcmpPinger {
                     } => {
                         if let Ok(mut guard) = guard_res {
                             match sys::recv_from(guard.get_inner(), &mut buf) {
+                                // Readiness stays set until EAGAIN, so a burst is drained.
                                 Ok((n, addr)) => {
-                                    guard.clear_ready();
                                     let bytes = &buf[..n];
                                     if let Some(sock_addr) = addr.as_socket() {
                                         let ip = sock_addr.ip();
@@ -190,8 +190,8 @@ impl IcmpPinger {
                     } => {
                         if let Ok(mut guard) = guard_res {
                             match sys::recv_from(guard.get_inner(), &mut buf) {
+                                // Readiness stays set until EAGAIN, so a burst is drained.
                                 Ok((n, addr)) => {
-                                    guard.clear_ready();
                                     let bytes = &buf[..n];
                                     if let Some(sock_addr) = addr.as_socket() {
                                         let ip = sock_addr.ip();
@@ -592,5 +592,34 @@ mod tests {
             .ping_timeout(target_ip, 1, Duration::from_millis(50))
             .await;
         assert!(!res.unwrap());
+    }
+
+    /// Regression: the reader cleared the readiness after each packet, so a burst left packets in
+    /// the queue until later arrivals, and echo replies behind them timed out.
+    /// Rootless run: `unshare -rn sh -c 'ip link set lo up && <test binary> --ignored queued'`.
+    #[tokio::test]
+    #[ignore = "needs CAP_NET_RAW (run inside `unshare -rn`)"]
+    async fn should_see_the_echo_reply_queued_behind_a_burst() {
+        let pinger = IcmpPinger::new().unwrap();
+        let noise = Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::ICMPV4)).unwrap();
+        let to = socket2::SockAddr::from(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)));
+        // Echo replies for another identifier, sent while the reader task cannot run.
+        let mut other = [0u8; 8];
+        other[4..6].copy_from_slice(&pinger.ident().wrapping_add(1).to_be_bytes());
+        let cs = checksum(&other);
+        other[2..4].copy_from_slice(&cs.to_be_bytes());
+        for _ in 0..10 {
+            noise.send_to(&other, &to).unwrap();
+        }
+
+        let answered = pinger
+            .ping_timeout(
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                1,
+                Duration::from_millis(500),
+            )
+            .await
+            .unwrap();
+        assert!(answered, "the reply stayed queued behind the burst");
     }
 }

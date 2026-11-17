@@ -150,8 +150,8 @@ impl Icmp6Transport {
             Icmp6Backend::Kernel(async_fd) => loop {
                 let mut guard = async_fd.readable().await.map_err(|e| self.counted(e))?;
                 match sys::recv_from_v6(guard.get_inner().as_fd(), buf) {
+                    // Readiness stays set until EAGAIN: the next call reads what is queued.
                     Ok((n, src)) => {
-                        guard.clear_ready();
                         self.inner.metrics.record_rx(n);
                         return Ok((n, src));
                     }
@@ -237,7 +237,11 @@ mod tests {
     use super::*;
     use std::net::SocketAddrV6;
     use std::time::Duration;
+    use tokio::sync::Mutex;
     use tokio::time::timeout;
+
+    /// Every RA listener on `lo` hears every RA sent there: the tests that send them take turns.
+    static RAS_ON_LO: Mutex<()> = Mutex::const_new(());
 
     /// Real sockets: needs `CAP_NET_RAW`, so it is ignored by default. Rootless run:
     /// `unshare -rn sh -c 'ip link set lo up && cargo test -p lanforge-transport -- --ignored
@@ -245,6 +249,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "needs CAP_NET_RAW (run inside `unshare -rn`)"]
     async fn ra_listener_passes_ras_and_nothing_else() {
+        let _lo = RAS_ON_LO.lock().await;
         let listener = Icmp6Transport::bind_ra_listener("lo").expect("bind on lo");
         let sender = Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6)).unwrap();
         let to = socket2::SockAddr::from(SocketAddr::V6("[::1]:0".parse().unwrap()));
@@ -381,6 +386,29 @@ mod tests {
                     "Byte {i} must be 0xFF to filter out other ICMPv6 types"
                 );
             }
+        }
+    }
+
+    /// Regression: a successful read cleared the readiness, so a second RA queued with the first
+    /// waited for another arrival.
+    #[tokio::test]
+    #[ignore = "needs CAP_NET_RAW (run inside `unshare -rn`)"]
+    async fn queued_ras_are_all_delivered() {
+        let _lo = RAS_ON_LO.lock().await;
+        let listener = Icmp6Transport::bind_ra_listener("lo").expect("bind on lo");
+        let sender = Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6)).unwrap();
+        let to = socket2::SockAddr::from(SocketAddr::V6("[::1]:0".parse().unwrap()));
+        for hop_limit in 1..=3u8 {
+            let ra = [134u8, 0, 0, 0, hop_limit, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+            sender.send_to(&ra, &to).unwrap();
+        }
+        let mut buf = [0u8; 64];
+        for hop_limit in 1..=3u8 {
+            timeout(Duration::from_secs(2), listener.recv(&mut buf))
+                .await
+                .unwrap_or_else(|_| panic!("queued RA {hop_limit} not delivered"))
+                .expect("recv");
+            assert_eq!(buf[4], hop_limit);
         }
     }
 }
