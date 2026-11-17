@@ -308,12 +308,7 @@ impl PppoeTransport {
         })?;
 
         let res = match backend {
-            PppoeDiscoveryBackend::Kernel(async_fd) => {
-                let mut guard = async_fd.writable().await?;
-                let n = sys::write(async_fd.get_ref().as_fd(), frame);
-                guard.clear_ready();
-                Ok(n?)
-            }
+            PppoeDiscoveryBackend::Kernel(async_fd) => write_frame(&async_fd, frame).await,
             #[cfg(any(test, feature = "inert"))]
             PppoeDiscoveryBackend::Inert(port) => port
                 .out_tx
@@ -342,46 +337,31 @@ impl PppoeTransport {
             io::Error::new(io::ErrorKind::NotConnected, "Discovery socket not bound")
         })?;
 
-        loop {
-            let res = match &backend {
-                PppoeDiscoveryBackend::Kernel(async_fd) => {
-                    let mut guard = async_fd.readable().await?;
-                    match sys::read(async_fd.get_ref().as_fd(), buf) {
-                        Ok(n) => {
-                            guard.clear_ready();
-                            Ok(n)
-                        }
-                        Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                            guard.clear_ready();
-                            continue;
-                        }
-                        Err(err) => return Err(err),
+        let res = match &backend {
+            PppoeDiscoveryBackend::Kernel(async_fd) => read_frame(async_fd, buf).await,
+            #[cfg(any(test, feature = "inert"))]
+            PppoeDiscoveryBackend::Inert(port) => {
+                let mut rx = port.in_rx.lock().await;
+                match rx.recv().await {
+                    Some((packet, ())) => {
+                        let len = packet.len().min(buf.len());
+                        buf[..len].copy_from_slice(&packet[..len]);
+                        Ok(len)
                     }
+                    None => Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "Inert PPPoE discovery channel closed",
+                    )),
                 }
-                #[cfg(any(test, feature = "inert"))]
-                PppoeDiscoveryBackend::Inert(port) => {
-                    let mut rx = port.in_rx.lock().await;
-                    match rx.recv().await {
-                        Some((packet, ())) => {
-                            let len = packet.len().min(buf.len());
-                            buf[..len].copy_from_slice(&packet[..len]);
-                            Ok(len)
-                        }
-                        None => Err(io::Error::new(
-                            io::ErrorKind::UnexpectedEof,
-                            "Inert PPPoE discovery channel closed",
-                        )),
-                    }
-                }
-            };
-
-            if let Ok(n) = res {
-                self.inner.metrics.record_rx(n);
-            } else {
-                self.inner.metrics.record_error();
             }
-            return res;
+        };
+
+        if let Ok(n) = res {
+            self.inner.metrics.record_rx(n);
+        } else {
+            self.inner.metrics.record_error();
         }
+        res
     }
 
     /// Sends a PPP session frame (e.g. LCP, PAP/CHAP, IPCP, Echo-Req) through the transport.
@@ -396,12 +376,7 @@ impl PppoeTransport {
         })?;
 
         let res = match backend {
-            PppoeSessionBackend::Kernel { io_fd, .. } => {
-                let mut guard = io_fd.writable().await?;
-                let n = sys::write(io_fd.get_ref().as_fd(), frame);
-                guard.clear_ready();
-                Ok(n?)
-            }
+            PppoeSessionBackend::Kernel { io_fd, .. } => write_frame(&io_fd, frame).await,
             #[cfg(any(test, feature = "inert"))]
             PppoeSessionBackend::Inert(port) => port
                 .out_tx
@@ -430,46 +405,31 @@ impl PppoeTransport {
             io::Error::new(io::ErrorKind::NotConnected, "PPPoE session not connected")
         })?;
 
-        loop {
-            let res = match &backend {
-                PppoeSessionBackend::Kernel { io_fd, .. } => {
-                    let mut guard = io_fd.readable().await?;
-                    match sys::read(io_fd.get_ref().as_fd(), buf) {
-                        Ok(n) => {
-                            guard.clear_ready();
-                            Ok(n)
-                        }
-                        Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                            guard.clear_ready();
-                            continue;
-                        }
-                        Err(err) => return Err(err),
+        let res = match &backend {
+            PppoeSessionBackend::Kernel { io_fd, .. } => read_frame(io_fd, buf).await,
+            #[cfg(any(test, feature = "inert"))]
+            PppoeSessionBackend::Inert(port) => {
+                let mut rx = port.in_rx.lock().await;
+                match rx.recv().await {
+                    Some((packet, ())) => {
+                        let len = packet.len().min(buf.len());
+                        buf[..len].copy_from_slice(&packet[..len]);
+                        Ok(len)
                     }
+                    None => Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "Inert PPPoE session channel closed",
+                    )),
                 }
-                #[cfg(any(test, feature = "inert"))]
-                PppoeSessionBackend::Inert(port) => {
-                    let mut rx = port.in_rx.lock().await;
-                    match rx.recv().await {
-                        Some((packet, ())) => {
-                            let len = packet.len().min(buf.len());
-                            buf[..len].copy_from_slice(&packet[..len]);
-                            Ok(len)
-                        }
-                        None => Err(io::Error::new(
-                            io::ErrorKind::UnexpectedEof,
-                            "Inert PPPoE session channel closed",
-                        )),
-                    }
-                }
-            };
-
-            if let Ok(n) = res {
-                self.inner.metrics.record_rx(n);
-            } else {
-                self.inner.metrics.record_error();
             }
-            return res;
+        };
+
+        if let Ok(n) = res {
+            self.inner.metrics.record_rx(n);
+        } else {
+            self.inner.metrics.record_error();
         }
+        res
     }
 
     /// Returns `true` if operating in inert testing mode.
@@ -521,6 +481,29 @@ impl PppoeTransport {
     }
 }
 
+/// Writes one frame. Readiness is cleared only on `EAGAIN`: `/dev/ppp` wakes its pollers only
+/// when a frame arrives, so clearing it after a successful write would park the next write until
+/// the peer speaks, and a silent peer is exactly what LCP echo has to detect.
+async fn write_frame(fd: &AsyncFd<OwnedFd>, frame: &[u8]) -> io::Result<usize> {
+    loop {
+        let mut guard = fd.writable().await?;
+        if let Ok(res) = guard.try_io(|fd| sys::write(fd.get_ref().as_fd(), frame)) {
+            return res;
+        }
+    }
+}
+
+/// Reads one frame. Readiness is cleared only on `EAGAIN`, so frames queued behind this one are
+/// read without waiting for another arrival.
+async fn read_frame(fd: &AsyncFd<OwnedFd>, buf: &mut [u8]) -> io::Result<usize> {
+    loop {
+        let mut guard = fd.readable().await?;
+        if let Ok(res) = guard.try_io(|fd| sys::read(fd.get_ref().as_fd(), buf)) {
+            return res;
+        }
+    }
+}
+
 impl TransportStats for PppoeTransport {
     fn snapshot(&self) -> TransportSnapshot {
         self.inner.metrics.snapshot()
@@ -530,7 +513,9 @@ impl TransportStats for PppoeTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::net::UnixStream;
+    use std::os::unix::net::{UnixDatagram, UnixStream};
+    use std::time::Duration;
+    use tokio::time::timeout;
 
     /// A connected, non-blocking `AF_UNIX` stream pair standing in for a kernel socket.
     fn nonblocking_pair() -> (OwnedFd, OwnedFd) {
@@ -616,5 +601,85 @@ mod tests {
         transport.close_session();
         let eof_pppox = sys::read(pppox_peer.as_fd(), &mut probe).unwrap();
         assert_eq!(eof_pppox, 0, "AF_PPPOX socket must close on close_session");
+    }
+
+    /// A transport whose discovery socket and session channel are connected datagram pairs, like
+    /// the kernel's: frame boundaries are kept, and the epoll edge for our end comes only from the
+    /// peer (`/dev/ppp` wakes its pollers only when a frame arrives). Returns the peer ends.
+    fn datagram_transport() -> (PppoeTransport, OwnedFd, OwnedFd) {
+        let pair = || {
+            let (a, b) = UnixDatagram::pair().unwrap();
+            a.set_nonblocking(true).unwrap();
+            b.set_nonblocking(true).unwrap();
+            (OwnedFd::from(a), OwnedFd::from(b))
+        };
+        let (disc, disc_peer) = pair();
+        let (chan, chan_peer) = pair();
+        let transport = PppoeTransport {
+            inner: Arc::new(PppoeTransportInner {
+                discovery: parking_lot::RwLock::new(Some(PppoeDiscoveryBackend::Kernel(Arc::new(
+                    sys::register_fd(disc).unwrap(),
+                )))),
+                session: parking_lot::RwLock::new(Some(PppoeSessionBackend::Kernel {
+                    io_fd: Arc::new(sys::register_fd(chan).unwrap()),
+                    _pppox_fd: None,
+                })),
+                metrics: Arc::new(TransportMetrics::new()),
+            }),
+        };
+        (transport, disc_peer, chan_peer)
+    }
+
+    const NO_HANG: Duration = Duration::from_secs(2);
+
+    /// Regression: a successful write cleared the write readiness, so the next send waited for an
+    /// epoll edge that `/dev/ppp` only raises when a frame comes in. With the access concentrator
+    /// silent (fibre cut), the second LCP Echo-Request never left and the keepalive hung forever.
+    #[tokio::test]
+    async fn should_keep_sending_while_the_peer_stays_silent() {
+        let (transport, disc_peer, chan_peer) = datagram_transport();
+
+        for id in 1..=3u8 {
+            timeout(NO_HANG, transport.send_session(&[0xc0, 0x21, 0x09, id]))
+                .await
+                .unwrap_or_else(|_| panic!("session send {id} hung on a silent peer"))
+                .unwrap();
+            timeout(NO_HANG, transport.send_discovery(&[id]))
+                .await
+                .unwrap_or_else(|_| panic!("discovery send {id} hung on a silent peer"))
+                .unwrap();
+        }
+
+        let mut buf = [0u8; 8];
+        for id in 1..=3u8 {
+            let n = sys::read(chan_peer.as_fd(), &mut buf).unwrap();
+            assert_eq!(&buf[..n], &[0xc0, 0x21, 0x09, id]);
+            let n = sys::read(disc_peer.as_fd(), &mut buf).unwrap();
+            assert_eq!(&buf[..n], &[id]);
+        }
+    }
+
+    /// Frames queued together are all delivered: reading one must not wait for another arrival.
+    #[tokio::test]
+    async fn should_receive_every_queued_frame_without_a_new_arrival() {
+        let (transport, disc_peer, chan_peer) = datagram_transport();
+        for id in 1..=3u8 {
+            sys::write(chan_peer.as_fd(), &[0xc0, 0x21, 0x0a, id]).unwrap();
+            sys::write(disc_peer.as_fd(), &[id]).unwrap();
+        }
+
+        let mut buf = [0u8; 8];
+        for id in 1..=3u8 {
+            let n = timeout(NO_HANG, transport.recv_session(&mut buf))
+                .await
+                .unwrap_or_else(|_| panic!("queued session frame {id} not delivered"))
+                .unwrap();
+            assert_eq!(&buf[..n], &[0xc0, 0x21, 0x0a, id]);
+            let n = timeout(NO_HANG, transport.recv_discovery(&mut buf))
+                .await
+                .unwrap_or_else(|_| panic!("queued discovery frame {id} not delivered"))
+                .unwrap();
+            assert_eq!(&buf[..n], &[id]);
+        }
     }
 }
