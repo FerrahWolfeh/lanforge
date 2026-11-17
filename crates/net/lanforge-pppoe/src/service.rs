@@ -25,12 +25,13 @@ use lanforge_types::system::{
     DegradedReason, DormantReason, PppoeSessionState, PppoeStatusResponse, ServiceId, ServiceState,
     StateDetail,
 };
+use std::future::pending;
 use std::mem;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast::error::RecvError;
-use tokio::time::{Instant, interval, sleep_until};
+use tokio::time::{Instant, interval, sleep, sleep_until};
 use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone)]
@@ -66,6 +67,24 @@ fn reconnect_jitter() -> f64 {
 /// owner's MX204 BNG released it between 2.9 s and 6.0 s after the PADT (box logs). No discovery
 /// starts sooner than this after a PADT.
 const PADT_RELEASE: Duration = Duration::from_secs(6);
+
+/// While no concentrator answers at all, a single PADI goes out this often during the reconnect
+/// wait, so the session returns within seconds of the WAN (fibre, OLT, BNG) coming back instead
+/// of after a backoff of up to [`crate::backoff::MAX_DELAY`]. A PADI creates no session, so this
+/// does not count as the reconnect cycling the backoff protects the ISP from.
+const PADO_PROBE_INTERVAL: Duration = Duration::from_secs(20);
+
+/// Sends a probe every [`PADO_PROBE_INTERVAL`] and returns once a concentrator answers.
+async fn probe_until_pado(discovery: &PppoeDiscovery, transport: &PppoeTransport) {
+    loop {
+        sleep(PADO_PROBE_INTERVAL).await;
+        match discovery.probe(transport).await {
+            Ok(true) => return,
+            Ok(false) => debug!("PADO probe: still no concentrator"),
+            Err(e) => debug!(error = %e, "PADO probe could not be sent"),
+        }
+    }
+}
 
 const PPPOE_DEPS: &[Edge] = &[Edge::requires(ServiceId::Interfaces, LossPolicy::Continue)];
 
@@ -186,12 +205,34 @@ impl<H: PppoeHost> PppoeService<H> {
     /// Waits `delay` before the next attempt. Returns `false` when the service must exit instead.
     /// An admin restart or a reconnect-level config change ends the wait early (no pacing for
     /// explicit requests); a lagged bus never does.
-    async fn wait_before_reconnect(&mut self, h: &ServiceHandle, delay: Duration) -> bool {
+    /// With `probe_wan` (the last attempt got no PADO at all), the wait also ends as soon as a
+    /// concentrator answers a probe ([`PADO_PROBE_INTERVAL`]).
+    async fn wait_before_reconnect(
+        &mut self,
+        h: &ServiceHandle,
+        delay: Duration,
+        probe_wan: bool,
+    ) -> bool {
         let wake = Instant::now() + delay;
         let mut sys_rx = self.ctx.bus().subscribe_system();
+        let probe = if probe_wan { self.pado_probe() } else { None };
+        let wan_back = async {
+            match &probe {
+                Some((discovery, transport)) => probe_until_pado(discovery, transport).await,
+                None => pending().await,
+            }
+        };
+        tokio::pin!(wan_back);
         loop {
             tokio::select! {
                 () = sleep_until(wake) => return true,
+                () = &mut wan_back => {
+                    info!(
+                        wan_iface = %self.cfg.wan_iface,
+                        "A concentrator answers again (PADO); reconnecting now"
+                    );
+                    return true;
+                }
                 event_res = sys_rx.recv() => match event_res {
                     Ok(timed)
                         if classify_system_event(&timed.event) == Some(SystemInterrupt::Shutdown) =>
@@ -232,6 +273,27 @@ impl<H: PppoeHost> PppoeService<H> {
                 },
             }
         }
+    }
+
+    /// The discovery that probes for a concentrator during the reconnect wait, `None` when the
+    /// WAN interface or its socket is not there (the next attempt reports that).
+    fn pado_probe(&mut self) -> Option<(PppoeDiscovery, PppoeTransport)> {
+        let (ifindex, mac) = self.get_interface_details().ok()?;
+        let transport = self.discovery_transport(ifindex).ok()?;
+        info!(
+            wan_iface = %self.cfg.wan_iface,
+            interval_secs = PADO_PROBE_INTERVAL.as_secs(),
+            "No concentrator answered; probing with a single PADI until the next attempt"
+        );
+        let discovery = PppoeDiscovery::new(
+            ifindex,
+            mac,
+            1,
+            self.cfg.discovery_padi_timeout_secs,
+            self.cfg.service_name.clone(),
+            self.cfg.ac_name.clone(),
+        );
+        Some((discovery, transport))
     }
 
     /// Settles the service for daemon readiness without a session. WAN readiness is the physical
@@ -1341,7 +1403,8 @@ impl<H: PppoeHost> AsyncService for PppoeService<H> {
                     next_retry_secs: delay.as_secs(),
                 }));
 
-            if !self.wait_before_reconnect(h, delay).await {
+            let probe_wan = matches!(error, Some(PppoeError::DiscoveryTimeout));
+            if !self.wait_before_reconnect(h, delay, probe_wan).await {
                 ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
                 break 'main_loop;
             }

@@ -1,7 +1,7 @@
 use super::mock_bras;
 
 use std::net::Ipv4Addr;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -1796,6 +1796,96 @@ async fn missed_echo_replies_are_reported_and_their_recovery_too() {
     assert_eq!(
         ctx.pppoe_status().map(|s| s.state),
         Some(PppoeSessionState::Connected)
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(Duration::from_secs(2), handle).await;
+}
+
+/// The next `Reconnecting` event, however long the attempts in between take.
+async fn next_reconnecting(sub: &mut broadcast::Receiver<TimedEvent>) -> u64 {
+    timeout(Duration::from_secs(900), async {
+        loop {
+            if let Ok(evt) = sub.recv().await
+                && let LanforgeEvent::Pppoe(PppoeEvent::Reconnecting {
+                    next_retry_secs, ..
+                }) = evt.event
+            {
+                return next_retry_secs;
+            }
+        }
+    })
+    .await
+    .expect("a reconnect is scheduled")
+}
+
+/// Owner's fibre cut (2026-11-17): the ONT stayed up, no concentrator answered for hours and the
+/// backoff reached its 5-minute cap. When the WAN comes back the session must return within
+/// seconds, not after whatever is left of that wait.
+#[tokio::test(start_paused = true)]
+async fn the_session_returns_within_seconds_of_the_wan_coming_back() {
+    let (ctx, bus) = create_test_context();
+    let mut pppoe_sub = bus.subscribe_pppoe();
+    let cfg = PppoeConfig {
+        enabled: true,
+        wan_iface: "eth1".into(),
+        username: "client1".into(),
+        reconnect_delay_secs: 10,
+        ..Default::default()
+    };
+    let dark = Arc::new(AtomicBool::new(true));
+    let bras = MockBrasConfig {
+        discovery_muted: Arc::clone(&dark),
+        ..Default::default()
+    };
+    let (seen, _cmd_tx, handle) = start_with_bras(&ctx, cfg, bras);
+
+    let mut wait = 0;
+    while wait < 150 {
+        wait = next_reconnecting(&mut pppoe_sub).await;
+    }
+    // The fibre is spliced right after a long wait was scheduled.
+    dark.store(false, Ordering::SeqCst);
+    let back = Instant::now();
+    session_up_within(&mut pppoe_sub, Duration::from_secs(wait + 120)).await;
+    let took = back.elapsed();
+    assert!(
+        took <= Duration::from_secs(30),
+        "WAN back, session down for another {took:?} (the scheduled wait was {wait} s)"
+    );
+    assert!(seen.lock().unwrap().padis > 0);
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(Duration::from_secs(2), handle).await;
+}
+
+/// Probing is for a dark WAN only: a concentrator that answers and rejects the credentials gets
+/// no PADI before the reject floor has passed.
+#[tokio::test(start_paused = true)]
+async fn a_rejected_login_is_not_probed_during_its_wait() {
+    let (ctx, bus) = create_test_context();
+    let mut pppoe_sub = bus.subscribe_pppoe();
+    let cfg = PppoeConfig {
+        enabled: true,
+        wan_iface: "eth1".into(),
+        username: "fail_auth".into(),
+        reconnect_delay_secs: 1,
+        ..Default::default()
+    };
+    let bras = MockBrasConfig {
+        auth_ok: false,
+        ..Default::default()
+    };
+    let (seen, _cmd_tx, handle) = start_with_bras(&ctx, cfg, bras);
+
+    let wait = next_reconnecting(&mut pppoe_sub).await;
+    assert!(wait >= REJECT_FLOOR.as_secs());
+    let padis = seen.lock().unwrap().padis;
+    sleep(REJECT_FLOOR - Duration::from_secs(5)).await;
+    assert_eq!(
+        seen.lock().unwrap().padis,
+        padis,
+        "PADIs sent while waiting out a credential reject"
     );
 
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));

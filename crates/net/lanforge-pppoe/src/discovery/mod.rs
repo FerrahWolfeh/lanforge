@@ -1,6 +1,7 @@
 pub mod frame;
 
 use crate::error::PppoeError;
+use crate::ipcp::PacketBuf;
 use frame::{
     CODE_PADI, CODE_PADO, CODE_PADR, CODE_PADS, CODE_PADT, PppoeDiscoveryFrame, TAG_AC_COOKIE,
     TAG_AC_NAME, TAG_HOST_UNIQ, TAG_SERVICE_NAME, Tag,
@@ -85,6 +86,27 @@ impl PppoeDiscovery {
         })
     }
 
+    /// Whether a concentrator answers right now: one PADI, one timeout, no session. A PADO commits
+    /// the concentrator to nothing (RFC 2516 §5.2), so this is cheap to repeat while the WAN is
+    /// dark.
+    ///
+    /// # Errors
+    /// The PADI cannot be sent.
+    pub async fn probe(&self, transport: &PppoeTransport) -> Result<bool, PppoeError> {
+        let host_uniq: [u8; 4] = rand::random();
+        let padi = padi_frame(self.local_mac, host_uniq, self.service_name.as_deref());
+        transport
+            .send_discovery(&padi)
+            .await
+            .map_err(|e| PppoeError::NegotiationFailed(e.to_string()))?;
+        let timeout = Duration::from_secs(self.padi_timeout_secs);
+        Ok(
+            await_pado(transport, &host_uniq, timeout, self.ac_name.as_deref())
+                .await
+                .is_some(),
+        )
+    }
+
     pub async fn run(&self) -> Result<DiscoveryResult, PppoeError> {
         let transport = PppoeTransport::bind(self.ifindex)
             .map_err(|e| PppoeError::NegotiationFailed(e.to_string()))?;
@@ -92,7 +114,83 @@ impl PppoeDiscovery {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// What a matching PADO offers: the concentrator's MAC, its name and its cookie.
+type Pado = (MacAddr, Option<String>, Option<SmallVec<[u8; 64]>>);
+
+fn padi_frame(
+    local_mac: MacAddr,
+    host_uniq: [u8; 4],
+    service_name: Option<&str>,
+) -> PacketBuf<256> {
+    PppoeDiscoveryFrame {
+        dst_mac: MacAddr([0xff; 6]),
+        src_mac: local_mac,
+        code: CODE_PADI,
+        session_id: 0,
+        tags: smallvec![
+            Tag {
+                tag_type: TAG_SERVICE_NAME,
+                value: service_name.map_or(&[], str::as_bytes),
+            },
+            Tag {
+                tag_type: TAG_HOST_UNIQ,
+                value: &host_uniq,
+            },
+        ],
+    }
+    .encode()
+}
+
+/// Waits up to `timeout` for a PADO answering `host_uniq` from an acceptable concentrator.
+async fn await_pado(
+    transport: &PppoeTransport,
+    host_uniq: &[u8; 4],
+    timeout: Duration,
+    ac_name_filter: Option<&str>,
+) -> Option<Pado> {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        let remaining = timeout.saturating_sub(start.elapsed());
+        let mut buf = [0u8; 2048];
+        if let Ok(Ok(n)) = time::timeout(remaining, transport.recv_discovery(&mut buf)).await
+            && let Some(frame) = PppoeDiscoveryFrame::parse(&buf[..n])
+            && frame.code == CODE_PADO
+        {
+            // Verify host_uniq
+            let matches_uniq = frame
+                .tags
+                .iter()
+                .any(|t| t.tag_type == TAG_HOST_UNIQ && t.value == host_uniq);
+            if matches_uniq {
+                let mut frame_ac_name = None;
+                let mut frame_ac_cookie = None;
+                for tag in &frame.tags {
+                    if tag.tag_type == TAG_AC_COOKIE {
+                        frame_ac_cookie = Some(SmallVec::from_slice(tag.value));
+                    } else if tag.tag_type == TAG_AC_NAME {
+                        frame_ac_name = str::from_utf8(tag.value).ok().map(ToString::to_string);
+                    }
+                }
+
+                if let Some(filter) = ac_name_filter
+                    && frame_ac_name.as_deref() != Some(filter)
+                {
+                    debug!(
+                        expected = filter,
+                        actual = ?frame_ac_name,
+                        "Ignoring PADO from non-matching Access Concentrator"
+                    );
+                    continue;
+                }
+
+                debug!("Received valid PPPoE PADO frame");
+                return Some((frame.src_mac, frame_ac_name, frame_ac_cookie));
+            }
+        }
+    }
+    None
+}
+
 async fn exchange_padi(
     transport: &PppoeTransport,
     local_mac: MacAddr,
@@ -101,30 +199,9 @@ async fn exchange_padi(
     padi_timeout_secs: u64,
     service_name: Option<&str>,
     ac_name_filter: Option<&str>,
-) -> Result<(MacAddr, Option<String>, Option<SmallVec<[u8; 64]>>), PppoeError> {
-    let service_name_bytes = service_name.map_or_else(|| &[] as &[u8], str::as_bytes);
-    let padi_frame = PppoeDiscoveryFrame {
-        dst_mac: MacAddr([0xff; 6]),
-        src_mac: local_mac,
-        code: CODE_PADI,
-        session_id: 0,
-        tags: smallvec![
-            Tag {
-                tag_type: TAG_SERVICE_NAME,
-                value: service_name_bytes,
-            },
-            Tag {
-                tag_type: TAG_HOST_UNIQ,
-                value: host_uniq,
-            },
-        ],
-    };
-
-    let padi_bytes = padi_frame.encode();
-
-    let mut ac_mac = None;
-    let mut ac_name = None;
-    let mut ac_cookie = None;
+) -> Result<Pado, PppoeError> {
+    let padi_bytes = padi_frame(local_mac, *host_uniq, service_name);
+    let timeout = Duration::from_secs(padi_timeout_secs);
 
     for attempt in 0..padi_retries {
         debug!(attempt, "Sending PPPoE PADI frame...");
@@ -133,60 +210,12 @@ async fn exchange_padi(
             .await
             .map_err(|e| PppoeError::NegotiationFailed(e.to_string()))?;
 
-        // Wait for PADO
-        let timeout = Duration::from_secs(padi_timeout_secs);
-        let start = Instant::now();
-
-        while start.elapsed() < timeout {
-            let remaining = timeout.saturating_sub(start.elapsed());
-            let mut buf = [0u8; 2048];
-            if let Ok(Ok(n)) = time::timeout(remaining, transport.recv_discovery(&mut buf)).await
-                && let Some(frame) = PppoeDiscoveryFrame::parse(&buf[..n])
-                && frame.code == CODE_PADO
-            {
-                // Verify host_uniq
-                let matches_uniq = frame
-                    .tags
-                    .iter()
-                    .any(|t| t.tag_type == TAG_HOST_UNIQ && t.value == host_uniq);
-                if matches_uniq {
-                    let mut frame_ac_name = None;
-                    let mut frame_ac_cookie = None;
-                    for tag in &frame.tags {
-                        if tag.tag_type == TAG_AC_COOKIE {
-                            frame_ac_cookie = Some(SmallVec::from_slice(tag.value));
-                        } else if tag.tag_type == TAG_AC_NAME {
-                            frame_ac_name = str::from_utf8(tag.value).ok().map(ToString::to_string);
-                        }
-                    }
-
-                    if let Some(filter) = ac_name_filter
-                        && frame_ac_name.as_deref() != Some(filter)
-                    {
-                        debug!(
-                            expected = filter,
-                            actual = ?frame_ac_name,
-                            "Ignoring PADO from non-matching Access Concentrator"
-                        );
-                        continue;
-                    }
-
-                    ac_mac = Some(frame.src_mac);
-                    ac_name = frame_ac_name;
-                    ac_cookie = frame_ac_cookie;
-                    debug!("Received valid PPPoE PADO frame");
-                    break;
-                }
-            }
-        }
-
-        if ac_mac.is_some() {
-            break;
+        if let Some(pado) = await_pado(transport, host_uniq, timeout, ac_name_filter).await {
+            return Ok(pado);
         }
     }
 
-    let ac_mac = ac_mac.ok_or(PppoeError::DiscoveryTimeout)?;
-    Ok((ac_mac, ac_name, ac_cookie))
+    Err(PppoeError::DiscoveryTimeout)
 }
 
 async fn exchange_padr(

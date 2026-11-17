@@ -23,6 +23,8 @@ pub struct MockBrasConfig {
     pub dns: Vec<Ipv4Addr>,
     pub auth_ok: bool,
     pub fail_discovery: bool,
+    /// While set, PADIs go unanswered (the WAN is dark: fibre cut upstream of a live ONT).
+    pub discovery_muted: Arc<AtomicBool>,
     pub send_echo_replies: bool,
     /// While set, Echo-Requests go unanswered (an ISP link that stalls and recovers).
     pub echo_muted: Arc<AtomicBool>,
@@ -63,6 +65,7 @@ impl Default for MockBrasConfig {
             dns: vec![Ipv4Addr::new(1, 1, 1, 1), Ipv4Addr::new(1, 0, 0, 1)],
             auth_ok: true,
             fail_discovery: false,
+            discovery_muted: Arc::default(),
             send_echo_replies: true,
             echo_muted: Arc::default(),
             terminate_after: None,
@@ -114,7 +117,7 @@ pub fn spawn_mock_bras(handle: PppoeInertHandle, cfg: MockBrasConfig) -> JoinHan
                     if let Some(frame) = PppoeDiscoveryFrame::parse(&bytes) {
                         if frame.code == CODE_PADI {
                             cfg.seen.lock().unwrap().padis += 1;
-                            if cfg.fail_discovery {
+                            if cfg.fail_discovery || cfg.discovery_muted.load(Ordering::SeqCst) {
                                 continue;
                             }
                             if let Some(delay) = cfg.pado_delay {
