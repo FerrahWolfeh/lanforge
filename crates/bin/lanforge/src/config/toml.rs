@@ -460,12 +460,20 @@ mod tests {
         fs::set_permissions(&secrets, fs::Permissions::from_mode(0o600)).expect("chmod");
         let cfg = load_toml(p);
         assert_eq!(cfg.pppoe.password, "secret");
-        assert!(cfg.config_issues.iter().any(|i| i.contains("move it")), "{:?}", cfg.config_issues);
+        assert!(
+            cfg.config_issues.iter().any(|i| i.contains("move it")),
+            "{:?}",
+            cfg.config_issues
+        );
 
         fs::set_permissions(&secrets, fs::Permissions::from_mode(0o644)).expect("chmod");
         let cfg = load_toml(p);
         assert_eq!(cfg.pppoe.password, "inline");
-        assert!(cfg.config_issues.iter().any(|i| i.contains("refused")), "{:?}", cfg.config_issues);
+        assert!(
+            cfg.config_issues.iter().any(|i| i.contains("refused")),
+            "{:?}",
+            cfg.config_issues
+        );
     }
 
     #[test]

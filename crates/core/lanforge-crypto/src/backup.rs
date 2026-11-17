@@ -245,7 +245,10 @@ mod tests {
     #[test]
     fn default_params_roundtrip() {
         let env = seal("pw", b"x").unwrap();
-        assert_eq!((env.kdf.m_cost, env.kdf.t_cost, env.kdf.p_cost), (65536, 3, 1));
+        assert_eq!(
+            (env.kdf.m_cost, env.kdf.t_cost, env.kdf.p_cost),
+            (65536, 3, 1)
+        );
         assert_eq!(open("pw", &env).unwrap(), b"x");
     }
 
@@ -281,10 +284,16 @@ mod tests {
         let env = small("pw", b"data");
         let mut e = env.clone();
         e.version = 2;
-        assert!(matches!(open("pw", &e), Err(BackupError::UnsupportedFormat)));
+        assert!(matches!(
+            open("pw", &e),
+            Err(BackupError::UnsupportedFormat)
+        ));
         let mut e = env.clone();
         e.format = "other".into();
-        assert!(matches!(open("pw", &e), Err(BackupError::UnsupportedFormat)));
+        assert!(matches!(
+            open("pw", &e),
+            Err(BackupError::UnsupportedFormat)
+        ));
         let mut e = env.clone();
         e.kdf.alg = "scrypt".into();
         assert!(matches!(
