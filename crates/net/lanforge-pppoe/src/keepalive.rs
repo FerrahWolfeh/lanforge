@@ -129,8 +129,10 @@ pub(crate) async fn run_keepalive(
                         info!(wan_iface = %wan_iface, "WAN carrier back; confirming the session");
                         confirming = true;
                         failed_echoes = 0;
+                        // The path carries traffic a moment after the carrier: an echo sent
+                        // right away is lost and reads as a missed reply on a healthy session.
                         let period = Duration::from_secs(1);
-                        interval_timer = interval_at(Instant::now(), period);
+                        interval_timer = interval_at(Instant::now() + period, period);
                     }
                     _ => {}
                 }

@@ -36,7 +36,7 @@ control frames) and the discovery socket (PADT), next to the RA listener that fo
   `KeepAliveTimeout` (upstream), no answer → `TerminalUnreachable` (local hardware or cable).
 - **Carrier loss** on `wan_iface` (interfaces snapshot, `IFF_LOWER_UP`) never ends the session by itself: a
   short flap must not cost a reconnect and a new delegated prefix. When the carrier returns, the session is
-  confirmed right away with an Echo-Request every second; a reply restores the regular schedule, 5 unanswered
+  confirmed with an Echo-Request every second, the first one second after the carrier (the path needs a moment); a reply restores the regular schedule, 5 unanswered
   end the session (the concentrator dropped it during the outage). Only with echo on and a failure threshold set.
 - An LCP Terminate-Request is acknowledged and ends the session.
 - A PADT from the AC matching the session (AC MAC, session ID) ends it (RFC 2516 §5.5); no PADT is sent back. A

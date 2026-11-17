@@ -1976,7 +1976,9 @@ async fn a_session_lost_while_the_cable_was_out_is_redialled_once_it_is_back() {
 }
 
 /// A short flap whose session survived: the fast confirmation gets its reply and the session
-/// stays up on the regular schedule (no reconnect, no new delegated prefix).
+/// stays up on the regular schedule (no reconnect, no new delegated prefix). As on the owner's
+/// router, the path carries traffic a moment after the carrier: an echo sent the instant the
+/// link returned was lost and reported a missed reply for a healthy session.
 #[tokio::test(start_paused = true)]
 async fn a_short_carrier_flap_keeps_a_live_session() {
     let (ctx, bus) = create_test_context();
@@ -1990,12 +1992,17 @@ async fn a_short_carrier_flap_keeps_a_live_session() {
         lcp_echo_max_failures: 5,
         ..Default::default()
     };
-    let (_seen, _cmd_tx, handle) = start_with_bras(&ctx, cfg, MockBrasConfig::default());
+    let bras = MockBrasConfig::default();
+    let muted = Arc::clone(&bras.echo_muted);
+    let (_seen, _cmd_tx, handle) = start_with_bras(&ctx, cfg, bras);
     wait_for_session_up(&mut sub).await;
 
     set_wan_carrier(&ctx, false, 2);
+    muted.store(true, Ordering::Relaxed);
     sleep(Duration::from_secs(2)).await;
     set_wan_carrier(&ctx, true, 3);
+    sleep(Duration::from_millis(500)).await;
+    muted.store(false, Ordering::Relaxed);
 
     let quiet = timeout(Duration::from_secs(300), async {
         loop {
