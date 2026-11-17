@@ -133,8 +133,9 @@ impl ArpProber {
 
                     match sys::read(fd.get_ref().as_fd(), &mut buf) {
                         Ok(0) => {}
+                        // Readiness stays set until EAGAIN: frames queued behind this one are
+                        // read now, not after another arrival.
                         Ok(len) => {
-                            guard.clear_ready();
                             if let Some(mac) = parse_arp_reply(&buf[..len], target) {
                                 self.metrics.record_rx(len);
                                 return Ok(Some(ArpReply {
@@ -361,5 +362,48 @@ mod tests {
             .await
             .expect("probe ok");
         assert!(res.is_none());
+    }
+
+    /// Regression: a successful read cleared the readiness, so frames queued behind it waited for
+    /// another arrival. Any other ARP traffic arriving with the terminal's reply hid the reply until
+    /// the timeout, and the `PPPoE` terminal probe reported a healthy ONT as unreachable.
+    /// Rootless run: `unshare -rn sh -c 'ip link set lo up && <test binary> --ignored queued'`.
+    #[tokio::test]
+    #[ignore = "needs CAP_NET_RAW (run inside `unshare -rn`)"]
+    async fn should_find_the_reply_queued_behind_other_arp_frames() {
+        let lo = sys::if_name_to_index("lo").expect("every network namespace has lo");
+        let target = Ipv4Addr::new(192, 0, 2, 1);
+        let prober = ArpProber::bind(lo, [0x02, 0, 0, 0, 0, 1]).unwrap();
+        let injector = sys::socket(
+            libc::AF_PACKET,
+            libc::SOCK_RAW | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
+            libc::c_int::from(ETH_P_ARP.to_be()),
+        )
+        .unwrap();
+
+        let reply_from = |ip: Ipv4Addr| {
+            let mut frame = build_arp_probe([0x02, 0, 0, 0, 0, 2], Ipv4Addr::UNSPECIFIED, Some(ip));
+            frame[20..22].copy_from_slice(&ARP_OPCODE_REPLY.to_be_bytes());
+            frame
+        };
+        // Queued before the probe reads anything: unrelated replies, then the terminal's.
+        for _ in 0..10 {
+            let other = reply_from(Ipv4Addr::new(192, 0, 2, 99));
+            sys::send_packet(injector.as_fd(), &other, lo, ETH_P_ARP, [0xff; 6]).unwrap();
+        }
+        sys::send_packet(
+            injector.as_fd(),
+            &reply_from(target),
+            lo,
+            ETH_P_ARP,
+            [0xff; 6],
+        )
+        .unwrap();
+
+        let reply = prober
+            .probe(target, None, Duration::from_millis(500))
+            .await
+            .unwrap();
+        assert_eq!(reply.map(|r| r.mac), Some([0x02, 0, 0, 0, 0, 2]));
     }
 }
