@@ -229,6 +229,21 @@ impl<'a> RulesetBuilder<'a> {
         self.cfg.zones.iter().any(|z| z.mtu_fix) || self.active_wan.is_some()
     }
 
+    /// `tcp option maxseg size > max`: clamping only ever lowers the MSS. Setting it
+    /// unconditionally would raise a smaller MSS announced by the peer (VPN, tunnel, PMTU-aware
+    /// stack) above what its path can carry.
+    fn mss_above(max: u32) -> Statement<'static> {
+        Statement::Match(Match {
+            left: Expression::Named(NamedExpression::TcpOption(TcpOption {
+                name: "maxseg".into(),
+                field: Some("size".into()),
+            })),
+            right: Expression::Number(max),
+            // nftables 0.6 swaps the names: `Operator::LT` serializes as `>`.
+            op: Operator::LT,
+        })
+    }
+
     #[allow(clippy::ptr_arg)]
     fn add_mss_clamping_rules(
         batch: &mut Batch<'static>,
@@ -259,6 +274,7 @@ impl<'a> RulesetBuilder<'a> {
                     right: Expression::String("syn".into()),
                     op: Operator::IN,
                 }),
+                Self::mss_above(1452),
                 Statement::Mangle(Mangle {
                     key: Expression::Named(NamedExpression::TcpOption(TcpOption {
                         name: "maxseg".into(),
@@ -297,6 +313,7 @@ impl<'a> RulesetBuilder<'a> {
                     right: Expression::String("syn".into()),
                     op: Operator::IN,
                 }),
+                Self::mss_above(1432),
                 Statement::Mangle(Mangle {
                     key: Expression::Named(NamedExpression::TcpOption(TcpOption {
                         name: "maxseg".into(),
