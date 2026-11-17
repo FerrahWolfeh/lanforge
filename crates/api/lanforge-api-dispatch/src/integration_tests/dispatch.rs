@@ -775,7 +775,10 @@ async fn pppoe_update_is_written_to_the_config_file() {
         password: String::new(),
         ..cfg.clone()
     };
-    assert_eq!(file.pppoe, without_password, "every other field reaches the file");
+    assert_eq!(
+        file.pppoe, without_password,
+        "every other field reaches the file"
+    );
     assert!(!text.contains(&cfg.password));
     let secrets = fs::read_to_string(dir.path().join("secrets.toml")).unwrap();
     assert!(secrets.contains(&cfg.password), "{secrets}");

@@ -214,12 +214,18 @@ lanforge db clean                      # Clear transient runtime event logs
 ```
 
 ### `config`
-Inspects, exports, imports, and validates the system configuration.
+Inspects, exports, imports, backs up and validates the system configuration.
 ```bash
-lanforge config export backup.json     # Export full database configuration to JSON
-lanforge config import backup.json     # Import and merge configuration
-lanforge config validate               # Validate /etc/lanforge/lanforge.toml syntax
+lanforge config export -o lanforge.toml   # The configuration file as plain TOML (no secrets, no users)
+lanforge config import lanforge.toml      # Import and merge a TOML configuration
+lanforge config validate lanforge.toml    # Validate TOML syntax and structure
+lanforge config backup -o backup.json     # Encrypted backup: files, secrets, users, API tokens, device settings
+lanforge config restore backup.json       # Restore it into the running daemon (applied in place)
+LANFORGE_BACKUP_PASSWORD=... lanforged --restore backup.json   # Offline restore, daemon stopped
 ```
+`backup` and `restore` ask for the password (twice for `backup`), or read it from the variable named by
+`--password-env`. The backup is sealed with Argon2id and XChaCha20-Poly1305; there is no recovery without the
+password. A restore replaces all users and API tokens with the backup's.
 
 ### `user` *(alias: `users`)*
 Manages local router user accounts and authorization roles (`admin`, `operator`, `viewer`).

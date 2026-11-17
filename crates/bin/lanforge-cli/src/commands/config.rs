@@ -1,29 +1,18 @@
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::{env, fs, process};
+use std::{env, process};
 
 use color_eyre::Result;
 use color_eyre::eyre::{bail, eyre};
 use colored::Colorize;
-use rand::RngExt;
-use serde::{Deserialize, Serialize};
 
-use argon2::Argon2;
-use chacha20poly1305::aead::{Aead, KeyInit};
-use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
-
-use lanforge_api::api::devices::HostConfigEntry;
-use lanforge_api::api::dns::{AllowlistEntry, DnsUpstreamConfig};
-use lanforge_api::api::system::ExportedApiToken;
-use lanforge_api::api::{ImportSection, SystemConfigExport, SystemConfigImportResponse};
+use lanforge_api::api::{
+    BackupBundle, ImportSection, SystemConfigExport, SystemConfigImportResponse,
+};
 use lanforge_api::config_file::ConfigFile;
-use lanforge_types::network::DnsReverseResolver;
-use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
-use lanforge_types::network::dns::AdblockUrlEntry;
-use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockRuleEntry, RewriteRule};
-use lanforge_types::network::firewall::FirewallConfig;
-use lanforge_types::network::pppoe::PppoeConfig;
-use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
-use lanforge_types::network::traffic::TrafficConfig;
+use lanforge_crypto::backup::{BackupEnvelope, open, seal};
 
 use crate::client::LanforgeClient;
 use crate::output::Printer;
@@ -34,35 +23,19 @@ pub struct ConfigArgs {
     pub subcommand: Option<ConfigSubcommand>,
 }
 
-#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExportFormat {
-    Toml,
-    Json,
-}
-
 #[derive(clap::Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum ConfigSubcommand {
     /// Show consolidated system configuration summary (default)
     Show,
-    /// Export system configuration snapshot to TOML or JSON
+    /// Export the configuration file as plain TOML (no secrets, no users: see `backup`)
     Export {
         /// Destination output file path (prints to stdout if omitted)
         #[arg(short = 'o', long)]
         output: Option<String>,
-        /// Export format (toml or json; defaults to toml, or auto-detected from output extension)
-        #[arg(long, value_enum)]
-        format: Option<ExportFormat>,
-        /// Encrypt the API tokens secrets block with a password (JSON only)
-        #[arg(short = 'e', long)]
-        encrypt_secrets: bool,
-        /// Encryption password (if omitted and --encrypt-secrets is set, you will be prompted)
-        #[arg(short = 'p', long)]
-        password: Option<String>,
     },
-    /// Import system configuration from a TOML or JSON file
-    #[command(alias = "restore")]
+    /// Import system configuration from a TOML file
     Import {
-        /// Input configuration file path (.toml or .json)
+        /// Input configuration file path (.toml)
         #[arg(value_name = "FILE")]
         file: Option<String>,
         /// Alternative flag for input file
@@ -71,13 +44,30 @@ pub enum ConfigSubcommand {
         /// Force overwrite existing records instead of merging
         #[arg(short = 'w', long)]
         overwrite: bool,
-        /// Decryption password (if JSON file contains encrypted secrets and password is omitted, you will be prompted)
-        #[arg(short = 'p', long)]
-        password: Option<String>,
     },
-    /// Validate configuration file syntax and structure without modifying the daemon
+    /// Save an encrypted backup: configuration files, secrets, users, API tokens and the
+    /// settings made by hand on known devices
+    Backup {
+        /// Destination file (default: lanforge-backup-<date>.json in the current directory)
+        #[arg(short = 'o', long)]
+        output: Option<String>,
+        /// Read the password from this environment variable instead of prompting
+        #[arg(long, value_name = "VAR")]
+        password_env: Option<String>,
+    },
+    /// Restore an encrypted backup into the running daemon (applied in place, no restart).
+    /// With the daemon stopped, use `lanforged --restore FILE` instead.
+    Restore {
+        /// Backup file made by `lanforge config backup`
+        #[arg(value_name = "FILE")]
+        file: String,
+        /// Read the password from this environment variable instead of prompting
+        #[arg(long, value_name = "VAR")]
+        password_env: Option<String>,
+    },
+    /// Validate a configuration file's syntax and structure without modifying the daemon
     Validate {
-        /// Input configuration file path (.toml or .json)
+        /// Input configuration file path (.toml)
         #[arg(value_name = "FILE")]
         file: String,
     },
@@ -92,72 +82,27 @@ pub enum ConfigSubcommand {
     },
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-pub struct EncryptedApiTokens {
-    pub salt: String,
-    pub nonce: String,
-    pub ciphertext: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(untagged)]
-pub enum ApiTokensExport {
-    Encrypted(EncryptedApiTokens),
-    Plain(Vec<ExportedApiToken>),
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct FileConfigExport {
-    pub hosts: Vec<HostConfigEntry>,
-    pub dns_rewrites: Vec<RewriteRule>,
-    pub dns_upstreams: Vec<DnsUpstreamConfig>,
-    pub dns_adblock_config: AdblockDbConfig,
-    pub dns_adblock_urls: Vec<AdblockUrlEntry>,
-    pub dns_allowlist: Vec<AllowlistEntry>,
-    #[serde(default)]
-    pub dns_adblock_rules: Option<Vec<AdblockRuleEntry>>,
-    #[serde(default)]
-    pub api_tokens: Option<ApiTokensExport>,
-    pub dhcp_v4_pools: Option<Vec<Dhcpv4Pool>>,
-    pub dhcp_v6_pools: Option<Vec<Dhcpv6Pool>>,
-    pub ra_prefixes: Option<Vec<RAPrefix>>,
-    pub ra_rdnss: Option<Vec<RdnssConfig>>,
-    pub ra_dnssl: Option<Vec<DnsslConfig>>,
-    pub pppoe_config: Option<Box<PppoeConfig>>,
-    #[serde(default)]
-    pub dhcp_options: Option<Box<DhcpOptionsConfig>>,
-    #[serde(default)]
-    pub dns_reverse_resolvers: Option<Vec<DnsReverseResolver>>,
-    #[serde(default)]
-    pub firewall_config: Option<Box<FirewallConfig>>,
-    #[serde(default)]
-    pub traffic_config: Option<Box<TrafficConfig>>,
-    #[serde(default)]
-    pub system_iface: Option<String>,
-    #[serde(default)]
-    pub overwrite: bool,
-}
-
 impl ConfigArgs {
     pub async fn execute(self, client: &LanforgeClient, printer: &Printer) -> Result<()> {
         match self.subcommand.unwrap_or(ConfigSubcommand::Show) {
             ConfigSubcommand::Show => show_config(client, printer).await,
-            ConfigSubcommand::Export {
-                output,
-                format,
-                encrypt_secrets,
-                password,
-            } => export_config(client, printer, output, format, encrypt_secrets, password).await,
+            ConfigSubcommand::Export { output } => export_config(client, printer, output).await,
             ConfigSubcommand::Import {
                 file,
                 file_flag,
                 overwrite,
-                password,
             } => {
                 let target_file = file
                     .or(file_flag)
                     .ok_or_else(|| eyre!("Please specify an input file to import"))?;
-                import_config(client, printer, &target_file, overwrite, password).await
+                import_config(client, printer, &target_file, overwrite).await
+            }
+            ConfigSubcommand::Backup {
+                output,
+                password_env,
+            } => backup_config(client, printer, output, password_env.as_deref()).await,
+            ConfigSubcommand::Restore { file, password_env } => {
+                restore_config(client, printer, &file, password_env.as_deref()).await
             }
             ConfigSubcommand::Validate { file } => validate_config(printer, &file),
             ConfigSubcommand::Edit { file, yes } => edit_config(client, printer, file, yes).await,
@@ -274,7 +219,7 @@ fn render_config_summary(config: &SystemConfigExport, printer: &Printer) {
     );
 
     println!();
-    printer.info("Use 'lanforge config export' to save full JSON backup, or 'lanforge config import' to restore.");
+    printer.info("Use 'lanforge config backup' to save an encrypted backup, or 'lanforge config restore' to restore it.");
 }
 
 // ============================================================================
@@ -302,86 +247,112 @@ async fn export_config(
     client: &LanforgeClient,
     printer: &Printer,
     output: Option<String>,
-    format_arg: Option<ExportFormat>,
-    encrypt_secrets: bool,
-    password: Option<String>,
 ) -> Result<()> {
-    let resolved_format = format_arg.unwrap_or_else(|| {
-        output.as_ref().map_or(ExportFormat::Toml, |path| {
-            if Path::new(path)
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
-            {
-                ExportFormat::Json
-            } else {
-                ExportFormat::Toml
-            }
-        })
-    });
-
-    if resolved_format == ExportFormat::Toml {
-        // The daemon's file itself: it holds the whole configuration (the adblock rules file
-        // and the redb state aside).
-        let rendered = client.system_config_toml().await?;
-        if let Some(ref path) = output {
-            fs::write(path, &rendered)?;
-            printer.success(&format!("Exported system configuration to {path}"));
-        } else {
-            print!("{rendered}");
-        }
-        return Ok(());
-    }
-
-    let config = client.system_config_export().await?;
-
-    let api_tokens_section = if let Some(tokens) = config.api_tokens {
-        if encrypt_secrets || password.is_some() {
-            let pass = match password {
-                Some(p) => p,
-                None => prompt_password("Enter encryption password for secrets block:")?,
-            };
-            let plain_bytes = serde_json::to_vec(&tokens)?;
-            let enc = encrypt_secrets_block(&pass, &plain_bytes)?;
-            Some(ApiTokensExport::Encrypted(enc))
-        } else {
-            Some(ApiTokensExport::Plain(tokens))
-        }
-    } else {
-        None
-    };
-
-    let file_export = FileConfigExport {
-        hosts: config.hosts,
-        dns_rewrites: config.dns_rewrites,
-        dns_upstreams: config.dns_upstreams,
-        dns_adblock_config: config.dns_adblock_config,
-        dns_adblock_urls: config.dns_adblock_urls,
-        dns_allowlist: config.dns_allowlist,
-        dns_adblock_rules: config.dns_adblock_rules,
-        api_tokens: api_tokens_section,
-        dhcp_v4_pools: config.dhcp_v4_pools,
-        dhcp_v6_pools: config.dhcp_v6_pools,
-        ra_prefixes: config.ra_prefixes,
-        ra_rdnss: config.ra_rdnss,
-        ra_dnssl: config.ra_dnssl,
-        pppoe_config: config.pppoe_config,
-        dhcp_options: config.dhcp_options,
-        dns_reverse_resolvers: config.dns_reverse_resolvers,
-        firewall_config: config.firewall_config,
-        traffic_config: config.traffic_config,
-        system_iface: config.system_iface,
-        overwrite: config.overwrite,
-    };
-
-    let json = serde_json::to_string_pretty(&file_export)?;
-
+    // The daemon's file itself: it holds the whole configuration (the adblock rules file
+    // and the redb state aside).
+    let rendered = client.system_config_toml().await?;
     if let Some(ref path) = output {
-        fs::write(path, &json)?;
+        fs::write(path, &rendered)?;
         printer.success(&format!("Exported system configuration to {path}"));
     } else {
-        println!("{json}");
+        print!("{rendered}");
     }
+    Ok(())
+}
 
+// ============================================================================
+// Backup / Restore Handlers
+// ============================================================================
+
+/// The backup password: from `password_env`, or asked on the terminal (twice for a new backup).
+fn backup_password(password_env: Option<&str>, confirm: bool) -> Result<String> {
+    let password = if let Some(var) = password_env {
+        env::var(var).map_err(|_| eyre!("environment variable {var} is not set"))?
+    } else {
+        let prompt = inquire::Password::new("Backup password:")
+            .with_display_mode(inquire::PasswordDisplayMode::Masked);
+        let prompt = if confirm {
+            prompt.with_custom_confirmation_message("Repeat the password:")
+        } else {
+            prompt.without_confirmation()
+        };
+        prompt
+            .prompt()
+            .map_err(|e| eyre!("Password prompt cancelled or failed: {e}"))?
+    };
+    if password.is_empty() {
+        bail!("the backup password must not be empty");
+    }
+    Ok(password)
+}
+
+/// The envelope (JSON text) holding `bundle`, sealed with `password`.
+fn seal_bundle(password: &str, bundle: &BackupBundle) -> Result<String> {
+    let envelope = seal(password, &serde_json::to_vec(bundle)?)?;
+    Ok(serde_json::to_string_pretty(&envelope)?)
+}
+
+/// The bundle inside the envelope `text`.
+fn open_bundle(password: &str, text: &str) -> Result<BackupBundle> {
+    let envelope: BackupEnvelope =
+        serde_json::from_str(text).map_err(|_| eyre!("the file is not a lanforge backup"))?;
+    let plain = open(password, &envelope)?;
+    serde_json::from_slice(&plain).map_err(|e| eyre!("the backup content is not readable: {e}"))
+}
+
+/// Writes `bytes` to `path`, readable by the owner only (an existing file is tightened too).
+fn write_private_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    file.write_all(bytes)?;
+    Ok(file.sync_all()?)
+}
+
+async fn backup_config(
+    client: &LanforgeClient,
+    printer: &Printer,
+    output: Option<String>,
+    password_env: Option<&str>,
+) -> Result<()> {
+    let password = backup_password(password_env, true)?;
+    let bundle = client.backup().await?;
+    let sealed = seal_bundle(&password, &bundle)?;
+    let path = output.unwrap_or_else(|| {
+        format!(
+            "lanforge-backup-{}.json",
+            chrono::Utc::now().format("%Y%m%d-%H%M%S")
+        )
+    });
+    write_private_file(Path::new(&path), sealed.as_bytes())?;
+    printer.success(&format!(
+        "Encrypted backup saved to {path}: {} file(s), {} user(s), {} API token(s), {} device(s)",
+        bundle.files.len(),
+        bundle.users.len(),
+        bundle.api_tokens.len(),
+        bundle.devices.len()
+    ));
+    Ok(())
+}
+
+async fn restore_config(
+    client: &LanforgeClient,
+    printer: &Printer,
+    file: &str,
+    password_env: Option<&str>,
+) -> Result<()> {
+    let text = fs::read_to_string(file).map_err(|e| eyre!("Failed to read '{file}': {e}"))?;
+    let password = backup_password(password_env, false)?;
+    let bundle = open_bundle(&password, &text)?;
+    let done = client.restore(bundle).await?;
+    if printer.json {
+        return printer.print_json(&done);
+    }
+    printer.success(&done.message);
     Ok(())
 }
 
@@ -394,65 +365,12 @@ async fn import_config(
     printer: &Printer,
     file_path: &str,
     overwrite: bool,
-    password: Option<String>,
 ) -> Result<()> {
     let content = fs::read_to_string(file_path)?;
-
-    let is_json = Path::new(file_path)
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
-        || (serde_json::from_str::<serde_json::Value>(&content).is_ok()
-            && !content.trim_start().starts_with('[')
-            && !content.trim_start().starts_with('#'));
-
-    let system_config = if is_json {
-        let file_export: FileConfigExport = serde_json::from_str(&content)
-            .map_err(|e| eyre!("Failed to parse JSON configuration file '{file_path}': {e}"))?;
-
-        let api_tokens = match file_export.api_tokens {
-            Some(ApiTokensExport::Encrypted(enc)) => {
-                let pass = match password {
-                    Some(p) => p,
-                    None => prompt_password("Enter password to decrypt secrets block:")?,
-                };
-                let plain_bytes = decrypt_secrets_block(&pass, &enc)?;
-                let tokens: Vec<ExportedApiToken> = serde_json::from_slice(&plain_bytes)
-                    .map_err(|e| eyre!("Decrypted data is corrupted or invalid: {e}"))?;
-                Some(tokens)
-            }
-            Some(ApiTokensExport::Plain(tokens)) => Some(tokens),
-            None => None,
-        };
-
-        SystemConfigExport {
-            hosts: file_export.hosts,
-            dns_rewrites: file_export.dns_rewrites,
-            dns_upstreams: file_export.dns_upstreams,
-            dns_adblock_config: file_export.dns_adblock_config,
-            dns_adblock_urls: file_export.dns_adblock_urls,
-            dns_allowlist: file_export.dns_allowlist,
-            dns_adblock_rules: file_export.dns_adblock_rules,
-            api_tokens,
-            dhcp_v4_pools: file_export.dhcp_v4_pools,
-            dhcp_v6_pools: file_export.dhcp_v6_pools,
-            ra_prefixes: file_export.ra_prefixes,
-            ra_rdnss: file_export.ra_rdnss,
-            ra_dnssl: file_export.ra_dnssl,
-            pppoe_config: file_export.pppoe_config,
-            dhcp_options: file_export.dhcp_options,
-            dns_reverse_resolvers: file_export.dns_reverse_resolvers,
-            firewall_config: file_export.firewall_config,
-            traffic_config: file_export.traffic_config,
-            system_iface: file_export.system_iface,
-            overwrite,
-        }
-    } else {
-        let cfg = ConfigFile::parse(&content)
-            .map_err(|e| eyre!("Failed to parse TOML configuration '{file_path}': {e}"))?;
-        let mut export = SystemConfigExport::from(&cfg);
-        export.overwrite = overwrite;
-        export
-    };
+    let cfg = ConfigFile::parse(&content)
+        .map_err(|e| eyre!("Failed to parse TOML configuration '{file_path}': {e}"))?;
+    let mut system_config = SystemConfigExport::from(&cfg);
+    system_config.overwrite = overwrite;
 
     let resp = client.system_config_import(system_config).await?;
 
@@ -498,101 +416,35 @@ fn render_import_results(resp: &SystemConfigImportResponse, printer: &Printer) {
 fn validate_config(printer: &Printer, file_path: &str) -> Result<()> {
     let content = fs::read_to_string(file_path)
         .map_err(|e| eyre!("Failed to read file '{file_path}': {e}"))?;
-
-    let is_json = Path::new(file_path)
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
-        || (serde_json::from_str::<serde_json::Value>(&content).is_ok()
-            && !content.trim_start().starts_with('[')
-            && !content.trim_start().starts_with('#'));
-
-    if !is_json {
-        let cfg = ConfigFile::parse(&content).map_err(|e| eyre!("TOML validation failed: {e}"))?;
-        // Rules and addresses served (entries `[dns]` gets wrong are left out).
-        let dns = cfg.dns.to_config().0;
-
-        if printer.json {
-            let json_report = serde_json::json!({
-                "valid": true,
-                "format": "toml",
-                "hosts": cfg.hosts.len(),
-                "dhcp_v4_pools": cfg.dhcp.v4.pools.len(),
-                "dhcp_v6_pools": cfg.dhcp.v6.pools.len(),
-                "dns_rewrites": dns.rewrites.len(),
-                "dns_upstreams": dns.upstreams.len(),
-                "adblock_sources": cfg.adblock.sources.len(),
-            });
-            return printer.print_json(&json_report);
-        }
-
-        println!();
-        printer.success(&format!(
-            "Configuration file '{file_path}' is structurally valid (TOML schema) and ready for import."
-        ));
-        println!("  · Static hosts: {}", cfg.hosts.len());
-        println!("  · DHCPv4 pools: {}", cfg.dhcp.v4.pools.len());
-        println!("  · DHCPv6 pools: {}", cfg.dhcp.v6.pools.len());
-        println!("  · DNS rewrites: {}", dns.rewrites.len());
-        println!("  · DNS upstreams: {}", dns.upstreams.len());
-        println!("  · Adblock source URLs: {}", cfg.adblock.sources.len());
-        println!();
-        return Ok(());
-    }
-
-    let file_export: FileConfigExport =
-        serde_json::from_str(&content).map_err(|e| eyre!("JSON validation failed: {e}"))?;
-
-    let secrets_encrypted =
-        if let Some(ApiTokensExport::Encrypted(ref enc)) = file_export.api_tokens {
-            if enc.salt.len() != 32 || hex::decode(&enc.salt).is_err() {
-                bail!("Invalid secrets block: salt must be 32 hexadecimal characters (16 bytes)");
-            }
-            if enc.nonce.len() != 24 || hex::decode(&enc.nonce).is_err() {
-                bail!("Invalid secrets block: nonce must be 24 hexadecimal characters (12 bytes)");
-            }
-            if enc.ciphertext.is_empty() || hex::decode(&enc.ciphertext).is_err() {
-                bail!("Invalid secrets block: ciphertext contains invalid hex characters");
-            }
-            true
-        } else {
-            false
-        };
+    let cfg = ConfigFile::parse(&content).map_err(|e| eyre!("TOML validation failed: {e}"))?;
+    // Rules and addresses served (entries `[dns]` gets wrong are left out).
+    let dns = cfg.dns.to_config().0;
 
     if printer.json {
         let json_report = serde_json::json!({
             "valid": true,
-            "format": "json",
-            "hosts": file_export.hosts.len(),
-            "dns_rewrites": file_export.dns_rewrites.len(),
-            "dns_upstreams": file_export.dns_upstreams.len(),
-            "adblock_urls": file_export.dns_adblock_urls.len(),
-            "secrets_encrypted": secrets_encrypted,
+            "format": "toml",
+            "hosts": cfg.hosts.len(),
+            "dhcp_v4_pools": cfg.dhcp.v4.pools.len(),
+            "dhcp_v6_pools": cfg.dhcp.v6.pools.len(),
+            "dns_rewrites": dns.rewrites.len(),
+            "dns_upstreams": dns.upstreams.len(),
+            "adblock_sources": cfg.adblock.sources.len(),
         });
         return printer.print_json(&json_report);
     }
 
     println!();
     printer.success(&format!(
-        "Configuration file '{file_path}' is structurally valid (JSON schema) and ready for import."
+        "Configuration file '{file_path}' is structurally valid (TOML schema) and ready for import."
     ));
-    println!("  · Static hosts: {}", file_export.hosts.len());
-    println!("  · DNS rewrites: {}", file_export.dns_rewrites.len());
-    println!("  · DNS upstreams: {}", file_export.dns_upstreams.len());
-    println!(
-        "  · Adblock source URLs: {}",
-        file_export.dns_adblock_urls.len()
-    );
-    if let Some(ref pools) = file_export.dhcp_v4_pools {
-        println!("  · DHCPv4 pools: {}", pools.len());
-    }
-    if let Some(ref pools) = file_export.dhcp_v6_pools {
-        println!("  · DHCPv6 pools: {}", pools.len());
-    }
-    if secrets_encrypted {
-        println!("  · API secrets block: Encrypted with Argon2id + ChaCha20Poly1305");
-    }
+    println!("  · Static hosts: {}", cfg.hosts.len());
+    println!("  · DHCPv4 pools: {}", cfg.dhcp.v4.pools.len());
+    println!("  · DHCPv6 pools: {}", cfg.dhcp.v6.pools.len());
+    println!("  · DNS rewrites: {}", dns.rewrites.len());
+    println!("  · DNS upstreams: {}", dns.upstreams.len());
+    println!("  · Adblock source URLs: {}", cfg.adblock.sources.len());
     println!();
-
     Ok(())
 }
 
@@ -686,69 +538,6 @@ async fn edit_config(
     Ok(())
 }
 
-// ============================================================================
-// Cryptographic Helpers
-// ============================================================================
-
-fn prompt_password(prompt: &str) -> Result<String> {
-    inquire::Password::new(prompt)
-        .with_display_mode(inquire::PasswordDisplayMode::Masked)
-        .prompt()
-        .map_err(|e| eyre!("Password prompt cancelled or failed: {e}"))
-}
-
-pub fn encrypt_secrets_block(password: &str, plaintext: &[u8]) -> Result<EncryptedApiTokens> {
-    let mut salt = [0u8; 16];
-    rand::rng().fill(&mut salt);
-
-    let mut key_bytes = [0u8; 32];
-    Argon2::default()
-        .hash_password_into(password.as_bytes(), &salt, &mut key_bytes)
-        .map_err(|e| eyre!("Key derivation failed: {e}"))?;
-
-    let mut nonce_bytes = [0u8; 12];
-    rand::rng().fill(&mut nonce_bytes);
-
-    let key = Key::from(key_bytes);
-    let cipher = ChaCha20Poly1305::new(&key);
-    let nonce = Nonce::from(nonce_bytes);
-
-    let ciphertext = cipher
-        .encrypt(&nonce, plaintext)
-        .map_err(|e| eyre!("Encryption failed: {e}"))?;
-
-    Ok(EncryptedApiTokens {
-        salt: hex::encode(salt),
-        nonce: hex::encode(nonce_bytes),
-        ciphertext: hex::encode(ciphertext),
-    })
-}
-
-pub fn decrypt_secrets_block(password: &str, enc: &EncryptedApiTokens) -> Result<Vec<u8>> {
-    let salt = hex::decode(&enc.salt).map_err(|e| eyre!("Invalid salt hex: {e}"))?;
-    let nonce_bytes = hex::decode(&enc.nonce).map_err(|e| eyre!("Invalid nonce hex: {e}"))?;
-    let nonce_arr: [u8; 12] = nonce_bytes
-        .try_into()
-        .map_err(|_| eyre!("Invalid nonce length, expected 12 bytes"))?;
-    let ciphertext =
-        hex::decode(&enc.ciphertext).map_err(|e| eyre!("Invalid ciphertext hex: {e}"))?;
-
-    let mut key_bytes = [0u8; 32];
-    Argon2::default()
-        .hash_password_into(password.as_bytes(), &salt, &mut key_bytes)
-        .map_err(|e| eyre!("Key derivation failed: {e}"))?;
-
-    let key = Key::from(key_bytes);
-    let cipher = ChaCha20Poly1305::new(&key);
-    let nonce = Nonce::from(nonce_arr);
-
-    let plaintext = cipher
-        .decrypt(&nonce, ciphertext.as_ref())
-        .map_err(|_| eyre!("Decryption failed: check your password or corrupted data"))?;
-
-    Ok(plaintext)
-}
-
 #[must_use]
 pub const fn format_import_section(section: ImportSection) -> &'static str {
     match section {
@@ -792,81 +581,8 @@ pub const fn is_singleton_section(section: ImportSection) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lanforge_types::auth::ApiScopes;
-
-    #[test]
-    fn test_encrypt_decrypt_secrets_roundtrip() {
-        let dummy_tokens = vec![ExportedApiToken {
-            token: "lf_live_9876543210fedcba".to_string(),
-            name: "Admin Token".to_string(),
-            created_at: 1_700_000_000,
-            last_used: None,
-            scopes: ApiScopes::default(),
-            expires_at: None,
-        }];
-
-        let plaintext = serde_json::to_vec(&dummy_tokens).expect("serialize tokens");
-        let password = "HomelabSuperSecretPassphrase!";
-
-        let enc = encrypt_secrets_block(password, &plaintext).expect("encryption succeeds");
-        assert_eq!(enc.salt.len(), 32);
-        assert_eq!(enc.nonce.len(), 24);
-        assert_ne!(enc.ciphertext, "");
-
-        let decrypted_bytes =
-            decrypt_secrets_block(password, &enc).expect("decryption succeeds with correct pass");
-        assert_eq!(plaintext, decrypted_bytes);
-
-        let decrypted_tokens: Vec<ExportedApiToken> =
-            serde_json::from_slice(&decrypted_bytes).expect("deserialization succeeds");
-        assert_eq!(decrypted_tokens.len(), 1);
-        assert_eq!(decrypted_tokens[0].token, dummy_tokens[0].token);
-
-        let failed_decrypt = decrypt_secrets_block("WrongPassword!", &enc);
-        assert!(failed_decrypt.is_err());
-    }
-
-    #[test]
-    fn test_file_config_export_serialization_json() {
-        let export = FileConfigExport {
-            hosts: Vec::new(),
-            dns_rewrites: Vec::new(),
-            dns_upstreams: Vec::new(),
-            dns_adblock_config: AdblockDbConfig::default(),
-            dns_adblock_urls: Vec::new(),
-            dns_allowlist: Vec::new(),
-            dns_adblock_rules: None,
-            api_tokens: Some(ApiTokensExport::Encrypted(EncryptedApiTokens {
-                salt: "00112233445566778899aabbccddeeff".to_string(),
-                nonce: "0102030405060708090a0b0c".to_string(),
-                ciphertext: "deadbeefcafebabe".to_string(),
-            })),
-            dhcp_v4_pools: None,
-            dhcp_v6_pools: None,
-            ra_prefixes: None,
-            ra_rdnss: None,
-            ra_dnssl: None,
-            pppoe_config: None,
-            dhcp_options: None,
-            dns_reverse_resolvers: None,
-            firewall_config: None,
-            traffic_config: None,
-            system_iface: Some("lan0".to_string()),
-            overwrite: false,
-        };
-
-        let json = serde_json::to_string(&export).expect("serialize export");
-        let deserialized: FileConfigExport =
-            serde_json::from_str(&json).expect("deserialize export");
-
-        if let Some(ApiTokensExport::Encrypted(enc)) = deserialized.api_tokens {
-            assert_eq!(enc.salt, "00112233445566778899aabbccddeeff");
-            assert_eq!(enc.nonce, "0102030405060708090a0b0c");
-            assert_eq!(enc.ciphertext, "deadbeefcafebabe");
-        } else {
-            panic!("Expected Encrypted tokens block");
-        }
-    }
+    use lanforge_api::api::BackupFile;
+    use lanforge_types::auth::{UserEntry, UserRole};
 
     #[test]
     fn test_format_import_section() {
@@ -886,22 +602,7 @@ mod tests {
     #[test]
     fn test_validate_config_file() {
         use std::io::Write;
-        let mut tmp = tempfile::NamedTempFile::new().expect("temp file");
-        let valid_json = r#"{
-            "hosts": [],
-            "dns_rewrites": [],
-            "dns_upstreams": [],
-            "dns_adblock_config": {
-                "enabled": true,
-                "blocking_mode": "nxdomain",
-                "refresh_time": { "hour": 3, "minute": 0 }
-            },
-            "dns_adblock_urls": [],
-            "dns_allowlist": []
-        }"#;
-        tmp.write_all(valid_json.as_bytes()).expect("write tmp");
         let printer = Printer::new(false, true, true);
-        assert!(validate_config(&printer, tmp.path().to_str().unwrap()).is_ok());
 
         let mut toml_tmp = tempfile::Builder::new()
             .suffix(".toml")
@@ -928,5 +629,49 @@ v4 = "192.168.1.10"
             .write_all(b"not json or toml {::")
             .expect("write tmp");
         assert!(validate_config(&printer, invalid_tmp.path().to_str().unwrap()).is_err());
+    }
+
+    fn sample_bundle() -> BackupBundle {
+        BackupBundle {
+            files: vec![BackupFile {
+                name: "lanforge.toml".into(),
+                content: "[system]\niface = \"lan0\"\n".into(),
+            }],
+            users: vec![UserEntry {
+                id: 1,
+                username: "admin".into(),
+                password_hash: "$argon2id$hash".into(),
+                role: UserRole::Admin,
+                created_at: 10,
+                updated_at: 11,
+                last_login: None,
+            }],
+            ..BackupBundle::default()
+        }
+    }
+
+    #[test]
+    fn a_sealed_bundle_opens_with_its_password_only() {
+        let bundle = sample_bundle();
+        let sealed = seal_bundle("correct horse", &bundle).expect("seal");
+        assert!(
+            !sealed.contains("argon2id$hash") && !sealed.contains("lan0"),
+            "the content is encrypted"
+        );
+        assert_eq!(open_bundle("correct horse", &sealed).expect("open"), bundle);
+        assert!(open_bundle("wrong", &sealed).is_err());
+        assert!(open_bundle("correct horse", "not json").is_err());
+    }
+
+    #[test]
+    fn the_backup_file_is_owner_only_even_when_it_existed() {
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("backup.json");
+        fs::write(&path, "old").expect("old file");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("chmod");
+        write_private_file(&path, b"new").expect("write");
+        assert_eq!(fs::read(&path).expect("read"), b"new");
+        let mode = fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
     }
 }

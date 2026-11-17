@@ -70,6 +70,12 @@ pub struct CliArgs {
     #[arg(long, env = "LANFORGE_ALLOW_UNPRIVILEGED")]
     pub allow_unprivileged: bool,
 
+    /// Restore an encrypted backup (`lanforge config backup`) into the configuration directory and
+    /// the config database, then exit without starting services. The password is read from
+    /// `LANFORGE_BACKUP_PASSWORD`. The daemon must not be running.
+    #[arg(long = "restore", value_name = "FILE")]
+    pub restore: Option<String>,
+
     /// Quick start in ephemeral development/profiling mode (in-memory DB if unconfigured, auto-provision enabled).
     #[arg(long = "dev", env = "LANFORGE_DEV")]
     pub dev: bool,

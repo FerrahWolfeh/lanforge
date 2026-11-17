@@ -825,6 +825,55 @@ mod tests {
         assert!(db.load_api_tokens().unwrap().is_empty());
     }
 
+    /// A restore replaces every user and token (the backup is the truth), the restored raw token
+    /// authenticates, and new ids continue after the restored ones.
+    #[test]
+    fn replace_auth_replaces_users_and_tokens_and_moves_the_id_sequences() {
+        use lanforge_db_core::ApiTokenStore;
+        use lanforge_types::auth::{ApiScope, ApiScopes, UserEntry, UserRole};
+
+        let source = RedbDatabase::open_temp().unwrap();
+        source.create_user("old", "h", UserRole::Admin, 1).unwrap();
+        let scopes = ApiScopes::from_slice(&[ApiScope::Monitoring]);
+        source
+            .store_api_token("lf_ak_new", "kept", &scopes, Some(99), 5)
+            .unwrap();
+        let users = vec![UserEntry {
+            id: 7,
+            username: "restored".into(),
+            password_hash: "hash".into(),
+            role: UserRole::Operator,
+            created_at: 1,
+            updated_at: 2,
+            last_login: Some(3),
+        }];
+        let tokens = source.load_api_tokens().unwrap();
+
+        let db = RedbDatabase::open_temp().unwrap();
+        db.create_user("stale", "h", UserRole::Admin, 1).unwrap();
+        db.store_api_token("lf_ak_stale", "stale", &scopes, None, 1)
+            .unwrap();
+        db.replace_auth(&users, &tokens).unwrap();
+
+        assert_eq!(db.list_users().unwrap(), users);
+        assert!(db.get_user_by_username("stale").unwrap().is_none());
+        assert_eq!(db.load_api_tokens().unwrap(), tokens);
+        assert!(db.validate_api_token("lf_ak_new", 6).unwrap().is_some());
+        assert!(db.validate_api_token("lf_ak_stale", 6).unwrap().is_none());
+        assert_eq!(
+            db.create_user("next", "h", UserRole::Viewer, 9).unwrap().id,
+            8
+        );
+        let id = db
+            .store_api_token("lf_ak_next", "n", &scopes, None, 9)
+            .unwrap();
+        assert!(id > tokens[0].id);
+
+        db.replace_auth(&[], &[]).unwrap();
+        assert_eq!(db.count_users().unwrap(), 0, "an empty backup empties them");
+        assert!(db.load_api_tokens().unwrap().is_empty());
+    }
+
     /// A database written when tokens were keyed by the raw token is re-keyed on open, and the
     /// raw token still authenticates.
     #[test]

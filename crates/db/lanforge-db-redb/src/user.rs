@@ -1,6 +1,6 @@
 //! `UserStore` and `ApiTokenStore` implementations for `RedbDatabase`.
 
-use crate::tables::{TABLE_API_TOKENS, TABLE_USERS};
+use crate::tables::{TABLE_API_TOKENS, TABLE_META, TABLE_USERS};
 use crate::{RedbDatabase, decode, encode};
 use lanforge_crypto::token_digest;
 use lanforge_db_core::{ApiTokenEntry, ApiTokenStore, DbError, UserEntry, UserStore};
@@ -278,6 +278,37 @@ impl UserStore for RedbDatabase {
         };
         let count = table.len().map_err(|e| DbError::Backend(e.to_string()))?;
         Ok(count as i64)
+    }
+
+    fn replace_auth(&self, users: &[UserEntry], tokens: &[ApiTokenEntry]) -> Result<(), DbError> {
+        let write_txn = self.begin_write()?;
+        {
+            // The id sequences move past the restored ids, so the next user or token is new.
+            let mut meta = write_txn.open_table(TABLE_META)?;
+            let last_user = users.iter().map(|u| u.id).max().unwrap_or(0);
+            let last_token = tokens.iter().map(|t| t.id).max().unwrap_or(0);
+            for (sequence, last) in [("users", last_user), ("api_tokens", last_token)] {
+                let kept = meta
+                    .get(sequence)?
+                    .and_then(|v| <[u8; 8]>::try_from(v.value()).ok())
+                    .map_or(0, i64::from_be_bytes);
+                meta.insert(sequence, kept.max(last).to_be_bytes().as_slice())?;
+            }
+            drop(meta);
+            write_txn.delete_table(TABLE_USERS)?;
+            write_txn.delete_table(TABLE_API_TOKENS)?;
+            let mut table = write_txn.open_table(TABLE_USERS)?;
+            for user in users {
+                table.insert(user.username.as_str(), encode(user)?.as_slice())?;
+            }
+            drop(table);
+            let mut table = write_txn.open_table(TABLE_API_TOKENS)?;
+            for token in tokens {
+                table.insert(token.token.as_str(), encode(token)?.as_slice())?;
+            }
+        }
+        write_txn.commit()?;
+        Ok(())
     }
 }
 

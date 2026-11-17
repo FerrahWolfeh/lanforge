@@ -12,7 +12,7 @@ use std::path::Path;
 
 use lanforge_api::api::{Response, SimpleSuccess};
 use lanforge_api::config_file::{
-    ConfigFile, RaInputs, Section, SecretsFile, effective_ra, log_issues, set_aside_issues,
+    ConfigFile, RaInputs, SecretsFile, Section, effective_ra, log_issues, set_aside_issues,
 };
 use lanforge_core::context::ConfigPatch;
 use lanforge_types::config::SiteDomains;

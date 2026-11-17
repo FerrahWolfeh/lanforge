@@ -3,6 +3,7 @@
 //! Add new test files as modules here, never as new `tests/*.rs` files.
 
 mod api_tests;
+mod backup;
 mod banners;
 mod dispatch;
 #[cfg(feature = "adblock")]

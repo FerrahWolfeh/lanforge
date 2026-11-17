@@ -72,7 +72,9 @@ impl SecretsFile {
         let meta = match fs::metadata(&path) {
             Ok(m) => m,
             Err(e) if e.kind() == ErrorKind::NotFound => return SecretsState::Missing,
-            Err(e) => return SecretsState::SetAside(format!("cannot read {}: {e}", path.display())),
+            Err(e) => {
+                return SecretsState::SetAside(format!("cannot read {}: {e}", path.display()));
+            }
         };
         let mode = meta.permissions().mode() & 0o777;
         if mode & GROUP_OTHER_BITS != 0 {
@@ -83,7 +85,9 @@ impl SecretsFile {
         }
         let text = match fs::read_to_string(&path) {
             Ok(t) => t,
-            Err(e) => return SecretsState::SetAside(format!("cannot read {}: {e}", path.display())),
+            Err(e) => {
+                return SecretsState::SetAside(format!("cannot read {}: {e}", path.display()));
+            }
         };
         match toml::from_str(&text) {
             Ok(file) => SecretsState::Loaded(file),
@@ -101,26 +105,34 @@ impl SecretsFile {
     /// # Errors
     /// Serializing, writing or renaming fails.
     pub fn write(&self, config_path: &Path) -> io::Result<()> {
-        let path = Self::path_for(config_path);
         let text = toml::to_string(self).map_err(Error::other)?;
-        let parent = path.parent().unwrap_or_else(|| Path::new("."));
-        let tmp = parent.join(format!(".{SECRETS_FILE_NAME}.tmp.{}", process::id()));
-        let _ = fs::remove_file(&tmp);
-        let written = (|| {
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&tmp)?;
-            file.write_all(text.as_bytes())?;
-            file.sync_all()
-        })();
-        if let Err(e) = written.and_then(|()| fs::rename(&tmp, &path)) {
-            let _ = fs::remove_file(&tmp);
-            return Err(e);
-        }
-        Ok(())
+        write_secrets_text(&Self::path_for(config_path), &text)
     }
+}
+
+/// Writes `text` to the secrets file `path`: a temporary file in the same directory (mode 0600
+/// from creation) renamed over it.
+///
+/// # Errors
+/// Writing or renaming fails.
+pub fn write_secrets_text(path: &Path, text: &str) -> io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let tmp = parent.join(format!(".{SECRETS_FILE_NAME}.tmp.{}", process::id()));
+    let _ = fs::remove_file(&tmp);
+    let written = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()
+    })();
+    if let Err(e) = written.and_then(|()| fs::rename(&tmp, path)) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
 }
 
 impl ConfigFile {
@@ -162,5 +174,9 @@ pub fn without_secrets(text: &str) -> String {
         .get_mut("pppoe")
         .and_then(toml_edit::Item::as_table_like_mut)
         .is_some_and(|pppoe| pppoe.remove("password").is_some());
-    if removed { doc.to_string() } else { text.to_string() }
+    if removed {
+        doc.to_string()
+    } else {
+        text.to_string()
+    }
 }

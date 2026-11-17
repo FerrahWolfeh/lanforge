@@ -1,5 +1,5 @@
 use crate::api::{
-    AdblockCheckResponse, AdblockGroupChange, AuthTokenResponse, AuthTokensResponse,
+    AdblockCheckResponse, AdblockGroupChange, AuthTokenResponse, AuthTokensResponse, BackupBundle,
     CreateUserPayload, DeviceListQuery, DevicesResponse, DhcpOptionsResponse,
     DhcpPoolsConfigResponse, DhcpPoolsResponse, DhcpReconcileResponse, DnsAdblockGroupsResponse,
     DnsAdblockRulesResponse, DnsAdblockSourcesResponse, DnsAdblockStatusResponse,
@@ -443,4 +443,11 @@ pub trait LanforgeRpc {
         &self,
         req: SetLogLevelRequest,
     ) -> impl Future<Output = Result<Box<LogLevelStatus>, RpcCallError>> + Send;
+    /// The plain backup bundle (admin only; the client seals it).
+    fn backup(&self) -> impl Future<Output = Result<Box<BackupBundle>, RpcCallError>> + Send;
+    /// Restores a bundle: refused as a whole (nothing written) or written and reloaded in place.
+    fn restore(
+        &self,
+        bundle: Box<BackupBundle>,
+    ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
 }

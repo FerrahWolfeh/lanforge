@@ -16,6 +16,7 @@ use lanforge_types::{
 use serde::{Deserialize, Serialize};
 
 pub mod auth;
+pub mod backup;
 pub mod common;
 pub mod devices;
 pub mod dhcp;
@@ -23,6 +24,7 @@ pub mod dns;
 pub mod system;
 
 pub use auth::*;
+pub use backup::*;
 pub use common::*;
 pub use devices::*;
 pub use dhcp::*;
@@ -103,6 +105,8 @@ pub enum Response {
     ServiceBanners(ServiceBannersResponse),
     /// Full system configuration export.
     SystemConfig(Box<SystemConfigExport>),
+    /// The plain backup bundle (admin only; the CLI seals it).
+    Backup(Box<BackupBundle>),
     /// Full system configuration import response.
     SystemConfigImport(SystemConfigImportResponse),
     /// List of DNS reverse resolvers.

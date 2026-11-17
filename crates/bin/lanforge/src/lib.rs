@@ -16,8 +16,6 @@ use lanforge_api_dispatch as _;
 use lanforge_dns_wire as _;
 #[cfg(test)]
 use lanforge_transport as _;
-#[cfg(test)]
-use serde_json as _;
 
 pub mod app;
 pub mod bootstrap;
@@ -25,6 +23,7 @@ pub mod config;
 pub mod event_loop;
 pub mod logging;
 pub mod registry;
+pub mod restore;
 pub mod supervisor;
 pub mod synthetic;
 pub mod systemd_job;

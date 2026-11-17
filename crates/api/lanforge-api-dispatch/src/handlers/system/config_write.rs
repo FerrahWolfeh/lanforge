@@ -686,7 +686,7 @@ impl ClientContext {
 
     /// The configuration file the API writes, `None` when it keeps changes in memory (no file,
     /// or a read-only one): rules files are read back from it only when it holds what runs.
-    fn writable_config_path(&self) -> Option<PathBuf> {
+    pub(super) fn writable_config_path(&self) -> Option<PathBuf> {
         self.ctx
             .is_config_writable()
             .then(|| self.ctx.config_path())

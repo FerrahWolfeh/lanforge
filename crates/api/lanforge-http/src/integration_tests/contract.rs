@@ -2745,6 +2745,129 @@ async fn every_answer_names_the_daemon_build() {
     assert!(headers.contains_key(lanforge_api::BUILD_HEADER));
 }
 
+/// A backup holds password hashes and token digests: only an admin reads one or restores one.
+/// A refused restore is a client error naming why; a valid one is applied in place.
+#[tokio::test]
+async fn test_backup_contract() {
+    let state = make_state(false).await;
+    for (name, role) in [("admin", UserRole::Admin), ("viewer", UserRole::Viewer)] {
+        state
+            .db
+            .create_user(
+                name,
+                &lanforge_crypto::hash_password(ADMIN_PASSWORD),
+                role,
+                0,
+            )
+            .unwrap();
+    }
+    state
+        .db
+        .store_api_token(
+            "lf_ak_monitoring",
+            "admin",
+            &ApiScopes::from_slice(&[ApiScope::Monitoring]),
+            None,
+            0,
+        )
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("lanforge.toml");
+    fs::write(&config, "[system]\nsearch_domains = [\"home\"]\n").unwrap();
+    state.ctx.set_config_path(&config);
+    state.ctx.set_config_writable(true);
+    let router = build_router(state);
+    let session = |name: &'static str| {
+        let router = router.clone();
+        async move {
+            login(
+                &router,
+                json!({"username": name, "password": ADMIN_PASSWORD}),
+            )
+            .await
+            .1
+        }
+    };
+    let (admin, viewer) = (session("admin").await, session("viewer").await);
+
+    for (who, token) in [
+        ("viewer", &viewer),
+        ("monitoring token", &"lf_ak_monitoring".to_string()),
+    ] {
+        let (status, _) = send(
+            &router,
+            "GET",
+            "/api/v1/system/backup",
+            token,
+            None,
+            json!(null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{who} reads a backup");
+        let (status, _) = send(
+            &router,
+            "POST",
+            "/api/v1/system/restore",
+            token,
+            None,
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{who} restores");
+    }
+
+    let (status, body) = send(
+        &router,
+        "GET",
+        "/api/v1/system/backup",
+        &admin,
+        None,
+        json!(null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["files"][0]["name"], "lanforge.toml");
+    assert_eq!(body["data"]["users"].as_array().map(Vec::len), Some(2));
+    let digest = body["data"]["api_tokens"][0]["token"].as_str().unwrap();
+    assert_eq!(digest.len(), 64, "tokens are digests in a backup");
+
+    let mut refused = body["data"].clone();
+    refused["files"][0]["content"] = json!("[system\nbroken");
+    let (status, err) = send(
+        &router,
+        "POST",
+        "/api/v1/system/restore",
+        &admin,
+        None,
+        refused,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{err}");
+    assert!(
+        err["error"].as_str().unwrap().contains("lanforge.toml"),
+        "{err}"
+    );
+    assert_eq!(
+        fs::read_to_string(&config).unwrap(),
+        "[system]\nsearch_domains = [\"home\"]\n",
+        "a refused restore writes nothing"
+    );
+
+    let mut applied = body["data"].clone();
+    applied["files"][0]["content"] = json!("[system]\nsearch_domains = [\"restored\"]\n");
+    let (status, ok) = send(
+        &router,
+        "POST",
+        "/api/v1/system/restore",
+        &admin,
+        None,
+        applied,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ok}");
+    assert!(fs::read_to_string(&config).unwrap().contains("restored"));
+}
+
 /// The log filter over HTTP: anyone signed in reads it; an operator (or a `config_write`
 /// token) raises it up to `debug`; only an admin turns on `trace`, and always with a time
 /// limit. Malformed filters are client errors.

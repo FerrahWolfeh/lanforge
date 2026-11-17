@@ -31,7 +31,9 @@ pub use effective::{
 };
 pub use hosts::StaticHost;
 pub use patch::patch_sections;
-pub use secrets::{SECRETS_FILE_NAME, SecretsFile, SecretsState, without_secrets};
+pub use secrets::{
+    SECRETS_FILE_NAME, SecretsFile, SecretsState, without_secrets, write_secrets_text,
+};
 pub use section::{Section, SectionSet};
 pub use sections::*;
 pub use toml_edit;
