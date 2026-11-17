@@ -68,10 +68,10 @@ fn reconnect_jitter() -> f64 {
 /// starts sooner than this after a PADT.
 const PADT_RELEASE: Duration = Duration::from_secs(6);
 
-/// While no concentrator answers at all, a single PADI goes out this often during the reconnect
-/// wait, so the session returns within seconds of the WAN (fibre, OLT, BNG) coming back instead
-/// of after a backoff of up to [`crate::backoff::MAX_DELAY`]. A PADI creates no session, so this
-/// does not count as the reconnect cycling the backoff protects the ISP from.
+/// While no concentrator answers at all, the service only polls with a single PADI this often
+/// (no full attempts, no backoff), so the session returns within seconds of the WAN (fibre, OLT,
+/// BNG) coming back. A PADI creates no session, so this is not the reconnect cycling the backoff
+/// protects the ISP from.
 const PADO_PROBE_INTERVAL: Duration = Duration::from_secs(20);
 
 /// Sends a probe every [`PADO_PROBE_INTERVAL`] and returns once a concentrator answers.
@@ -205,17 +205,18 @@ impl<H: PppoeHost> PppoeService<H> {
     /// Waits `delay` before the next attempt. Returns `false` when the service must exit instead.
     /// An admin restart or a reconnect-level config change ends the wait early (no pacing for
     /// explicit requests); a lagged bus never does.
-    /// With `probe_wan` (the last attempt got no PADO at all), the wait also ends as soon as a
-    /// concentrator answers a probe ([`PADO_PROBE_INTERVAL`]).
+    /// With `probe_wan` (the last attempt got no PADO at all) the wait has no deadline: it ends
+    /// when a concentrator answers a probe ([`PADO_PROBE_INTERVAL`]). Without a probe (no WAN
+    /// interface or socket) it falls back to `delay`.
     async fn wait_before_reconnect(
         &mut self,
         h: &ServiceHandle,
         delay: Duration,
         probe_wan: bool,
     ) -> bool {
-        let wake = Instant::now() + delay;
         let mut sys_rx = self.ctx.bus().subscribe_system();
         let probe = if probe_wan { self.pado_probe() } else { None };
+        let wake = probe.is_none().then(|| Instant::now() + delay);
         let wan_back = async {
             match &probe {
                 Some((discovery, transport)) => probe_until_pado(discovery, transport).await,
@@ -225,7 +226,12 @@ impl<H: PppoeHost> PppoeService<H> {
         tokio::pin!(wan_back);
         loop {
             tokio::select! {
-                () = sleep_until(wake) => return true,
+                () = async {
+                    match wake {
+                        Some(at) => sleep_until(at).await,
+                        None => pending().await,
+                    }
+                } => return true,
                 () = &mut wan_back => {
                     info!(
                         wan_iface = %self.cfg.wan_iface,
@@ -280,11 +286,6 @@ impl<H: PppoeHost> PppoeService<H> {
     fn pado_probe(&mut self) -> Option<(PppoeDiscovery, PppoeTransport)> {
         let (ifindex, mac) = self.get_interface_details().ok()?;
         let transport = self.discovery_transport(ifindex).ok()?;
-        info!(
-            wan_iface = %self.cfg.wan_iface,
-            interval_secs = PADO_PROBE_INTERVAL.as_secs(),
-            "No concentrator answered; probing with a single PADI until the next attempt"
-        );
         let discovery = PppoeDiscovery::new(
             ifindex,
             mac,
@@ -1379,18 +1380,29 @@ impl<H: PppoeHost> AsyncService for PppoeService<H> {
                 }
             };
 
+            let wan_dark = matches!(error, Some(PppoeError::NoConcentrator));
             let delay = self.backoff.next_delay(end, reconnect_jitter());
             let attempt = self.backoff.failures();
-            warn!(
-                wan_iface = %self.cfg.wan_iface,
-                attempt,
-                uptime_secs = end.uptime.map(|u| u.as_secs()),
-                error = error.as_ref().map(ToString::to_string),
-                delay_secs = delay.as_secs(),
-                "PPPoE session ended; scheduling reconnection"
-            );
-            if attempt >= 3 {
-                h.degraded(DegradedReason::custom("no session"));
+            if wan_dark {
+                // One line for the whole outage: until a PADO comes back there is no attempt to log.
+                warn!(
+                    wan_iface = %self.cfg.wan_iface,
+                    interval_secs = PADO_PROBE_INTERVAL.as_secs(),
+                    "No PPPoE concentrator answers; polling with a single PADI until one does"
+                );
+                h.degraded(DegradedReason::custom("no concentrator"));
+            } else {
+                warn!(
+                    wan_iface = %self.cfg.wan_iface,
+                    attempt,
+                    uptime_secs = end.uptime.map(|u| u.as_secs()),
+                    error = error.as_ref().map(ToString::to_string),
+                    delay_secs = delay.as_secs(),
+                    "PPPoE session ended; scheduling reconnection"
+                );
+                if attempt >= 3 {
+                    h.degraded(DegradedReason::custom("no session"));
+                }
             }
             self.publish_session_state(
                 PppoeSessionState::Reconnecting,
@@ -1400,11 +1412,14 @@ impl<H: PppoeHost> AsyncService for PppoeService<H> {
                 .bus()
                 .publish(LanforgeEvent::Pppoe(PppoeEvent::Reconnecting {
                     attempt,
-                    next_retry_secs: delay.as_secs(),
+                    next_retry_secs: if wan_dark {
+                        PADO_PROBE_INTERVAL.as_secs()
+                    } else {
+                        delay.as_secs()
+                    },
                 }));
 
-            let probe_wan = matches!(error, Some(PppoeError::DiscoveryTimeout));
-            if !self.wait_before_reconnect(h, delay, probe_wan).await {
+            if !self.wait_before_reconnect(h, delay, wan_dark).await {
                 ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
                 break 'main_loop;
             }

@@ -14,6 +14,10 @@ pub enum PppoeError {
     #[error("PPPoE discovery timed out or failed")]
     DiscoveryTimeout,
 
+    /// No concentrator answered any PADI: the WAN beyond the terminal is dark.
+    #[error("No PPPoE concentrator answered (no PADO)")]
+    NoConcentrator,
+
     #[error("PPPoE negotiation failed: {0}")]
     NegotiationFailed(String),
 
